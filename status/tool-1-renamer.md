@@ -11,6 +11,17 @@ Status: `NOT_STARTED`
 Implementation branch / PR: not yet assigned
 Last implementation update: not yet started
 
+## Review checkpoint
+
+Last planning/review commit: none
+Current implementation HEAD: none
+Fundamental-change review pending: no
+
+Relevant commits since last review:
+- none
+
+When implementation starts, the builder must update this section after meaningful commits. The planning/review model will independently inspect the diff since the last reviewed SHA, especially for changes affecting tool boundaries, archive behavior, Baserow/state semantics, interfaces, safety/idempotency, provider authority, major framework/dependency choices, or acceptance criteria.
+
 ## Milestones
 
 - [x] Requirements gathered
@@ -100,3 +111,4 @@ Start implementation from the finalized build plan without modifying it. Establi
 - Project-wide implementation protocol established.
 - This status file created as the canonical implementation handoff.
 - Implementation model must keep the build plan read-only and record unclear or contradictory requirements here.
+- Commit-review checkpoints are required; implementation commits will be reviewed for fundamental changes before acceptance.
