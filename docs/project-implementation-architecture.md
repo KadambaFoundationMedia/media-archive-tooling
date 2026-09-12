@@ -6,33 +6,40 @@ This document defines the implementation shell in which the individual media-arc
 
 ## 1. Application shape
 
-Build the project first as a **local, headless Python application/package with a command-line interface (CLI)**.
+Build the project as a **local Python application/package with two first-class interfaces**:
+
+1. a command-line interface (CLI) for automation, testing, diagnostics, and unattended batch work;
+2. a **local browser-based review portal** for human review, corrections, approvals, progress, and later media-oriented review workflows.
+
+The processing logic must live in reusable Python modules. Neither the CLI nor the review portal may contain a second implementation of archive rules.
 
 Do **not** build Tool 1 as:
 
-- a one-off standalone script
-- an Electron application
-- a web application
-- a GUI-only application
-- an online/cloud service
+- a one-off standalone script;
+- a native SwiftUI/Xcode application;
+- an Electron application;
+- a cloud-hosted service;
+- a GUI-only application.
 
-The processing logic must live in reusable Python modules. The CLI is only an adapter/entry point around those modules.
+This keeps the functional tools, human review surface, future orchestrator, and any later desktop wrapper cleanly separated.
 
-This keeps the functional tools independent from the future user interface and orchestrator.
+## 2. Why Python core + local review portal
 
-## 2. Why CLI/package first
+The project is primarily filesystem, parsing, media-processing, reference-data, database, orchestration, and later local-AI work. Python is appropriate because it has mature libraries for those workloads and works well on Apple Silicon macOS while remaining portable.
 
-The current tools are primarily filesystem, parsing, media-processing, reference-data, database, and orchestration workloads. A Python core is appropriate because it provides mature libraries for these jobs and works well on Apple Silicon macOS.
+Human review is also a core workflow requirement, so a review UI should not be postponed until all tools are complete. A local web UI gives us that without introducing a second programming language, Xcode project, native-app signing/build process, or a Python-to-Swift bridge.
 
-A headless core also makes it possible to:
+This architecture makes it possible to:
 
-- test every tool without a GUI
-- run large batches unattended
-- use the tools from a future orchestrator
-- expose the same functionality to a future desktop UI without duplicating business logic
-- keep later Electron or other UI decisions separate from processing-tool implementation
+- test every tool without a GUI;
+- run large batches unattended from the CLI;
+- review uncertain files comfortably in a browser;
+- reuse exactly the same service layer from CLI, review portal, and future orchestrator;
+- add audio playback/waveforms and richer review views later using standard browser capabilities;
+- package the portal in a desktop shell later if that becomes useful, without moving archive logic out of Python;
+- keep the core reasonably portable beyond macOS.
 
-The initial target is Apple Silicon macOS, while avoiding unnecessary platform-specific coupling in the core.
+The initial target remains Apple Silicon macOS.
 
 ## 3. Python runtime and environment
 
@@ -69,6 +76,7 @@ src/
     common/
     adapters/
     registry/
+    review_portal/
     renamer/
     media_database_reviewer/
     travel_schedule_reviewer/
@@ -77,11 +85,12 @@ src/
 
 Exact internal module names may differ when there is a good technical reason, but the important boundary is fixed:
 
-- reusable tool logic belongs in Python modules/classes/functions
-- CLI code handles arguments, presentation, and exit codes
-- external systems are behind adapters
-- local operational state is behind a registry/storage layer
-- later UI/orchestrator code must call the reusable tool interfaces rather than contain duplicate processing logic
+- reusable tool logic belongs in Python modules/classes/functions;
+- CLI code handles arguments, presentation, and exit codes;
+- review-portal code handles HTTP/UI concerns and calls the same tool/application services;
+- external systems are behind adapters;
+- local operational state is behind a registry/storage layer;
+- the future orchestrator calls reusable tool interfaces directly rather than scraping CLI or UI output.
 
 ## 5. CLI shape
 
@@ -97,7 +106,10 @@ Individual tools should be exposed as subcommands or equivalent command groups, 
 media-archive renamer ...
 media-archive media-db-review ...
 media-archive travel-review ...
+media-archive review
 ```
+
+`media-archive review` should start the local review portal and may open the default browser automatically.
 
 The exact CLI framework and final option names are implementation details. The builder may choose `argparse`, Typer, Click, or an equivalent maintained library as long as it does not alter tool behavior or constrain future orchestration.
 
@@ -105,125 +117,165 @@ Tool 1 must support non-interactive/dry-run operation as required by its finaliz
 
 ## 6. Programmatic interfaces are mandatory
 
-Do not make the CLI the only way to use a tool.
+Do not make either the CLI or HTTP routes the only way to use a tool.
 
 Each tool must expose a programmatic interface suitable for the future orchestrator. Conceptually:
 
 ```text
 input/config + shared context
         ↓
-Tool service
+Tool/application service
         ↓
 structured result/events
+       ↙       ↘
+     CLI     review portal
 ```
 
-The exact class/function signatures are implementation details until cross-tool contracts are finalized, but tool logic must be callable without shelling out to the CLI.
+The exact class/function signatures are implementation details until cross-tool contracts are finalized, but tool logic must be callable directly in Python.
 
-This is important because the future orchestrator should coordinate tools directly and the future UI should sit above the orchestrator rather than scrape terminal output.
+## 7. Review portal architecture
 
-## 7. Future UI
+The first review portal should be a **local web application served by the same Python project**.
 
-A desktop UI may later use Electron or another framework, but **no UI framework is selected by this decision**.
+Use **FastAPI** for the local application/API layer. Prefer server-rendered HTML using **Jinja2 + HTMX** for the initial UI rather than introducing a Node/React build pipeline before it is needed. Small amounts of focused browser JavaScript are acceptable where they materially improve interaction, audio playback, or later waveform views.
 
-If Electron is chosen later, the intended architecture is:
+The portal must:
+
+- bind to loopback (`127.0.0.1` / localhost) by default;
+- not require Internet access for its own UI;
+- use the same typed application services and local registry as the CLI;
+- never duplicate archive/naming/business rules in templates or JavaScript;
+- expose structured review actions rather than modifying SQLite or files directly from UI code;
+- support incremental expansion as later tools add review needs.
+
+If the portal is ever exposed beyond localhost, authentication/network-security requirements must be designed explicitly first; do not casually change the bind address.
+
+### Initial Tool 1 review scope
+
+The minimal useful portal built alongside Tool 1 should support:
+
+- batch/file list and processing state;
+- original/current/proposed filename;
+- parsed WHEN/WHO/WHAT/WHERE;
+- field resolution state (`exact`, `strong`, `provisional`, `ambiguous`, `unresolved`);
+- evidence and alternative candidates;
+- conflicts/review reasons/unclassified text;
+- approve, edit/correct, and defer actions where human review is required;
+- dry-run/commit visibility and per-file errors;
+- basic batch progress and filtering for items requiring review.
+
+The portal is a review surface, not a replacement for deterministic automatic processing. Files that do not require human review should continue through the batch without waiting for UI interaction.
+
+## 8. Future desktop packaging
+
+No native desktop framework is required for v1.
+
+A native SwiftUI application would require the Apple/Xcode toolchain and introduce a second implementation environment plus a bridge to the Python processing core. That cost is not justified while the workflows and review screens are still evolving.
+
+If, after the review portal is proven, a packaged desktop experience is desirable, evaluate a thin desktop wrapper such as Tauri or Electron, or reconsider SwiftUI. Any wrapper must remain above the Python application/orchestrator layer:
 
 ```text
-Desktop UI
-   ↓
-Orchestrator / application layer
-   ↓
-Python tool interfaces
+optional desktop shell
+        ↓
+local review portal / application API
+        ↓
+Python orchestrator + tool services
 ```
 
-Do not move archive rules, parsing logic, Baserow logic, or media-processing logic into Electron/JavaScript merely because a GUI is added.
+Do not move archive rules, parsing logic, Baserow logic, or media-processing logic into the desktop shell.
 
-The integration mechanism between a future desktop UI and Python (local API, IPC, subprocess protocol, etc.) will be decided when the UI/orchestrator is designed.
-
-## 8. Configuration and secrets
+## 9. Configuration and secrets
 
 Use repository `.env.example` as the documented configuration contract.
 
 The local `.env` may contain credentials, IDs, and machine-specific paths and must never be committed.
 
-Configuration should be loaded into a typed/validated application configuration object before tool execution. The exact library is the builder's choice.
+Configuration should be loaded into a typed/validated application configuration object before tool execution. The exact validation library is the builder's choice.
 
 Do not scatter direct reads from `os.environ` throughout parser/tool logic.
 
-## 9. Local state and generated data
+## 10. Local state and generated data
 
 Local operational state belongs outside authoritative archive/reference assets.
 
-For Tool 1, the finalized build plan already specifies a local processing registry, with SQLite recommended. That registry should be implemented as an internal storage component that can later be shared by the orchestrator on the same machine.
+For Tool 1, the finalized build plan already specifies a local processing registry, with SQLite recommended. That registry should be implemented as an internal storage component shared by the CLI, review portal, and future orchestrator on the same machine.
 
 Caches, runtime logs, generated summaries, temporary files, model caches, and similar machine-local artifacts must remain distinct from committed `assets/`.
 
 `assets/` is for committed project/reference material.
 
-## 10. External integrations
+## 11. External integrations
 
-External systems should be behind explicit adapters/providers rather than called directly throughout tool logic.
+External systems should be behind explicit adapters/providers rather than called directly throughout tool or UI logic.
 
 Examples include:
 
-- Baserow
-- Vedabase
-- online geocoding/location lookup
-- YouTube APIs
-- future transcription/model runtimes
+- Baserow;
+- Vedabase;
+- online geocoding/location lookup;
+- YouTube APIs;
+- future transcription/model runtimes.
 
 The builder may choose ordinary implementation libraries such as an HTTP client. A provider/framework choice becomes review-worthy when it changes authority, data ownership, privacy, portability, costs, persistent schemas, or later tool contracts.
 
-## 11. Testing baseline
+## 12. Testing baseline
 
 Use `pytest` as the project test runner unless a concrete compatibility problem requires otherwise.
+
+Test tool/application services independently from the UI, and add focused integration tests for critical review-portal routes/actions.
 
 Keep unit tests and representative golden/sample tests in the repository while keeping private archive media itself out of Git according to `.gitignore`.
 
 Tool-specific acceptance criteria remain defined by each build plan.
 
-## 12. What the builder may decide independently
+## 13. What the builder may decide independently
 
 The builder may choose ordinary implementation details when they do not change project behavior, including:
 
-- exact Python module/class names
-- CLI framework
-- HTTP client
-- fuzzy-string library
-- data-validation library
-- test helper libraries
-- internal algorithms that satisfy the specification
-- formatting/linting tooling
+- exact Python module/class names;
+- CLI framework;
+- HTTP client;
+- fuzzy-string library;
+- data-validation library;
+- test helper libraries;
+- CSS/layout approach within the local portal;
+- internal algorithms that satisfy the specification;
+- formatting/linting tooling.
 
 The builder should prefer maintained, lightweight dependencies and avoid introducing a framework merely because it is convenient for one tool.
 
-## 13. What the builder must not decide silently
+## 14. What the builder must not decide silently
 
 The builder must raise a status-file question before changing any of the following:
 
-- Python CLI/package as the core application shape
-- the Python runtime baseline in a way that affects other tools
-- local-first processing
-- separation between functional tools, orchestrator, and UI
-- Baserow/shared-state semantics
-- persistent schemas or processing identity relied on across tools
-- authority of reference sources
-- archive/naming policy
-- safety/idempotency behavior
-- a framework/runtime choice that materially constrains future tools or UI
+- Python package/service layer as the core application shape;
+- the local web review portal architecture or replacing it with a native/cloud UI;
+- the Python runtime baseline in a way that affects other tools;
+- local-first processing;
+- separation between functional tools, orchestrator, and UI;
+- Baserow/shared-state semantics;
+- persistent schemas or processing identity relied on across tools;
+- authority of reference sources;
+- archive/naming policy;
+- safety/idempotency behavior;
+- exposing the local portal to the network;
+- a framework/runtime choice that materially constrains future tools or UI.
 
 Unclear or contradictory requirements follow `docs/implementation-protocol.md`.
 
-## 14. Builder startup sequence
+## 15. Builder startup sequence
 
 For the first implementation, the builder should therefore:
 
 1. Read `docs/project-implementation-architecture.md`.
-2. Read the finalized tool build plan.
-3. Read the tool status file.
+2. Read the finalized Tool 1 build plan.
+3. Read the Tool 1 status file.
 4. Create/verify the Python 3.12 + `uv` project skeleton and `pyproject.toml`.
-5. Create the reusable package/module boundary before implementing CLI presentation.
+5. Create the reusable package/application-service boundary before CLI or portal presentation code.
 6. Add tests from the beginning.
-7. Implement Tool 1 according to its finalized plan.
-8. Update the status file and commit checkpoints according to `docs/implementation-protocol.md`.
+7. Implement the Tool 1 deterministic core, local registry, logging, and dry-run path.
+8. Add the minimal FastAPI/Jinja2/HTMX review portal against the same services/registry so real sample results can be reviewed early.
+9. Continue Tool 1 integrations and behavior according to its finalized plan.
+10. Update the status file and commit checkpoints according to `docs/implementation-protocol.md`.
 
-The builder does not need to invent whether this project is a script, app, or GUI: **the core is a reusable local Python application/package, initially operated through a CLI.**
+The builder does not need to invent the application/UI approach: **the core is a reusable local Python application/package, operated through both a CLI and a localhost review portal.**
