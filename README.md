@@ -4,11 +4,11 @@ Tools for processing media files in the archive.
 
 ## Project implementation architecture
 
-The processing core is a **local, reusable Python 3.12 application/package operated initially through a CLI**, not a one-off script and not an Electron/GUI application.
+The project uses a **local, reusable Python 3.12 application/package** with two first-class interfaces: a CLI for automation/testing/batch work and a **localhost browser-based review portal** for human review and corrections.
 
 Project-wide architecture: `docs/project-implementation-architecture.md`
 
-The implementation uses `uv` for Python environment/dependency management, keeps tool logic callable programmatically for the future orchestrator, and keeps UI concerns separate from functional processing tools. A future desktop UI may use Electron or another framework, but that decision is intentionally deferred.
+The implementation uses `uv` for Python environment/dependency management. Tool logic remains callable programmatically for the future orchestrator; CLI and review UI both call the same Python application services. The initial review portal uses FastAPI with server-rendered Jinja2 + HTMX so no Xcode/Swift or Node/React toolchain is required for v1. A packaged desktop shell can be evaluated later without moving archive logic out of Python.
 
 ## Build plans
 
@@ -29,6 +29,8 @@ Implementation status: `status/tool-1-renamer.md`
 Implementation tracking/discussion: GitHub issue #1
 
 The Renamer is a fast, repeatable filename interpretation and normalization tool. It assigns a stable temporary `_ID-xxxxxxxx` during processing, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata from filenames, folders, Baserow reference data and later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on unclear files. It deliberately avoids slow audio/content analysis; later passes reuse the same Renamer engine as stronger evidence becomes available.
+
+Tool 1 will also provide the first useful review-portal view so uncertain rename proposals, evidence, alternatives, conflicts, and corrections can be reviewed from the browser while automatic files continue without blocking.
 
 ## Project progress protocol
 
