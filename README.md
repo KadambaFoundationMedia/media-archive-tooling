@@ -2,6 +2,14 @@
 
 Tools for processing media files in the archive.
 
+## Project implementation architecture
+
+The processing core is a **local, reusable Python 3.12 application/package operated initially through a CLI**, not a one-off script and not an Electron/GUI application.
+
+Project-wide architecture: `docs/project-implementation-architecture.md`
+
+The implementation uses `uv` for Python environment/dependency management, keeps tool logic callable programmatically for the future orchestrator, and keeps UI concerns separate from functional processing tools. A future desktop UI may use Electron or another framework, but that decision is intentionally deferred.
+
 ## Build plans
 
 Each finalized tool has its own implementation-ready Markdown build plan under `docs/`. A finalized build plan is the authoritative specification for that tool.
