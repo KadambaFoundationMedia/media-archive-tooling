@@ -28,17 +28,21 @@ When implementation starts, the builder must update this section after meaningfu
 - [x] Requirements gathered
 - [x] Build plan finalized
 - [x] Project implementation architecture defined
+- [x] Review portal architecture defined
 - [ ] Implementation started
+- [ ] Project package/application-service skeleton implemented
 - [ ] Core parser implemented
-- [ ] Baserow/reference adapters implemented
-- [ ] Rename planner implemented
-- [ ] Dry-run mode implemented
-- [ ] Safe commit/collision handling implemented
 - [ ] Local registry implemented
 - [ ] Structured JSONL logging implemented
 - [ ] Human-readable CSV summary implemented
+- [ ] Rename planner implemented
+- [ ] Dry-run mode implemented
+- [ ] Minimal localhost review portal implemented
+- [ ] Renamer review/evidence/correction workflow implemented
+- [ ] Baserow/reference adapters implemented
+- [ ] Safe commit/collision handling implemented
 - [ ] Golden/sample tests implemented
-- [ ] Sample archive evaluation completed
+- [ ] Sample archive evaluation completed through review portal
 - [ ] Open questions resolved
 - [ ] Acceptance criteria demonstrated
 - [ ] Ready for review
@@ -47,6 +51,8 @@ When implementation starts, the builder must update this section after meaningfu
 ## Current work
 
 Implementation has not started.
+
+The first implementation uses a shared Python application/service layer with two adapters: CLI and a localhost browser-based review portal. The portal is FastAPI + Jinja2 + HTMX and must call the same Renamer services/registry rather than reimplementing naming logic.
 
 ## Tests and evaluation
 
@@ -60,6 +66,7 @@ The eventual sample evaluation must report at least:
 - incorrect automatic interpretations
 - collision/idempotency behavior
 - representative batch performance
+- review portal correction/approve/defer behavior
 
 Incorrect automatic interpretation is the most important regression category.
 
@@ -103,7 +110,7 @@ Resolved questions must remain in this file for history with `Status: RESOLVED` 
 
 ## Next milestone
 
-Start implementation from the finalized build plan and `docs/project-implementation-architecture.md` without modifying either. Establish the Python 3.12 + `uv` project/package skeleton, tests, local registry/logging foundations, reusable Renamer module, and CLI entry point before adding integrations.
+Start implementation from the finalized build plan and `docs/project-implementation-architecture.md` without modifying either. Establish the Python 3.12 + `uv` project/package skeleton and reusable application-service boundary first; then implement the deterministic Renamer core, local registry/logging and dry-run path, followed by the minimal FastAPI/Jinja2/HTMX localhost review portal so real sample results can be reviewed early.
 
 ## Progress log
 
@@ -117,8 +124,16 @@ Start implementation from the finalized build plan and `docs/project-implementat
 
 ### 2026-09-12 — Project implementation architecture finalized
 
-- Core application shape fixed as a reusable local Python 3.12 package/application with CLI operation.
+- Core application shape fixed as a reusable local Python 3.12 package/application.
 - `uv` selected for Python environment/dependency management.
-- Tool logic must be programmatically callable for the future orchestrator; CLI is an adapter, not the business-logic boundary.
-- Electron/desktop UI selection is deferred and must remain separate from processing logic.
+- Tool logic must be programmatically callable for the future orchestrator; UI and CLI are adapters, not the business-logic boundary.
 - Builder startup instructions are in `docs/project-implementation-architecture.md`.
+
+### 2026-09-12 — Local review portal architecture finalized
+
+- Human review is promoted to a first-class project interface instead of being deferred until all tools are complete.
+- v1 review UI is a localhost browser application served by the Python project using FastAPI + Jinja2 + HTMX.
+- No SwiftUI/Xcode or Node/React toolchain is required for v1.
+- Initial Tool 1 review covers proposed names, parsed fields, resolution states, evidence, alternatives, conflicts, corrections, approve/defer actions, errors and progress.
+- Automatic files must continue without waiting for human review.
+- A native/packaged desktop wrapper can be reconsidered after the review workflow is proven.
