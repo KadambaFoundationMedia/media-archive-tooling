@@ -19,4 +19,6 @@ The implementation model updates the relevant status file throughout the build. 
 
 If a build-plan requirement is unclear, contradictory, impossible as written, or conflicts with another finalized requirement, record it in the tool status file under `Open questions / contradictions` and do not silently change the specification.
 
-The planning/review model should inspect the status file first when reviewing build progress.
+Each status file also carries a commit-review checkpoint with the current implementation HEAD and the last commit reviewed by the planning/review model. The planning/review model should inspect the actual commits/diff between those points, particularly for fundamental changes that could affect archive behavior, tool boundaries, shared/local data semantics, interfaces, safety/idempotency, providers, major architecture choices, or acceptance criteria.
+
+The planning/review model should inspect the status file first when reviewing build progress, then verify the relevant implementation commits rather than relying only on the builder's summary.
