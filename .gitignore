@@ -1,0 +1,38 @@
+# Local credentials
+.env
+.env.*
+!.env.example
+.baserow
+.baserow-token
+!.baserow.example
+!.baserow-token.example
+
+# macOS and editor files
+.DS_Store
+*.swp
+*.swo
+
+# Local dependencies and caches
+
+build/
+dist/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+tmp/
+.omp/
+
+# Test, coverage, lint, and type-check artifacts
+
+# Private read-only database snapshots and audit extracts
+private/
+var/
+
+
+# Private media roots. Keep only the public empty-directory placeholders.
+sample-files/*
+!sample-files/.gitkeep
+renamed-files/*
+!renamed-files/.gitkeep
