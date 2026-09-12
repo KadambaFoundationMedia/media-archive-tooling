@@ -1,6 +1,7 @@
 # Tool 1 — Renamer Implementation Status
 
 Build plan: `docs/tool-1-renamer-build-plan.md`
+Project architecture: `docs/project-implementation-architecture.md`
 Implementation issue: #1
 Protocol: `docs/implementation-protocol.md`
 
@@ -26,6 +27,7 @@ When implementation starts, the builder must update this section after meaningfu
 
 - [x] Requirements gathered
 - [x] Build plan finalized
+- [x] Project implementation architecture defined
 - [ ] Implementation started
 - [ ] Core parser implemented
 - [ ] Baserow/reference adapters implemented
@@ -101,7 +103,7 @@ Resolved questions must remain in this file for history with `Status: RESOLVED` 
 
 ## Next milestone
 
-Start implementation from the finalized build plan without modifying it. Establish the project structure, tests, local registry/logging foundations, and deterministic parser skeleton before adding integrations.
+Start implementation from the finalized build plan and `docs/project-implementation-architecture.md` without modifying either. Establish the Python 3.12 + `uv` project/package skeleton, tests, local registry/logging foundations, reusable Renamer module, and CLI entry point before adding integrations.
 
 ## Progress log
 
@@ -112,3 +114,11 @@ Start implementation from the finalized build plan without modifying it. Establi
 - This status file created as the canonical implementation handoff.
 - Implementation model must keep the build plan read-only and record unclear or contradictory requirements here.
 - Commit-review checkpoints are required; implementation commits will be reviewed for fundamental changes before acceptance.
+
+### 2026-09-12 — Project implementation architecture finalized
+
+- Core application shape fixed as a reusable local Python 3.12 package/application with CLI operation.
+- `uv` selected for Python environment/dependency management.
+- Tool logic must be programmatically callable for the future orchestrator; CLI is an adapter, not the business-logic boundary.
+- Electron/desktop UI selection is deferred and must remain separate from processing logic.
+- Builder startup instructions are in `docs/project-implementation-architecture.md`.
