@@ -1,3 +1,4 @@
+import sqlite3
 import time
 import tempfile
 import shutil
@@ -19,6 +20,7 @@ def vedabase_env():
 def test_build_vedabase_url():
     assert build_vedabase_url("SB-1-4-5") == "https://vedabase.io/en/library/sb/1/4/5/"
     assert build_vedabase_url("BG-3-12") == "https://vedabase.io/en/library/bg/3/12/"
+    assert build_vedabase_url("BG-13-8-12") == "https://vedabase.io/en/library/bg/13/8-12/"
     assert build_vedabase_url("CC-Adi-1-1") == "https://vedabase.io/en/library/cc/adi/1/1/"
     assert build_vedabase_url("INVALID") is None
 
@@ -35,17 +37,15 @@ def test_vedabase_validation_success_and_caching(vedabase_env):
     client = httpx.Client(transport=httpx.MockTransport(handler))
     validator = VedabaseValidator(cache_db=vedabase_env, client=client)
 
-    # 1. First validation should query network
     is_valid, status = validator.validate_scripture_reference("SB-1-4-5")
     assert is_valid is True
     assert status == "validated"
     assert len(called) == 1
 
-    # 2. Second validation within 24h should hit cache without network query
     is_valid_cached, status_cached = validator.validate_scripture_reference("SB-1-4-5")
     assert is_valid_cached is True
     assert status_cached in ("validated", "cached")
-    assert len(called) == 1  # No additional network call!
+    assert len(called) == 1
 
 
 def test_vedabase_validation_not_found(vedabase_env):
@@ -58,6 +58,39 @@ def test_vedabase_validation_not_found(vedabase_env):
     is_valid, status = validator.validate_scripture_reference("SB-99-99-99")
     assert is_valid is False
     assert status == "not_found"
+
+
+def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
+    """A transient false 404 must not poison a real scripture reference for 24 hours."""
+    responses = [404, 200]
+    called = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        status = responses[min(called, len(responses) - 1)]
+        called += 1
+        return httpx.Response(status, text="Not Found" if status == 404 else "BG 13.8-12")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    validator = VedabaseValidator(cache_db=vedabase_env, client=client)
+
+    first_valid, first_status = validator.validate_scripture_reference("BG-13-8-12")
+    assert first_valid is False
+    assert first_status == "not_found"
+    assert called == 1
+
+    # Age only the negative entry past the short negative TTL, but nowhere near 24 hours.
+    with sqlite3.connect(str(vedabase_env)) as conn:
+        conn.execute(
+            "UPDATE vedabase_cache SET cached_at = ? WHERE ref_key = ?",
+            (time.time() - VedabaseValidator.NEGATIVE_TTL_SECS - 1, "BG-13-8-12"),
+        )
+        conn.commit()
+
+    recovered_valid, recovered_status = validator.validate_scripture_reference("BG-13-8-12")
+    assert recovered_valid is True
+    assert recovered_status == "validated"
+    assert called == 2
 
 
 def test_vedabase_network_failure_returns_pending_stale(vedabase_env):
@@ -87,13 +120,9 @@ def test_vedabase_cache_refresh_after_ttl(vedabase_env):
     validator.validate_scripture_reference("SB-1-1-1")
     assert called == 1
 
-    # Artificially age the cached entry past 24 hours
-    import sqlite3
     with sqlite3.connect(str(vedabase_env)) as conn:
         conn.execute("UPDATE vedabase_cache SET cached_at = ? WHERE ref_key = ?", (time.time() - 90000, "SB-1-1-1"))
         conn.commit()
 
-    # Should re-query network
     validator.validate_scripture_reference("SB-1-1-1")
     assert called == 2
-
