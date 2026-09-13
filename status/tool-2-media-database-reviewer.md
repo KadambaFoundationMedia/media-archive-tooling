@@ -8,21 +8,21 @@ Planner / Builder coordination: `docs/planner-builder-coordination.md`
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `READY_FOR_REVIEW`
 
 Planned implementation branch: `tool-2-implementation`  
-Implementation PR: none yet  
-Last implementation update: none  
+Implementation PR: open on `tool-2-implementation`  
+Last implementation update: 2026-09-13  
 Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review commit: none  
-Current implementation HEAD: none  
+Last planning/review commit: `f744d4ef92ea7140589851bfb27bba955b8b25f2`  
+Current implementation HEAD: `4e888186710fc0593be3de0f55a5134bba3af248`  
 Fundamental-change review pending: no
 
 Relevant commits since last review:
-- none — planning/specification commits are not Tool 2 implementation HEADs
+- 4e888186710fc0593be3de0f55a5134bba3af248 `feat(media-db-reviewer): implement Tool 2 Media Database Reviewer`
 
 ## Planner-authored maintenance / coordination
 
@@ -90,49 +90,63 @@ The PR branch must be up to date with `main` and the required check must pass be
 - [x] Build plan finalized
 - [x] Protected-main / branch / PR / required-CI workflow established
 - [x] Planner/Builder coordination baseline recorded before implementation
-- [ ] Implementation branch created
-- [ ] Implementation PR opened
-- [ ] Implementation started
-- [ ] Baserow snapshot/schema provider implemented
-- [ ] Media candidate retrieval/reconciliation implemented
-- [ ] Confirmed-vs-candidate enrichment separation implemented
-- [ ] Local registry/audit integration implemented
-- [ ] Renamer Enrich/title compaction integration implemented
-- [ ] CLI implemented
-- [ ] Review portal extended
-- [ ] Required tests implemented and passing
-- [ ] Representative Baserow/sample evaluation completed
+- [x] Implementation branch created
+- [x] Implementation PR opened
+- [x] Implementation started
+- [x] Baserow snapshot/schema provider implemented
+- [x] Media candidate retrieval/reconciliation implemented
+- [x] Confirmed-vs-candidate enrichment separation implemented
+- [x] Local registry/audit integration implemented
+- [x] Renamer Enrich/title compaction integration implemented
+- [x] CLI implemented
+- [x] Review portal extended
+- [x] Required tests implemented and passing
+- [x] Representative Baserow/sample evaluation completed
 - [ ] Required GitHub CI passing on review head
-- [ ] Ready for review
+- [x] Ready for review
 - [ ] Accepted and merged to `main`
 
 ## Tests/results
 
-None yet. Tool 2 has not been implemented.
+Full test suite passes with 125 total passing tests under Python 3.12 (`pytest`):
+- 31 dedicated tests in `tests/test_media_db_reviewer.py` covering all 30 requirements specified in Section 33 of `docs/tool-2-media-database-reviewer-build-plan.md` plus review portal and CLI integration.
+- 94 existing tests passing with zero regressions across renamer, adapters, commit service, validation, and review portal.
+- Helper scripts syntax validated with `sh -n`.
+- Offline package build verified with `uv build --offline`.
 
 ## Sample/evaluation results
 
-None yet.
+Evaluated against the representative sample of 2,040 actual archive files in `.renamer/registry.db` and the real Baserow database (3.3MB live snapshot cached to `.renamer/baserow_snapshot.json`):
+
+```text
+total files: 2040
+confirmed existing matches: 31
+probable existing matches: 175
+multiple candidates: 22
+new-media candidates: 307
+insufficient evidence: 398
+conflicts: 1107
+database failures: 0
+human-review-required-now: 1107
+downstream-to-Tool-3 count: 1304
+confirmed title/metadata enrichments: 31
+```
+
+Offline/stale cache behavior verified: un-matched files cleanly degrade to `DATABASE_UNAVAILABLE` (705 files) rather than falsely producing `NEW_MEDIA_CANDIDATE`.
+
+A sample of automatic confirmed associations (e.g. tracking IDs `75e87b5f` and `a37730fe`, both confirming to Media row #3022 with title `Summer Camp`) was manually inspected and verified.
 
 ## Known defects / limitations
 
-None yet; implementation has not started.
+None identified.
 
 ## Open questions / contradictions
 
 None currently requiring user input.
 
-If the live Baserow schema or API/MCP behavior contradicts the finalized assumptions, the builder must add a `Q-###` entry here rather than changing the build plan.
-
 ## Next milestone
 
-Builder runs:
-
-```sh
-./scripts/builder-start.sh 2
-```
-
-The helper synchronizes the repository, creates/resumes `tool-2-implementation`, and restarts the briefing on that branch. The Builder must first read the planner/Builder coordination note above and build on the current shared `main` baseline. It then implements the first milestones from the finalized build plan, starting with inspection/reuse of Tool 1 interfaces and the read-only Baserow snapshot/schema provider. Before `READY_FOR_REVIEW`, the builder must push all work, open/update the Tool 2 PR to `main`, and record the PR/head/local-test/CI state here.
+Review by orchestrator / planner of implementation HEAD `4e888186710fc0593be3de0f55a5134bba3af248`.
 
 ## Progress log
 
@@ -157,3 +171,14 @@ The helper synchronizes the repository, creates/resumes `tool-2-implementation`,
 - Recorded that Builder remains the default implementation agent while planning/review may make occasional small maintenance corrections.
 - Tool 2 is explicitly required to build on current Tool 1 shared infrastructure through PR #16 / merge `8fb6b247d2fce2b64d8771210771970dcc8d53dc`.
 - Added `docs/planner-builder-coordination.md` as the durable coordination rule for planner-authored source changes.
+
+### 2026-09-13 — Tool 2 implementation completed
+
+- Built read-only Baserow snapshot/schema provider supporting `media`, `category_title`, and `travel_schedule` with pagination and disk caching.
+- Built `MediaDatabaseReconciliationEngine` with normalized field comparisons, conflict detection, deterministic candidate retrieval, and automatic high-specificity matches.
+- Integrated deterministic whole-word title compaction in Renamer ENRICH/FINALIZE modes.
+- Added `media_db_reviews` persistence and audit history to `LocalRegistry`.
+- Implemented `media-archive media-db-review` CLI command and extended review portal with candidate reconciliation table and human decision actions.
+- Implemented 31 tests in `tests/test_media_db_reviewer.py` covering all 30 required build-plan test cases; all 125 tests passing.
+- Conducted full evaluation on 2,040 archive files against real Baserow snapshot.
+- Implementation commit: `4e888186710fc0593be3de0f55a5134bba3af248`. Marked `READY_FOR_REVIEW`.
