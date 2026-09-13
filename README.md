@@ -109,9 +109,11 @@ From the repository root, run:
 
 The helper safely synchronizes the current branch when possible, prepares the locked Python environment, performs a Tool 1 **dry-run** against `sample-files/`, starts the localhost review portal, and opens `http://127.0.0.1:8000` in the default browser on macOS/Linux when supported. The dry-run does not rename files.
 
-The review helper uses a **separate per-target review registry** under `.renamer/review/` rather than the general operational registry. Re-running the same review therefore does not accumulate duplicate rows from earlier dry-runs, and each reviewed directory stays isolated from other review targets. Tool 1 also reuses the existing tracking ID for an unchanged file path on repeated scans.
+The review helper uses a **separate per-target review registry** under `.renamer/review/` rather than the general operational registry. A normal review run starts from a fresh current-scan snapshot so stale rows from older parser versions cannot inflate the dashboard counts. Each reviewed directory stays isolated from other review targets, while Tool 1 still reuses existing tracking IDs in persistent operational registries.
 
 The dashboard shows original filename, proposed filename, source path, WHEN/WHAT/WHERE and review status. Technical tracking IDs remain part of Tool 1's underlying in-process identity and filename semantics, but the dashboard intentionally hides the ID column and `_ID-xxxxxxxx` token from the **displayed** proposed filename because they are not useful for human review. The dashboard also includes dark mode, sticky table headers and batch row selection.
+
+Selected human-review rows can be **approved** or **deferred** in batches. Batch approval only clears the human-review blocker/status for the selected proposals; it does **not** rename files. Batch editing of metadata and batch filesystem commit are intentionally not offered because those actions require item-specific review or the Renamer's explicit commit safety path.
 
 To review another directory instead of `sample-files/`:
 
@@ -132,38 +134,3 @@ Implementation status: `status/tool-2-media-database-reviewer.md`
 Implementation tracking/discussion: GitHub issue #2
 
 Planned implementation branch: `tool-2-implementation`
-
-Tool 2 is the reusable **read-only Baserow Media database lookup and reconciliation service**. It consumes structured Tool 1 evidence, searches plausible Media rows, compares database metadata field-by-field, preserves contradictions, distinguishes confirmed matches from probable/multiple/conflicting candidates, and returns only confirmed Media metadata to the Renamer for enrichment.
-
-Tool 2 reads `media`, `category_title`, and `travel_schedule`. It does not currently use `users` and never mutates Baserow; Tool 4 owns writes. Tool 2 may use travel-schedule rows as supporting candidate context, but Tool 3 remains a separate dedicated Travel Schedule Reviewer.
-
-Confirmed Baserow titles can enrich the WHAT field. Full titles remain preserved as metadata/evidence, while overlong filename title components are shortened automatically and deterministically at whole-word boundaries only when required by the filename-length budget.
-
-To begin implementation:
-
-```sh
-./scripts/builder-start.sh 2
-```
-
-The helper will synchronize the repository and create/resume `tool-2-implementation` automatically before implementation begins.
-
-## Project progress protocol
-
-GitHub is the durable communication channel between planning/review and implementation models.
-
-For each tool:
-
-1. Create a dedicated finalized build-plan Markdown file in `docs/`.
-2. Create a per-tool implementation status file under `status/`.
-3. Create a GitHub implementation issue when useful for discussion/notifications.
-4. The implementation model starts from `BUILDER.md` / `./scripts/builder-start.sh <tool-number>` and uses the status file to determine the current action.
-5. Implementation occurs on the tool branch, with one pull request to protected `main` kept open across review/correction cycles.
-6. The implementation model updates the status file at meaningful milestones with completed work, commits/PRs, local tests, observed behavior, blockers, open questions, CI status, and the next milestone.
-7. The implementation model must not change the finalized build plan. Unclear or contradictory requirements are recorded in the status file for planning/review resolution.
-8. The status file maintains the current implementation HEAD and the last planning/review commit checkpoint.
-9. The planning/review model inspects implementation commits/diffs and the PR since the previous checkpoint and checks for fundamental changes, including changes to archive behavior, tool boundaries, Baserow/shared-state semantics, persistent schemas, interfaces, safety/idempotency, authoritative providers, major framework choices, and acceptance criteria.
-10. A potentially fundamental implementation change must not silently become project policy. It is either corrected to match the build plan or raised as a specific decision for the user.
-11. The required GitHub CI check must pass before acceptance/merge.
-12. When a tool is accepted, its build-plan acceptance criteria, current PR head, tests, sample results, and CI have been reviewed, and the accepted PR is merged to `main`.
-
-This process avoids relying on direct model-to-model memory and keeps the repository itself as the project record.

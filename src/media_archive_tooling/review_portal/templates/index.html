@@ -80,15 +80,30 @@
         .controls {
             display: flex;
             gap: 12px;
-            margin-bottom: 16px;
+            margin-bottom: 10px;
             align-items: center;
             flex-wrap: wrap;
+        }
+        .batch-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 10px 12px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--card-bg);
         }
         .selection-status {
             margin-left: auto;
             color: var(--muted-color);
             font-size: 13px;
             font-weight: 600;
+        }
+        .batch-note {
+            color: var(--muted-color);
+            font-size: 12px;
         }
         .btn {
             padding: 8px 16px;
@@ -104,6 +119,7 @@
         .btn-primary { background: var(--primary); color: white; border: none; }
         .btn-primary:hover { background: var(--primary-hover); }
         .btn.active { background: var(--header-bg); font-weight: bold; }
+        .btn:disabled { opacity: .45; cursor: not-allowed; border-color: var(--border-color); }
         .theme-btn { min-width: 104px; }
         table {
             width: 100%;
@@ -204,8 +220,16 @@
         <a href="/?filter=all" class="btn {% if current_filter == 'all' %}active{% endif %}">All Files</a>
         <a href="/?filter=review" class="btn {% if current_filter == 'review' %}active{% endif %}">Needs Review ({{ review_count }})</a>
         <a href="/?filter=committed" class="btn {% if current_filter == 'committed' %}active{% endif %}">Committed</a>
-        <span class="selection-status" id="selection-status">0 selected</span>
     </div>
+
+    <form id="batch-form" method="post" action="/batch/update" class="batch-bar">
+        <input type="hidden" name="filter" value="{{ current_filter }}">
+        <button id="batch-approve" class="btn btn-primary" type="submit" name="action" value="approve" disabled>Approve selected</button>
+        <button id="batch-defer" class="btn" type="submit" name="action" value="defer" disabled>Defer selected</button>
+        <button id="clear-selection" class="btn" type="button" disabled>Clear selection</button>
+        <span class="batch-note">Batch actions only apply to files currently requiring human review. They do not rename files.</span>
+        <span class="selection-status" id="selection-status">0 selected</span>
+    </form>
 
     <table>
         <thead>
@@ -225,7 +249,7 @@
             {% for f in files %}
             <tr>
                 <td class="select-col">
-                    <input class="row-select" type="checkbox" value="{{ f.tracking_id }}" aria-label="Select {{ f.original_filename }}">
+                    <input class="row-select" type="checkbox" name="tracking_ids" value="{{ f.tracking_id }}" form="batch-form" data-needs-review="{{ 'true' if f.needs_review else 'false' }}" aria-label="Select {{ f.original_filename }}">
                 </td>
                 <td>
                     <div class="filename-box">{{ f.original_filename }}</div>
@@ -295,10 +319,24 @@
             const selectAll = document.getElementById('select-all');
             const rows = Array.from(document.querySelectorAll('.row-select'));
             const selectionStatus = document.getElementById('selection-status');
+            const approveButton = document.getElementById('batch-approve');
+            const deferButton = document.getElementById('batch-defer');
+            const clearButton = document.getElementById('clear-selection');
+            const batchForm = document.getElementById('batch-form');
 
             function updateSelectionStatus() {
-                const selected = rows.filter(cb => cb.checked).length;
-                selectionStatus.textContent = `${selected} selected`;
+                const selectedRows = rows.filter(cb => cb.checked);
+                const selected = selectedRows.length;
+                const allReviewRows = selected > 0 && selectedRows.every(cb => cb.dataset.needsReview === 'true');
+
+                selectionStatus.textContent = allReviewRows || selected === 0
+                    ? `${selected} selected`
+                    : `${selected} selected — batch actions require review rows only`;
+
+                approveButton.disabled = !allReviewRows;
+                deferButton.disabled = !allReviewRows;
+                clearButton.disabled = selected === 0;
+
                 if (selectAll) {
                     selectAll.checked = rows.length > 0 && selected === rows.length;
                     selectAll.indeterminate = selected > 0 && selected < rows.length;
@@ -311,6 +349,20 @@
                     updateSelectionStatus();
                 });
             }
+
+            clearButton.addEventListener('click', function () {
+                rows.forEach(cb => { cb.checked = false; });
+                if (selectAll) selectAll.checked = false;
+                updateSelectionStatus();
+            });
+
+            batchForm.addEventListener('submit', function (event) {
+                const selected = rows.filter(cb => cb.checked).length;
+                if (event.submitter && event.submitter.value === 'approve') {
+                    const ok = window.confirm(`Approve ${selected} selected file${selected === 1 ? '' : 's'}? This clears their human-review flag but does not rename files.`);
+                    if (!ok) event.preventDefault();
+                }
+            });
 
             rows.forEach(cb => cb.addEventListener('change', updateSelectionStatus));
             updateSelectionStatus();

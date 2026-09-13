@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import media_archive_tooling.review_portal.app as portal_app
 from media_archive_tooling.review_portal.app import app, _dashboard_record
 
 
@@ -16,6 +17,11 @@ def test_portal_dashboard():
     assert "Media Archive Tooling — Review Portal" in response.text
     assert 'id="theme-toggle"' in response.text
     assert 'id="select-all"' in response.text
+    assert 'id="batch-form"' in response.text
+    assert 'id="batch-approve"' in response.text
+    assert 'id="batch-defer"' in response.text
+    assert "Approve selected" in response.text
+    assert "Defer selected" in response.text
     assert "Original filename" in response.text
     assert "Proposed filename" in response.text
     assert "<th>Path</th>" in response.text
@@ -54,3 +60,72 @@ def test_portal_file_detail_and_update():
         assert res_post.status_code == 200
         updated = reg.get_file(tid)
         assert updated["status"] == "approved"
+
+
+def test_batch_approve_uses_application_service(monkeypatch):
+    calls = []
+
+    class DummyService:
+        def get_file(self, tracking_id):
+            if tracking_id in {"aaa11111", "bbb22222"}:
+                return {"tracking_id": tracking_id, "needs_review": True}
+            return None
+
+        def apply_review_action(self, **kwargs):
+            calls.append(kwargs)
+            return {"tracking_id": kwargs["tracking_id"], "status": "approved"}
+
+    monkeypatch.setattr(portal_app, "get_service", lambda: DummyService())
+    client = TestClient(app)
+    response = client.post(
+        "/batch/update",
+        data={
+            "tracking_ids": ["aaa11111", "bbb22222"],
+            "action": "approve",
+            "filter": "review",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?filter=review"
+    assert [call["tracking_id"] for call in calls] == ["aaa11111", "bbb22222"]
+    assert all(call["action"] == "approve" for call in calls)
+    assert all(call["reviewer"] == "review_portal_batch" for call in calls)
+
+
+def test_batch_action_rejects_non_review_rows(monkeypatch):
+    class DummyService:
+        def get_file(self, tracking_id):
+            return {"tracking_id": tracking_id, "needs_review": False}
+
+        def apply_review_action(self, **kwargs):
+            raise AssertionError("batch action must not be applied to non-review rows")
+
+    monkeypatch.setattr(portal_app, "get_service", lambda: DummyService())
+    client = TestClient(app)
+    response = client.post(
+        "/batch/update",
+        data={"tracking_ids": ["safe0001"], "action": "defer", "filter": "all"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert "not currently in the human-review queue" in response.text
+
+
+def test_batch_action_rejects_unsupported_action(monkeypatch):
+    class DummyService:
+        def get_file(self, tracking_id):
+            return {"tracking_id": tracking_id, "needs_review": True}
+
+    monkeypatch.setattr(portal_app, "get_service", lambda: DummyService())
+    client = TestClient(app)
+    response = client.post(
+        "/batch/update",
+        data={"tracking_ids": ["review01"], "action": "commit", "filter": "review"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert "approve or defer" in response.text
