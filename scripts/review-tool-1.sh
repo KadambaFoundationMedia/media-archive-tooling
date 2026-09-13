@@ -83,6 +83,15 @@ REVIEW_REGISTRY="${REVIEW_REGISTRY_PATH:-${REVIEW_STATE_DIR}/tool-1-${TARGET_KEY
 REVIEW_LOG_DIR="${REVIEW_LOG_DIR:-${REVIEW_STATE_DIR}/logs-${TARGET_KEY}}"
 mkdir -p "$REVIEW_STATE_DIR" "$REVIEW_LOG_DIR"
 
+# The one-command review helper is a current-scan snapshot, not a historical
+# operational registry. Reusing an already polluted review DB would keep stale
+# rows/counts visible even after the identity-reuse fix, so start clean by
+# default. Set REVIEW_PRESERVE_REGISTRY=1 only for deliberate debugging.
+if [ "${REVIEW_PRESERVE_REGISTRY:-0}" != "1" ]; then
+  printf '%s\n' "Resetting previous Tool 1 review snapshot..."
+  rm -f "$REVIEW_REGISTRY" "${REVIEW_REGISTRY}-wal" "${REVIEW_REGISTRY}-shm"
+fi
+
 printf '%s\n' "Preparing Python environment..."
 uv sync --extra dev --frozen
 
@@ -91,6 +100,9 @@ printf '%s\n' "Review registry: $REVIEW_REGISTRY"
 uv run media-archive renamer "$TARGET_ABS" --dry-run \
   --registry-path "$REVIEW_REGISTRY" \
   --log-dir "$REVIEW_LOG_DIR"
+
+printf '%s\n' "Review snapshot summary:"
+uv run media-archive status --registry-path "$REVIEW_REGISTRY"
 
 printf '%s\n' "Starting Tool 1 review portal: $URL"
 printf '%s\n' "Press Ctrl-C in this terminal when you are finished reviewing."
