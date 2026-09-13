@@ -12,19 +12,26 @@ To start or resume a tool locally, run:
 ./scripts/builder-start.sh <tool-number>
 ```
 
-For Tool 1:
+Examples:
 
 ```sh
 ./scripts/builder-start.sh 1
+./scripts/builder-start.sh 2
 ```
 
-The command detects the tool's current status and prints the exact files to read plus the action required for that state. The user can therefore simply tell the implementation model:
+The helper synchronizes the repository, detects the tool's current status, and prints the exact files to read plus the action required for that state. The user can therefore simply tell the implementation model:
 
 ```text
 BUILD TOOL 1
 ```
 
-The builder must then run the helper command (or follow `BUILDER.md` manually if shell execution is unavailable). It must not depend on previous chat history.
+or:
+
+```text
+BUILD TOOL 2
+```
+
+The builder must run the helper command (or follow `BUILDER.md` manually if shell execution is unavailable). It must not depend on previous chat history.
 
 ## Project implementation architecture
 
@@ -46,7 +53,7 @@ Builder entry point: `BUILDER.md`
 
 ### Tool 1 — Renamer
 
-Status: **CHANGES_REQUESTED after first implementation review**
+Status: **CHANGES_REQUESTED**
 
 Build plan: `docs/tool-1-renamer-build-plan.md`
 
@@ -54,11 +61,31 @@ Implementation status and active review findings: `status/tool-1-renamer.md`
 
 Implementation tracking/discussion: GitHub issue #1
 
-The first implementation was reviewed through repository HEAD `822f011`. The project foundation, deterministic parser, SQLite registry, logging, CLI, review portal, adapters and tests are in place, but the planning/review pass found specification and safety gaps that must be corrected before Tool 1 can be accepted. The active `R-###` findings and required regression tests are recorded in the status file. The builder should run `./scripts/builder-start.sh 1`, address every active review finding, push the corrected implementation, and return the tool to `READY_FOR_REVIEW`.
+Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness.
 
-The Renamer is a fast, repeatable filename interpretation and normalization tool. It assigns a stable temporary `_ID-xxxxxxxx` during processing, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata from filenames, folders, Baserow reference data and later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on unclear files. It deliberately avoids slow audio/content analysis; later passes reuse the same Renamer engine as stronger evidence becomes available.
+The current implementation has completed multiple review/correction passes. The status file is authoritative for the remaining active finding(s) and current review checkpoint.
 
-Tool 1 also provides the first useful review-portal view so uncertain rename proposals, evidence, alternatives, conflicts, and corrections can be reviewed from the browser while automatic files continue without blocking.
+### Tool 2 — Media Database Reviewer
+
+Status: **FINALIZED BUILD PLAN / NOT_STARTED**
+
+Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
+
+Implementation status: `status/tool-2-media-database-reviewer.md`
+
+Implementation tracking/discussion: GitHub issue #2
+
+Tool 2 is the reusable **read-only Baserow Media database lookup and reconciliation service**. It consumes structured Tool 1 evidence, searches plausible Media rows, compares database metadata field-by-field, preserves contradictions, distinguishes confirmed matches from probable/multiple/conflicting candidates, and returns only confirmed Media metadata to the Renamer for enrichment.
+
+Tool 2 reads `media`, `category_title`, and `travel_schedule`. It does not currently use `users` and never mutates Baserow; Tool 4 owns writes. Tool 2 may use travel-schedule rows as supporting candidate context, but Tool 3 remains a separate dedicated Travel Schedule Reviewer.
+
+Confirmed Baserow titles can enrich the WHAT field. Full titles remain preserved as metadata/evidence, while overlong filename title components are shortened automatically and deterministically at whole-word boundaries only when required by the filename-length budget.
+
+To begin implementation:
+
+```sh
+./scripts/builder-start.sh 2
+```
 
 ## Project progress protocol
 
