@@ -10,17 +10,25 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "asse
 DEFAULT_CATEGORIES_PATH = ASSETS_DIR / "default_categories.json"
 SPECIFIC_TITLES_PATH = ASSETS_DIR / "specific_titles.json"
 
-# Scripture patterns
+# Scripture patterns.
+#
+# Archive grammar is structural, not heuristic:
+# - BG: chapter.verse or chapter.verse-end (e.g. BG 1.1 or BG 1.1-3)
+# - SB: canto.chapter.verse or canto.chapter.verse-end (e.g. SB 1.1.2 or SB 1.1.2-4)
+# - CC: lila.chapter.verse or lila.chapter.verse-end (e.g. CC Adi 1.1 or CC Adi 1.1-3)
+#
+# The final range separator must therefore be a hyphen. A further dotted numeric
+# component is not silently reinterpreted as a range.
 SB_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:SB|Srimad[- ]?Bhagavatam)[- ]+(\d{1,2})[- .:]+(\d{1,2})[- .:]+(\d{1,3})(?:[- .:]+(\d{1,3}))?(?=[_.\s-]|$)",
+    r"(?:^|[\s_.-])(?:SB|Srimad[- ]?Bhagavatam)[- ]+(\d{1,2})[- .:]+(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s-]|$)",
     re.IGNORECASE
 )
 BG_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:BG|Bhagavad[- ]?Gita)[- ]+(\d{1,2})[- .:]+(\d{1,3})(?:[- .:]+(\d{1,3}))?(?=[_.\s-]|$)",
+    r"(?:^|[\s_.-])(?:BG|Bhagavad[- ]?Gita)[- ]+(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s-]|$)",
     re.IGNORECASE
 )
 CC_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:CC|Caitanya[- ]?Caritamrta|Chaitanya[- ]?Charitamrita)[- ]+(?:(Adi|Madhya|Antya)[- ]+)?(\d{1,2})[- .:]+(\d{1,3})(?=[_.\s-]|$)",
+    r"(?:^|[\s_.-])(?:CC|Caitanya[- ]?Caritamrta|Chaitanya[- ]?Charitamrita)[- ]+(?:(Adi|Madhya|Antya)[- ]+)?(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s-]|$)",
     re.IGNORECASE
 )
 
@@ -156,9 +164,10 @@ def parse_what(
 
     cc_match = CC_REGEX.search(working)
     if cc_match:
-        section, chapter, verse = cc_match.groups()
+        section, chapter, v1, v2 = cc_match.groups()
         sec_prefix = f"-{section.capitalize()}" if section else ""
-        base_ref = f"CC{sec_prefix}-{chapter}-{verse}"
+        verse_str = f"{v1}-{v2}" if v2 else v1
+        base_ref = f"CC{sec_prefix}-{chapter}-{verse_str}"
         what_val = base_ref
         span = cc_match.span()
         suffix_token, suffix_len = _check_scripture_descriptive_suffix(working, span[1], specific_titles)
