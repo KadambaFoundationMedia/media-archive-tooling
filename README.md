@@ -41,6 +41,21 @@ Project-wide architecture: `docs/project-implementation-architecture.md`
 
 The implementation uses `uv` for Python environment/dependency management. Tool logic remains callable programmatically for the future orchestrator; CLI and review UI both call the same Python application services. The initial review portal uses FastAPI with server-rendered Jinja2 + HTMX so no Xcode/Swift or Node/React toolchain is required for v1. A packaged desktop shell can be evaluated later without moving archive logic out of Python.
 
+## Continuous integration
+
+GitHub Actions CI is configured in `.github/workflows/ci.yml`.
+
+On every push to `main`, every pull request, and manual workflow dispatch, CI:
+
+1. checks out the repository;
+2. uses Python 3.12;
+3. installs `uv`;
+4. reproduces the locked environment with `uv sync --extra dev --frozen`;
+5. runs the full `pytest` suite;
+6. verifies that the Python package builds successfully with `uv build`.
+
+CI deliberately does not use the local `.env` or live Baserow/Vedabase/location credentials. Automated tests must mock external services so repository verification remains deterministic and safe.
+
 ## Build plans
 
 Each finalized tool has its own implementation-ready Markdown build plan under `docs/`. A finalized build plan is the authoritative specification for that tool.
@@ -65,7 +80,7 @@ Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`.
 
 Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness.
 
-The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub CI is not currently configured; the status file records the reviewed implementation commits and verification provenance.
+The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub CI is now configured for subsequent commits; Tool 1's original acceptance remains based on the reviewed implementation/test evidence recorded in its status file.
 
 ### Tool 2 — Media Database Reviewer
 
