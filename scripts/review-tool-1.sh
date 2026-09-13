@@ -104,6 +104,27 @@ uv run media-archive renamer "$TARGET_ABS" --dry-run \
 printf '%s\n' "Review snapshot summary:"
 uv run media-archive status --registry-path "$REVIEW_REGISTRY"
 
+LATEST_SUMMARY=$(ls -1t "$REVIEW_LOG_DIR"/renamer_*_summary.csv 2>/dev/null | sed -n '1p' || true)
+if [ -n "$LATEST_SUMMARY" ]; then
+  printf '%s\n' "Human review items:"
+  uv run python - "$LATEST_SUMMARY" <<'PY'
+import csv
+import sys
+
+summary_path = sys.argv[1]
+found = False
+with open(summary_path, newline="", encoding="utf-8") as handle:
+    for row in csv.DictReader(handle):
+        if row.get("Needs Review") == "YES":
+            found = True
+            name = row.get("Original Filename") or "(unknown file)"
+            reason = row.get("Review Reasons") or "(no review reason recorded)"
+            print(f"  - {name}: {reason}")
+if not found:
+    print("  (none)")
+PY
+fi
+
 printf '%s\n' "Starting Tool 1 review portal: $URL"
 printf '%s\n' "Press Ctrl-C in this terminal when you are finished reviewing."
 
