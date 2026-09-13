@@ -2,6 +2,26 @@
 
 This document defines how finalized build plans are implemented and how the implementation model communicates progress, questions, contradictions, test findings, and potentially fundamental implementation changes back to the planning/review model and the user.
 
+## 0. Builder entry point
+
+The builder always starts from repository root `BUILDER.md`.
+
+The standard start/resume command is:
+
+```sh
+./scripts/builder-start.sh <tool-number>
+```
+
+The user may simply tell the implementation model:
+
+```text
+BUILD TOOL <number>
+```
+
+The implementation model must then run the helper command, or manually follow the same procedure in `BUILDER.md` if shell execution is unavailable. The helper reads the per-tool status and tells the builder whether to start, resume, address review changes, stop for review, or leave an accepted tool untouched.
+
+This entry-point convention is deliberately status-driven so a new implementation-model session can resume correctly without access to previous chat history.
+
 ## 1. Build plans are specifications
 
 A finalized build-plan Markdown file under `docs/` is the authoritative specification for that tool.
