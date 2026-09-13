@@ -71,13 +71,20 @@ def run_renamer(args):
 
 def run_review(args):
     import uvicorn
+    from .review_portal.app import app, configure_review_context
+
     host = args.host or "127.0.0.1"
     if host not in ("127.0.0.1", "localhost"):
         print(f"Error: Non-loopback host '{host}' is forbidden. Review portal must bind to loopback (127.0.0.1 or localhost).", file=sys.stderr)
         sys.exit(1)
+
     port = args.port or 8000
+    registry_path = Path(args.registry_path) if getattr(args, "registry_path", None) else None
+    review_root = Path(args.review_root).resolve() if getattr(args, "review_root", None) else None
+    configure_review_context(registry_path=registry_path, review_root=review_root)
+
     print(f"Starting review portal on http://{host}:{port}")
-    uvicorn.run("media_archive_tooling.review_portal.app:app", host=host, port=port, reload=False)
+    uvicorn.run(app, host=host, port=port, reload=False)
 
 
 def run_status(args):
@@ -130,6 +137,8 @@ def main():
     review_parser = subparsers.add_parser("review", help="Start local review portal web server")
     review_parser.add_argument("--host", choices=["127.0.0.1", "localhost"], default="127.0.0.1", help="Loopback host only (default: 127.0.0.1)")
     review_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    review_parser.add_argument("--registry-path", help="SQLite registry to display in the portal")
+    review_parser.add_argument("--review-root", help="Root directory used to display relative source paths")
     review_parser.set_defaults(func=run_review)
 
     # Status command
