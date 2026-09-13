@@ -3,7 +3,8 @@
 Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`  
 Project architecture: `docs/project-implementation-architecture.md`  
 Implementation issue: #2  
-Protocol: `docs/implementation-protocol.md`
+Protocol: `docs/implementation-protocol.md`  
+Planner / Builder coordination: `docs/planner-builder-coordination.md`
 
 ## Current state
 
@@ -22,6 +23,23 @@ Fundamental-change review pending: no
 
 Relevant commits since last review:
 - none — planning/specification commits are not Tool 2 implementation HEADs
+
+## Planner-authored maintenance / coordination
+
+Before Tool 2 implementation begins, the Builder must synchronize to current `main` and treat the post-acceptance Tool 1 maintenance baseline as existing shared infrastructure rather than reconstructing Tool 1 from its original acceptance snapshot.
+
+Current shared baseline checkpoint: Tool 1 maintenance through PR #16 / merge commit `8fb6b247d2fce2b64d8771210771970dcc8d53dc`.
+
+Important changes already present on `main` that Tool 2 must preserve and integrate with:
+
+- fresh per-target Tool 1 review snapshots and stable review counts;
+- live Baserow structured-field and redirect handling corrections;
+- scripture grammar/range validation corrections for BG, SB, and CC;
+- review-portal usability improvements;
+- batch approve/defer/commit workflows;
+- reusable safe `RenameCommitService` for reviewed rename proposals.
+
+These were planner-authored post-acceptance maintenance changes, not Tool 2 implementation work. Because Tool 2 extends the existing portal and integrates with Renamer/Baserow behavior, the Builder should inspect the current relevant code and the referenced maintenance diff when touching overlapping components. Do not revert or duplicate these changes based on an older Tool 1 snapshot.
 
 ## Finalized scope summary
 
@@ -71,6 +89,7 @@ The PR branch must be up to date with `main` and the required check must pass be
 - [x] Long-title filename policy finalized: automatic deterministic shortening
 - [x] Build plan finalized
 - [x] Protected-main / branch / PR / required-CI workflow established
+- [x] Planner/Builder coordination baseline recorded before implementation
 - [ ] Implementation branch created
 - [ ] Implementation PR opened
 - [ ] Implementation started
@@ -113,7 +132,7 @@ Builder runs:
 ./scripts/builder-start.sh 2
 ```
 
-The helper synchronizes the repository, creates/resumes `tool-2-implementation`, and restarts the briefing on that branch. The builder then implements the first milestones from the finalized build plan, starting with inspection/reuse of Tool 1 interfaces and the read-only Baserow snapshot/schema provider. Before `READY_FOR_REVIEW`, the builder must push all work, open/update the Tool 2 PR to `main`, and record the PR/head/local-test/CI state here.
+The helper synchronizes the repository, creates/resumes `tool-2-implementation`, and restarts the briefing on that branch. The Builder must first read the planner/Builder coordination note above and build on the current shared `main` baseline. It then implements the first milestones from the finalized build plan, starting with inspection/reuse of Tool 1 interfaces and the read-only Baserow snapshot/schema provider. Before `READY_FOR_REVIEW`, the builder must push all work, open/update the Tool 2 PR to `main`, and record the PR/head/local-test/CI state here.
 
 ## Progress log
 
@@ -132,3 +151,9 @@ The helper synchronizes the repository, creates/resumes `tool-2-implementation`,
 - Tool implementation now uses per-tool branches and pull requests instead of direct `main` commits.
 - `Python 3.12 tests` is the required GitHub Actions merge check.
 - Tool 2 standard branch fixed as `tool-2-implementation`.
+
+### 2026-09-13 — Planner / Builder coordination checkpoint added
+
+- Recorded that Builder remains the default implementation agent while planning/review may make occasional small maintenance corrections.
+- Tool 2 is explicitly required to build on current Tool 1 shared infrastructure through PR #16 / merge `8fb6b247d2fce2b64d8771210771970dcc8d53dc`.
+- Added `docs/planner-builder-coordination.md` as the durable coordination rule for planner-authored source changes.
