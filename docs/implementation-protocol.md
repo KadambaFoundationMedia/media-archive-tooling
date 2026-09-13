@@ -142,7 +142,31 @@ Routine refactoring, test additions, small implementation details, and equivalen
 
 If the planning/review model finds that a commit has introduced a fundamental change not authorized by the finalized build plan, it should request correction or raise the specific policy decision with the user. The build plan itself remains unchanged until that decision is made.
 
-## 5. Progress updates
+## 5. Mandatory commit-and-push completion rule
+
+**Implementation work is not complete until all intended repository changes are committed and pushed.**
+
+Whenever the implementation model finishes a requested implementation task, correction pass, milestone, review handoff, test addition, documentation/status update, or maintenance change that modifies repository files, it must do all of the following before reporting completion:
+
+1. run the relevant tests/evaluation;
+2. update the tool status file with the completed work and exact results;
+3. commit all intended repository changes with a descriptive commit message;
+4. push the commit(s) to the documented implementation branch/remote;
+5. verify the pushed commit is reachable;
+6. update the status-file review checkpoint with the real implementation HEAD and relevant commits;
+7. if that checkpoint/status update creates an additional commit, push that commit too and report the final reachable HEAD.
+
+The implementation model must **not** say `BUILDER READY`, `READY_FOR_REVIEW`, `done`, `complete`, or equivalent while relevant work exists only in the local working tree or in unpushed commits.
+
+A local-only SHA is not a valid review target.
+
+If the push fails, the handoff is not complete. The builder should report the repository/push failure precisely and keep the tool out of `READY_FOR_REVIEW` until the durable repository state is available.
+
+No empty commit is required when a task genuinely produces no repository changes; the builder should explicitly say that no repository change was necessary.
+
+This requirement is project-wide and applies even when the code/tests themselves are finished. The repository is the durable implementation record.
+
+## 6. Progress updates
 
 At meaningful milestones, the implementation model should update the status file with:
 
@@ -157,7 +181,7 @@ At meaningful milestones, the implementation model should update the status file
 
 Progress updates should be concise but sufficiently specific that a different model can resume the work without relying on chat memory.
 
-## 6. GitHub issues and pull requests
+## 7. GitHub issues and pull requests
 
 A GitHub implementation issue may be used for discussion, notifications, review comments, and links to PRs/commits, but the per-tool status file is the canonical progress/handoff record.
 
@@ -168,7 +192,7 @@ Pull requests should reference both:
 - the finalized build plan
 - the tool status file
 
-## 7. Planning/review workflow
+## 8. Planning/review workflow
 
 When asked to review implementation progress, the planning/review model should inspect, in this order:
 
@@ -185,7 +209,7 @@ If no archive-policy decision is needed, the planning/review model can give impl
 
 If a genuine policy decision is needed, the planning/review model should ask the user only for that decision, then update the plan and/or project documentation as appropriate and record the resolution.
 
-## 8. Status lifecycle
+## 9. Status lifecycle
 
 Use these high-level states:
 
@@ -202,6 +226,8 @@ ACCEPTED
 
 A tool is only `ACCEPTED` after its build-plan acceptance criteria have been demonstrated, implementation commits have been reviewed through the current accepted HEAD, and relevant test/sample results have been checked.
 
-## 9. Project-wide rule
+`READY_FOR_REVIEW` is valid only when the implementation and status evidence have been committed and pushed and the recorded review target is reachable from the repository.
+
+## 10. Project-wide rule
 
 The GitHub repository is the persistent project memory for implementation. Chat messages can coordinate work, but finalized specifications, implementation status, commit-review state, unresolved questions, and review outcomes must be recoverable from the repository without depending on a previous AI conversation.
