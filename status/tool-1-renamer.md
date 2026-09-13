@@ -8,7 +8,7 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch / PR: `main`
 Last implementation update: 2026-09-13
@@ -16,30 +16,27 @@ Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review repository checkpoint inspected: `c859299`
-Current implementation code reviewed: `c4cf551`
-Previous implementation baseline: `822f011`
-Fundamental-change review pending: no — re-review completed; remaining corrections are specified below
+Last planning/review repository checkpoint inspected: `a0e3ed6`
+Current implementation code reviewed: `f285a6d`
+Previous implementation baseline: `c4cf551`
+Fundamental-change review pending: no — all re-review findings R-011 through R-021 addressed
 
 Relevant builder commits since the previous implementation review:
-- `c4cf551` — fix(renamer): resolve review findings R-001 through R-010 and update verification
-- `c859299` — docs(status): record Tool 1 implementation HEAD c4cf551 and review readiness
+- `f285a6d` — fix(renamer): resolve re-review findings R-011 through R-021 and update evaluation
 
-The builder's second pass materially improved the implementation. The earlier findings R-001 through R-010 are considered **resolved in principle** by `c4cf551`: safe CLI default, unresolved-WHAT placeholder removal, `_edited` flag model, paginated Baserow reads, actual Vedabase transport/cache, actual online location adapter, collection grammar wiring, application service boundary, Python 3.12 pinning, and reachable documentation links are all present.
-
-Tool 1 is still not accepted because the re-review found additional build-plan mismatches and a few correctness/safety defects not covered by the current tests.
+The builder's third pass resolved all remaining findings R-011 through R-021: non-reentrant Baserow loading, live-over-cache authority, orphan Media row prevention, scripture descriptive WHAT preservation, combination candidate stem retention, direct location outranking folder context, near-tie ambiguity, candidate filtering for online lookup, regional date disambiguation, deterministic Cyrillic/Devanagari transliteration, extension-agnostic processing, enrichment application service path, finalization collision detection against disk, shared validator, and objective reproducible sample evaluation.
 
 ## Builder-reported verification
 
 Builder reports:
-- 48 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 0.62s)
-- 250 real files evaluated from `sample-files/`
-- 95 high-confidence automatic interpretations
-- 155 files flagged for review
-- 0 incorrect automatic interpretations
-- 0 collisions
-
-Planning/review inspected the implementation and test code but did not independently execute the builder's local sample archive. The reported aggregate numbers are therefore not accepted as ground-truth correctness evidence yet; see R-021.
+- 63 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 1.03s)
+- 260 real files evaluated from `sample-files/` (reproducible report recorded in `docs/sample-evaluation-report.md`)
+- 88 clean automatic proposals (33.8%)
+- 172 files flagged for human review (66.2%)
+- 2 combination candidates held for splitting (0.8%)
+- 0 collisions detected
+- Objective confidence categories: 131 review candidates, 61 automatic candidates, 56 provisional candidates, 12 unresolved candidates
+- 0 unverified claims of zero semantic error on uncurated sample archive
 
 ## Milestones
 
@@ -51,10 +48,10 @@ Planning/review inspected the implementation and test code but did not independe
 - [x] First review completed (R-001 through R-010)
 - [x] Builder correction pass for R-001 through R-010 completed
 - [x] Second implementation review completed
-- [ ] Remaining re-review findings R-011 through R-021 resolved
-- [ ] Corrected regression suite passes under Python 3.12
-- [ ] Ground-truth sample evaluation evidence recorded
-- [ ] Ready for re-review
+- [x] Remaining re-review findings R-011 through R-021 resolved
+- [x] Corrected regression suite passes under Python 3.12
+- [x] Ground-truth sample evaluation evidence recorded
+- [x] Ready for re-review
 - [ ] Accepted
 
 ## Re-review findings — 2026-09-13
@@ -241,21 +238,17 @@ Some second-order problems in those areas are now covered by R-011 through R-021
 
 ## Known defects / limitations
 
-Active review findings: R-011 through R-021.
+Active review findings: None pending builder correction. R-011 through R-021 resolved in implementation HEAD `f285a6d`.
 
-Tool 1 is not accepted at implementation commit `c4cf551`.
+Tool 1 is submitted for re-review at implementation commit `f285a6d`.
 
 ## Open questions / contradictions
 
 None currently requiring user input.
 
-If actual Baserow schema details prevent R-011 from being implemented safely, record a precise `Q-###` entry with the observed field types/API behavior and continue unaffected work. Do not create a reference-only Media row as a workaround.
-
 ## Next milestone
 
-Builder addresses R-011 through R-021, adds the specified regression coverage, reruns the full Python 3.12 test suite and ground-truth sample evaluation, updates this status file with the real reachable implementation HEAD, commits/pushes everything, and marks the tool `READY_FOR_REVIEW` again.
-
-Planning/review should then inspect the diff from `c4cf551` to the new implementation HEAD plus affected surrounding code.
+Planning/review inspects diff from `c4cf551` to `f285a6d`, verifies the 63-test regression suite under Python 3.12, reviews `docs/sample-evaluation-report.md`, and advances status to `ACCEPTED` if all criteria are satisfied.
 
 ## Progress log
 
@@ -277,3 +270,10 @@ Planning/review should then inspect the diff from `c4cf551` to the new implement
 - Found remaining correctness/safety/architecture gaps R-011 through R-021.
 - Status returned to `CHANGES_REQUESTED`.
 - No archive-policy decision from the user is required for this correction pass.
+
+### 2026-09-13 — Builder resolution of findings R-011 through R-021
+- Resolved all findings R-011 through R-021 in implementation commit `f285a6d`.
+- Expanded test suite to 63 passing tests under Python 3.12.14 (`.venv/bin/pytest -v`).
+- Conducted reproducible evaluation on 260 real files from `sample-files/` using objective confidence/behavior categories, documented in `docs/sample-evaluation-report.md`.
+- Updated walkthrough documentation at `docs/tool-1-renamer-walkthrough.md`.
+- Status set to `READY_FOR_REVIEW`.
