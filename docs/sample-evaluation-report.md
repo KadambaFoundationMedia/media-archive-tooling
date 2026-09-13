@@ -3,14 +3,17 @@
 Date: 2026-09-13  
 Target Directory: `sample-files/`  
 Evaluation Execution: `media-archive renamer sample-files --dry-run`  
-Log File: `.renamer/logs/renamer_20260913_134300.jsonl`  
-Summary CSV: `.renamer/logs/renamer_20260913_134300_summary.csv`
+Log File: `.renamer/logs/renamer_20260913_144834.jsonl`  
+Summary CSV: `.renamer/logs/renamer_20260913_144834_summary.csv`
 
-## 1. Objective Overview (Post-R-022 Correction)
+## 1. Objective Overview (Post-R-022 / R-023 Correction)
 
-Evaluation of Tool 1 across the full local test archive `sample-files/` was executed in standard dry-run analysis mode (`initial`). Following the correction of review finding **R-022**, diagnostic notes and downstream routing needs (missing/provisional WHERE, unidentified class WHAT, combination splitting) are strictly separated from immediate human review.
+Evaluation of Tool 1 across the full local test archive `sample-files/` was executed in standard dry-run analysis mode (`initial`). Following the correction of review findings **R-022** and **R-023**, diagnostic notes and downstream routing needs are strictly separated from immediate human review, and downstream routing respects the fixed pipeline responsibilities:
 
-Files with missing or provisional metadata continue safely through the progressive pipeline without blocking the human review queue. Human review is reserved strictly for genuine factual contradictions, unresolvable ambiguities, and corruptions.
+- Generic unresolved WHAT routes to Tool 2 (Media Database Reviewer) and Tool 5 (Content Discoverer) rather than assuming the recording is already a class;
+- Tool 7 (Class Classification) is reserved for items already established as a Class where specific class WHAT is unidentified;
+- Tool 2 (Media Database Reviewer) and Tool 3 (Travel Schedule Reviewer) provide database reference reconciliation for missing/provisional metadata;
+- Human review is reserved strictly for genuine factual contradictions, unresolvable ambiguities, and corruptions.
 
 | Metric | Count | Percentage |
 | :--- | :--- | :--- |
@@ -24,14 +27,14 @@ Files with missing or provisional metadata continue safely through the progressi
 
 ## 2. Objective Pipeline Behavior Categories
 
-Every analyzed file is assigned an objective pipeline behavior category per R-022:
+Every analyzed file is assigned an objective pipeline behavior category:
 
 | Category | Count | Percentage | Description |
 | :--- | :--- | :--- | :--- |
-| `safe_automatic` | 61 | 23.5% | Complete WHEN, WHAT, WHERE, high confidence, no conflicts or review reasons. |
-| `downstream_enrichment` | 192 | 73.8% | Safe partial improvement (e.g. date/location extracted, or source wording + ID preserved); routed to Tool 2/3 (media enrichment) or Tool 7 (class classification) without blocking human queue. |
-| `downstream_split` | 2 | 0.8% | Combination recording clue detected; retains source stem + tracking ID for Tools 5/6 splitting. |
+| `downstream_enrichment` | 196 | 75.4% | Safe partial improvement (e.g. date/location extracted, or source wording + ID preserved); routed to downstream database review, content discovery, or class classification without blocking human queue. |
+| `safe_automatic` | 57 | 21.9% | Complete WHEN, WHAT, WHERE, high confidence, no downstream routing or review reasons. |
 | `human_review_required` | 5 | 1.9% | Genuine contradiction requiring human judgment (e.g. filename date conflicts with container folder year). |
+| `downstream_split` | 2 | 0.8% | Combination recording clue detected; retains source stem + tracking ID for Tools 5/6 splitting. |
 | `blocked_error` | 0 | 0.0% | Unhandled exceptions, validation failures, or fatal processing errors. |
 
 ---
@@ -54,8 +57,10 @@ Files that do not require human review but have unresolved or provisional metada
 
 | Downstream Target | File Count | Description |
 | :--- | :--- | :--- |
-| `tool_2_3_media_enrichment` | 154 | WHERE is unresolved or provisional; audio transcript / recording context in Tools 2/3 can identify location. |
-| `tool_7_class_classification` | 80 | WHAT is unresolved (e.g. lecture title/topic missing); audio classification in Tool 7 will identify scripture/topic. |
+| `tool_2_3_media_enrichment` | 151 | WHERE/WHEN is unresolved or provisional; Baserow Media table (Tool 2) or Travel Schedule table (Tool 3) review can supply location/date evidence. |
+| `tool_2_media_database_review` | 80 | Generic WHAT is unresolved; Tool 2 Media Database Reviewer checks whether an existing Baserow Media record for this recording supplies the logical title/topic/scripture. |
+| `tool_5_content_discovery` | 80 | Generic WHAT remains unresolved into content processing; Tool 5 Content Discoverer audio analysis determines whether content is Class, Mantra singing, or Combination before class-specific resolution. |
+| `tool_7_class_classification` | 8 | Established Class items where specific class scripture/topic is unidentified; Tool 7 resolves specific class WHAT. |
 | `tool_5_6_split_combination` | 2 | Multi-part or composite recording clue detected; Tools 5/6 will split audio and create sub-items. |
 
 ---
@@ -64,25 +69,30 @@ Files that do not require human review but have unresolved or provisional metada
 
 ### Clean Automatic Proposals
 - `HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3`
-  -> `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-f345b4ea.mp3`
+  -> `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-37d088fe.mp3`
 - `2011-08-20_KKS_Jaya-radha-madhava_oslo_fi.mp3`
-  -> `2011-08-20_KKS_Jaya-Radha-Madhava_Oslo-no_ID-f80233b6.mp3`
+  -> `2011-08-20_KKS_Jaya-Radha-Madhava_Oslo-no_ID-c6d8a389.mp3`
 - `KKS-Home-program_feb-2015_amsterdam.mp3`
-  -> `2015-02-DD_KKS_Home-program_Amsterdam-nl_ID-a2429fd0.mp3`
+  -> `2015-02-DD_KKS_Home-program_Amsterdam-nl_ID-fbdb5680.mp3`
 
 ### Safe Downstream Enrichment Routing (Missing WHERE / Provisional)
 - `2012-05-13_KKS_BG-8-19.mp3`
-  -> `2012-05-13_KKS_BG-8-19_ID-ca7fec22.mp3`
+  -> `2012-05-13_KKS_BG-8-19_ID-0e43ab80.mp3`
   *(Diagnostic note: `WHERE is unresolved`, downstream: `tool_2_3_media_enrichment`, `needs_review=False`)*
 
-### Safe Downstream Class Routing (Missing WHAT)
+### Safe Generic Unresolved WHAT Routing (R-023)
 - `2012-05-13_Sydney.mp3`
   -> `2012-05-13_Sydney_ID-xxxxxxxx.mp3`
-  *(Diagnostic note: `WHAT is unresolved`, downstream: `tool_7_class_classification`, `needs_review=False`)*
+  *(Diagnostic note: `WHAT is unresolved`, downstream: `tool_2_media_database_review`, `tool_5_content_discovery`, `needs_review=False`)*
+
+### Established Class with Unidentified Class WHAT Routing (R-023)
+- `03 BRNO LEKCE STEREO JET.mp3`
+  -> `03 BRNO LEKCE STEREO JET_ID-xxxxxxxx.mp3`
+  *(Diagnostic note: `Unidentified class WHAT`, downstream: `tool_7_class_classification`, `needs_review=False`)*
 
 ### Unsplit Combination Preservation (R-013 / R-022)
 - `2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma`
-  -> `2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi_ID-f6196366.wma`
+  -> `2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi_ID-0b54db8b.wma`
   *(Diagnostic note: combination clue, downstream: `tool_5_6_split_combination`, `needs_review=False`)*
 
 ### Genuine Human Review Queue (Conflict)
@@ -100,6 +110,6 @@ To re-run and verify this evaluation report locally:
 # Execute dry-run analysis on sample-files
 .venv/bin/media-archive renamer sample-files --dry-run
 
-# Run full automated regression suite (66 tests)
+# Run full automated regression suite (67 tests)
 .venv/bin/pytest -v
 ```

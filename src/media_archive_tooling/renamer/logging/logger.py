@@ -101,6 +101,7 @@ class RenamerLogger:
             pr.when.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL)
             or pr.what.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL)
             or pr.where.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL)
+            or bool(p.downstream_routing)
         )
         if has_unresolved_or_provisional:
             return "downstream_enrichment"

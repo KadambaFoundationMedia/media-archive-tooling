@@ -15,6 +15,34 @@ from .collection import CollectionGrammar
 from ...common.ascii_latin import to_ascii_latin, sanitize_filename_token
 
 
+CLASS_KEYWORDS_REGEX = re.compile(
+    r"\b(class|classes|lecture|lectures|prednaska|prednasky|lekce)\b",
+    re.IGNORECASE
+)
+
+
+def has_class_evidence(
+    what_res: WhatResult,
+    filename: str,
+    parent_folder: str = "",
+    ancestor_folders: Optional[List[str]] = None,
+) -> bool:
+    """Determine whether direct evidence already establishes that the item is a class."""
+    if what_res.category in ("Class", "Lecture"):
+        return True
+    if what_res.selected_value in ("Class", "Lecture"):
+        return True
+    if CLASS_KEYWORDS_REGEX.search(filename):
+        return True
+    if parent_folder and CLASS_KEYWORDS_REGEX.search(parent_folder):
+        return True
+    if ancestor_folders:
+        for folder in ancestor_folders:
+            if CLASS_KEYWORDS_REGEX.search(folder):
+                return True
+    return False
+
+
 class RenamerParser:
     def __init__(
         self,
@@ -140,7 +168,15 @@ class RenamerParser:
         if what_res.state == ResolutionState.AMBIGUOUS:
             review_reasons.append(f"WHAT resolution is ambiguous for '{what_res.selected_value}'")
         elif what_res.state == ResolutionState.UNRESOLVED:
-            diagnostic_notes.append("WHAT is unresolved")
+            if has_class_evidence(what_res, filename, parent_folder, ancestor_folders):
+                diagnostic_notes.append("Class WHAT is unresolved")
+                downstream_routing.append("tool_7_class_classification")
+            else:
+                diagnostic_notes.append("WHAT is unresolved")
+                downstream_routing.append("tool_2_media_database_review")
+                downstream_routing.append("tool_5_content_discovery")
+        elif what_res.selected_value in ("Class", "Lecture"):
+            diagnostic_notes.append("Unidentified class WHAT")
             downstream_routing.append("tool_7_class_classification")
 
         if where_res.state == ResolutionState.AMBIGUOUS:
@@ -159,6 +195,9 @@ class RenamerParser:
             # Combination is a downstream split task (Tools 5/6), not an immediate human review error
             diagnostic_notes.append("File has combination clue; retaining source stem + ID for splitting")
             downstream_routing.append("tool_5_6_split_combination")
+
+        diagnostic_notes = list(dict.fromkeys(diagnostic_notes))
+        downstream_routing = list(dict.fromkeys(downstream_routing))
 
         identity = Identity(
             tracking_id=tracking_id,

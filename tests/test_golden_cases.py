@@ -161,9 +161,11 @@ def test_golden_case_duben_2008_folder_grammar(parser_and_planner):
     assert res07.where.country_iso2 == "cz"
     assert res07.what.selected_value is None
     assert "Recording" not in prop07.proposed_filename
-    # Under R-022, incomplete-but-safe files continue without human review and route to Tool 7
+    # Under R-022/R-023, incomplete-but-safe files continue without human review; generic unresolved WHAT routes to Tools 2 and 5
     assert prop07.needs_review is False
-    assert "tool_7_class_classification" in res07.downstream_routing
+    assert "tool_7_class_classification" not in res07.downstream_routing
+    assert "tool_2_media_database_review" in res07.downstream_routing
+    assert "tool_5_content_discovery" in res07.downstream_routing
     assert "WHAT is unresolved" in res07.diagnostic_notes
 
     # File 08: sequence index 08, not 8th of April!

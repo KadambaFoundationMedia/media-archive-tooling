@@ -9,6 +9,7 @@ from .models import ParserResult, ResolutionState, Evidence, RenameMode, Enrichm
 from .registry.registry import LocalRegistry
 from .planner.planner import RenamePlanner
 from .validator import validate_calendar_date, validate_iso2_country, validate_canonical_filename
+from .parser.engine import has_class_evidence
 from ..common.ascii_latin import to_ascii_latin, sanitize_filename_token
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,10 @@ class RenamerApplicationService:
             parser_res.what.evidence.append(Evidence(source=source, raw_value=evidence.what_val, details=evidence.details or "enriched"))
             changes["what_val"] = what_clean
 
+        if evidence.what_category is not None:
+            parser_res.what.category = evidence.what_category
+            changes["what_category"] = evidence.what_category
+
         if evidence.where_val is not None:
             where_clean = evidence.where_val.strip()
             if "-" in where_clean:
@@ -130,7 +135,16 @@ class RenamerApplicationService:
             diag_notes.append(f"WHEN resolution is provisional ({parser_res.when.selected_value})")
 
         if parser_res.what.state == ResolutionState.UNRESOLVED:
-            diag_notes.append("WHAT is unresolved")
+            parent_folder = Path(proposal.original_path).parent.name if proposal.original_path else ""
+            if has_class_evidence(parser_res.what, proposal.current_filename, parent_folder):
+                diag_notes.append("Class WHAT is unresolved")
+                routing.append("tool_7_class_classification")
+            else:
+                diag_notes.append("WHAT is unresolved")
+                routing.append("tool_2_media_database_review")
+                routing.append("tool_5_content_discovery")
+        elif parser_res.what.selected_value in ("Class", "Lecture"):
+            diag_notes.append("Unidentified class WHAT")
             routing.append("tool_7_class_classification")
 
         if parser_res.where.state == ResolutionState.UNRESOLVED:
@@ -144,8 +158,8 @@ class RenamerApplicationService:
             diag_notes.append("File has combination clue; retaining source stem + ID for splitting")
             routing.append("tool_5_6_split_combination")
 
-        parser_res.diagnostic_notes = diag_notes
-        parser_res.downstream_routing = routing
+        parser_res.diagnostic_notes = list(dict.fromkeys(diag_notes))
+        parser_res.downstream_routing = list(dict.fromkeys(routing))
 
         # Re-evaluate remaining review reasons: keep only those still active
         remaining_reasons = []

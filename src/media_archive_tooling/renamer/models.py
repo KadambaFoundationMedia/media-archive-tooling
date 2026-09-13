@@ -65,6 +65,7 @@ class EnrichmentEvidence(BaseModel):
     tracking_id: str
     when_val: Optional[str] = None
     what_val: Optional[str] = None
+    what_category: Optional[str] = None
     where_val: Optional[str] = None
     who_val: Optional[str] = None
     baserow_check_complete: Optional[bool] = None

@@ -60,18 +60,22 @@ Tool 1 (Renamer) has been implemented, verified, and updated in accordance with 
 - **Domain Model Extension**: Added `diagnostic_notes: List[str]` and `downstream_routing: List[str]` to `ParserResult` and `RenameProposal`.
 - **Pipeline Routing**:
   - Missing or provisional WHERE routes to `tool_2_3_media_enrichment` with `needs_review=False`.
-  - Missing WHAT routes to `tool_7_class_classification` with `needs_review=False`, retaining descriptive wording + tracking ID.
   - Combination candidates route to `tool_5_6_split_combination` with `needs_review=False`, retaining source stem + tracking ID.
 - **Genuine Human Review Queue**: Reserved strictly for actual contradictions (e.g. filename date in 2011 conflicting with container folder year 2012), unresolvable ties, and corruptions.
-- **Objective Pipeline Categories**: `safe_automatic` (61), `downstream_enrichment` (192), `downstream_split` (2), `human_review_required` (5), `blocked_error` (0).
 - **Review Portal**: Updated `detail.html` to clearly distinguish diagnostic notes and downstream routing from human review reasons.
-- **Regression Suite**: Added `tests/test_routing_and_review_separation.py` verifying that safe partial improvements proceed without human review while genuine conflicts block.
+
+### R-023: Pipeline Order & Disambiguation of Unresolved WHAT Routing
+- **Class Evidence Verification**: In `engine.py` and `service.py`, implemented `has_class_evidence` checking whether an item is already established as a Class (via category, filename tokens like `lecture`/`class`/`lekce`, or parent/ancestor folders).
+- **Generic Unresolved WHAT Routing**: Files with generic unresolved WHAT (e.g. `2012-05-13_Sydney.mp3`) no longer route directly to Tool 7. Instead, they route in pipeline order to `tool_2_media_database_review` (where Tool 2 checks whether an existing Baserow Media row supplies the logical title/topic) and `tool_5_content_discovery` (where Tool 5 determines whether audio content is Class, Mantra singing, or Combination before class-specific resolution).
+- **Established Class Routing**: Files established as a Class but whose class topic/scripture is unidentified route to `tool_7_class_classification`.
+- **Clarified Tool Roles**: Tool 2 and Tool 3 are accurately documented as Baserow database review tools (Media database and Travel Schedule), distinct from audio content discovery (Tool 5).
+- **Regression Suite**: Added tests proving that generic unresolved WHAT routes to Tools 2 and 5 without implying Tool 7, while established classes with unresolved class WHAT correctly route to Tool 7.
 
 ---
 
 ## 2. Verification & Test Results
 
-### Automated Regression Suite (66 Tests)
+### Automated Regression Suite (67 Tests)
 Executed full test suite under Python 3.12.14 via `.venv/bin/pytest -v`:
 
 ```text
@@ -82,7 +86,7 @@ tests/test_enrichment_and_finalization.py (2 tests)
 tests/test_golden_cases.py (8 tests)
 tests/test_location_adapter.py (5 tests)
 tests/test_portal.py (3 tests)
-tests/test_routing_and_review_separation.py (3 tests)
+tests/test_routing_and_review_separation.py (4 tests)
 tests/test_service.py (2 tests)
 tests/test_technical.py (3 tests)
 tests/test_validator_and_safety.py (8 tests)
@@ -91,7 +95,7 @@ tests/test_what.py (4 tests)
 tests/test_when.py (5 tests)
 tests/test_where.py (4 tests)
 
-======================== 66 passed, 2 warnings in 1.03s ========================
+======================== 67 passed, 2 warnings in 0.84s ========================
 ```
 
 ### Sample Archive Evaluation (`sample-files/`)
@@ -102,8 +106,8 @@ Executed dry-run analysis on the 260 media files in `sample-files/`:
 - **Combination Candidates Routed to Split**: 2 (0.8%)
 - **Collisions Detected**: 0 (0.0%)
 - **Objective Behavior Categories**:
-  - `downstream_enrichment`: 192 (73.8%)
-  - `safe_automatic`: 61 (23.5%)
+  - `downstream_enrichment`: 196 (75.4%)
+  - `safe_automatic`: 57 (21.9%)
   - `human_review_required`: 5 (1.9%)
   - `downstream_split`: 2 (0.8%)
   - `blocked_error`: 0 (0.0%)
