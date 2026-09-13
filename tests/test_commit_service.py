@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,13 @@ def test_commit_service_renames_reviewed_proposal_safely(tmp_path):
     actions = registry.get_review_actions("deadbeef")
     assert actions[-1]["action"] == "commit"
     assert actions[-1]["changes"]["filesystem_rename"] is True
+
+    with sqlite3.connect(str(registry.db_path)) as conn:
+        row = conn.execute(
+            "SELECT from_filename, to_filename FROM rename_history WHERE tracking_id = ? ORDER BY id DESC LIMIT 1",
+            ("deadbeef",),
+        ).fetchone()
+    assert row == ("original.mp3", proposal.proposed_filename)
 
 
 def test_commit_service_refuses_unresolved_review(tmp_path):
