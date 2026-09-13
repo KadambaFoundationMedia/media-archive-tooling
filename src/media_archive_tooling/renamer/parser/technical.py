@@ -1,6 +1,7 @@
 """Technical annotations, tracking ID, and source sequence extraction."""
 import re
 import uuid
+from pathlib import Path
 from typing import Tuple, List, Optional, Any
 from ..models import FileMetadata
 
@@ -18,24 +19,37 @@ SOURCE_SEQ_REGEX = re.compile(
 )
 
 
-def extract_or_generate_tracking_id(filename: str, registry: Optional[Any] = None) -> Tuple[str, str, bool]:
-    """Find existing _ID-xxxxxxxx or generate a new 8-hex character ID with registry collision check.
-    
+def extract_or_generate_tracking_id(
+    filename: str,
+    registry: Optional[Any] = None,
+    file_path: Optional[Path] = None,
+) -> Tuple[str, str, bool]:
+    """Find/reuse an existing tracking ID or generate a new 8-hex character ID.
+
+    Reuse order:
+    1. explicit `_ID-xxxxxxxx` already present in the filename;
+    2. an ID previously associated with the same physical path in the local registry;
+    3. a newly generated random ID with a local collision check.
+
     Returns:
         (tracking_id, cleaned_filename, was_existing)
     """
     match = TRACKING_ID_REGEX.search(filename)
     if match:
         tracking_id = match.group(1).lower()
-        # Remove the tracking ID token from the working filename
         cleaned = filename[:match.start()] + filename[match.end():]
         return tracking_id, cleaned, True
-    else:
-        while True:
-            new_id = uuid.uuid4().hex[:8].lower()
-            if registry is None or not registry.get_file(new_id):
-                break
-        return new_id, filename, False
+
+    if registry is not None and file_path is not None and hasattr(registry, "find_tracking_id_by_path"):
+        existing_id = registry.find_tracking_id_by_path(file_path)
+        if existing_id:
+            return str(existing_id).lower(), filename, True
+
+    while True:
+        new_id = uuid.uuid4().hex[:8].lower()
+        if registry is None or not registry.get_file(new_id):
+            break
+    return new_id, filename, False
 
 
 def extract_technical_metadata(filename: str) -> Tuple[str, FileMetadata]:

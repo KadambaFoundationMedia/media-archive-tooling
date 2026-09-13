@@ -1,4 +1,5 @@
 """Localhost FastAPI review portal application."""
+import re
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -15,25 +16,58 @@ app = FastAPI(title="Media Archive Review Portal")
 MODULE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = MODULE_DIR / "templates"
 STATIC_DIR = MODULE_DIR / "static"
+TRACKING_TOKEN_RE = re.compile(r"_ID-[0-9a-fA-F]{8}(?=\.|$)", re.IGNORECASE)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 _service: Optional[RenamerApplicationService] = None
+_review_root: Optional[Path] = None
+
+
+def configure_review_context(
+    registry_path: Optional[Path] = None,
+    review_root: Optional[Path] = None,
+) -> None:
+    """Configure the portal to use the same local review registry/root as the scan."""
+    global _service, _review_root
+    config = load_config()
+    selected_registry = Path(registry_path) if registry_path else config.registry_path
+    _service = RenamerApplicationService(registry=LocalRegistry(selected_registry))
+    _review_root = Path(review_root).expanduser().resolve() if review_root else None
 
 
 def get_service() -> RenamerApplicationService:
     global _service
     if _service is None:
         config = load_config()
-        registry = LocalRegistry(config.registry_path)
-        _service = RenamerApplicationService(registry=registry)
+        _service = RenamerApplicationService(registry=LocalRegistry(config.registry_path))
     return _service
 
 
 def get_registry() -> LocalRegistry:
     return get_service().registry
+
+
+def _dashboard_record(record: dict) -> dict:
+    """Return a UI view of a registry row without changing archive semantics."""
+    display = dict(record)
+    proposed = display.get("proposed_filename") or display.get("current_filename") or ""
+    display["display_proposed_filename"] = TRACKING_TOKEN_RE.sub("", proposed)
+
+    original_path = Path(display.get("original_path") or "")
+    if _review_root:
+        try:
+            relative = original_path.expanduser().resolve().relative_to(_review_root)
+            parent = relative.parent
+            display["display_path"] = "." if str(parent) == "." else str(parent)
+        except ValueError:
+            display["display_path"] = str(original_path.parent)
+    else:
+        display["display_path"] = str(original_path.parent)
+
+    return display
 
 
 @app.get("/healthz")
@@ -45,6 +79,7 @@ def healthz():
 def dashboard(request: Request, filter: str = "all"):
     service = get_service()
     data = service.list_files(filter_mode=filter)
+    data["files"] = [_dashboard_record(record) for record in data["files"]]
     return templates.TemplateResponse(
         request=request,
         name="index.html",

@@ -11,28 +11,33 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
-Implementation branch / PR: `main`  
+Original accepted implementation branch / PR: `main`  
 Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`  
 Builder status handoff reviewed: `769c88709a1dd5f3b08daee1fad6b49cd769d0c1`  
+Post-acceptance maintenance branch / PR: `tool-1-review-portal-fixes` / #5  
+Post-acceptance maintenance code/docs head reviewed before this status update: `54c69d2939eb448da7abe64b430165ce94d34b9e`  
 Last implementation update: 2026-09-13  
 Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review repository checkpoint inspected: `769c887`  
+Last planning/review repository checkpoint inspected: PR #5 head `54c69d2939eb448da7abe64b430165ce94d34b9e`  
 Accepted implementation code reviewed: `9e96c45`  
 Previous implementation baseline: `80e6ea9`  
 Fundamental-change review pending: no
 
-Relevant builder commits in the final review:
+Relevant accepted/final builder commits:
 - `9e96c45` — fix(renamer): resolve R-024 preserve ancestor folder class evidence in enrich routing
 - `769c887` — docs(status): record Tool 1 implementation HEAD 9e96c45 and review readiness
 
-Planning/review inspected the actual R-024 implementation diff, affected service/routing behavior, regression test, status handoff, and the surrounding R-023 routing behavior. No finalized build-plan change was introduced by the builder.
+Relevant post-acceptance maintenance PR:
+- PR #5 — fixes repeated-review registry inflation and the first dashboard usability findings from real user inspection
+
+Planning/review inspected the actual PR #5 diff across the review helper, CLI, tracking-ID reuse path, registry, review portal, template, README, and regression tests. The changes do not alter the finalized archive naming policy: `_ID-xxxxxxxx` remains part of Tool 1's internal/in-process filename identity; it is only hidden from the human-facing dashboard display.
 
 ## Final verification evidence
 
-Builder reports:
+Original accepted builder evidence:
 - 68 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 0.96s)
 - 260 real files evaluated from `sample-files/`
 - 255 safe automatic proposals / downstream routing (98.1%)
@@ -59,7 +64,14 @@ Human review reason triggers across the 5 flagged files:
 - `Filename date '2011-12-30' conflicts with folder year '2012'`: 2
 - `Filename date '2011-12-31' conflicts with folder year '2012'`: 1
 
-There is no GitHub CI status configured for accepted implementation commit `9e96c45`; the 68-test execution is builder-reported. Planning/review independently inspected the committed implementation and regression-test changes. The representative 260-file sample is not committed to GitHub, so its execution evidence remains the builder-produced sample report/status record.
+Post-acceptance PR #5 CI verification:
+- GitHub Actions required check `Python 3.12 tests`: **PASS**
+- Python: 3.12.14
+- shell helper syntax validation: PASS
+- `pytest -q`: **70 passed, 2 warnings in 4.22s**
+- `uv build`: PASS
+
+The representative `sample-files/` directory is local and is not present in GitHub CI, so the corrected 260-file dashboard count must be verified by re-running `./scripts/review-tool-1.sh` locally after PR #5 is merged. The code-level regression proves repeated scans of the same unchanged path reuse the same tracking ID and do not create extra registry rows.
 
 ## Milestones
 
@@ -77,12 +89,15 @@ There is no GitHub CI status configured for accepted implementation commit `9e96
 - [x] R-024 ancestor-folder class evidence preserved during ENRICH routing recomputation
 - [x] Final acceptance review completed
 - [x] Accepted
+- [x] One-command local review helper added
+- [x] R-025 repeated-review registry inflation corrected in PR #5
+- [x] R-026 dashboard first-pass usability findings corrected in PR #5
 
 ## Resolved review history
 
 R-001 through R-024 are resolved for the accepted v1 implementation. Their full descriptions remain recoverable from Git history and GitHub issue #1.
 
-The final review confirmed:
+The final acceptance review confirmed:
 
 - generic unresolved WHAT does not jump directly to Tool 7;
 - established Class items can retain Tool 7 routing;
@@ -91,13 +106,47 @@ The final review confirmed:
 - R-024 preserves ancestor-folder Class evidence during ENRICH recomputation, including `_edited` files receiving later Baserow/WHERE enrichment;
 - no new fundamental architecture or archive-policy change was introduced in the final correction.
 
+### R-025 — Repeated review scans inflated registry/file counts
+
+Status: RESOLVED in PR #5.
+
+Observed from the first real browser review: the 260-file sample showed 2,040 tracked rows and 841 human-review rows.
+
+Root cause:
+- a dry-run file without `_ID-xxxxxxxx` in its physical filename generated a new random tracking ID on every scan instead of reusing the registry identity already associated with the same path;
+- the review helper also displayed the long-lived general operational registry, which contained rows from repeated historical scans and older pre-R-022 review classifications.
+
+Resolution:
+- the registry can now resolve an existing tracking ID by original/current physical path;
+- parser identity resolution reuses that ID before generating a new one;
+- `review-tool-1.sh` uses a dedicated per-target review registry under `.renamer/review/` and passes that exact registry into the portal;
+- the helper self-restarts after a fast-forward so the newest review-helper behavior is used immediately after updating.
+
+Regression coverage: repeated CLI dry-runs of the same unchanged path leave one registry row and retain the same tracking ID.
+
+### R-026 — Review dashboard first-pass usability issues
+
+Status: RESOLVED in PR #5.
+
+Implemented from the first real portal walkthrough:
+- dark/light mode switcher with local preference retention;
+- sticky table header while scrolling;
+- separate **Original filename** and **Proposed filename** columns;
+- relative **Path** column so the source can be found inside the reviewed directory;
+- batch row checkboxes, select-all, and selected-count feedback;
+- removed the visible ID column;
+- hides `_ID-xxxxxxxx` from the **displayed** proposed filename only;
+- retains the real tracking ID internally and in the underlying proposal so Tool 1 safety/idempotency semantics are unchanged.
+
+The detail page is intentionally left for a separate user-review pass after these dashboard fixes are verified.
+
 ## Active review findings
 
 None.
 
 ## Known defects / limitations
 
-None currently known that block Tool 1 v1 acceptance. Later integration with Tools 2–7 may reveal new interface or regression issues; those should be recorded as new findings rather than rewriting the accepted build plan.
+None currently known that block Tool 1 v1 acceptance. The detail page has not yet received the same user-facing usability review as the dashboard; any concrete issues found there should be recorded as new post-acceptance findings rather than silently redesigning it.
 
 ## Open questions / contradictions
 
@@ -105,7 +154,7 @@ None currently requiring user input.
 
 ## Next milestone
 
-Tool 1 is accepted. Continue downstream tool implementation and integration. Reopen Tool 1 only for a demonstrated regression, an integration defect, or an explicitly approved new requirement.
+Merge PR #5 after required CI, then re-run `./scripts/review-tool-1.sh` locally against `sample-files/` and confirm that the dashboard shows only the current 260-file review set and the expected small immediate-human-review queue. After the dashboard is verified, perform the separate detail-page usability pass. Tool 2 can remain queued until the user is satisfied with this Tool 1 review surface.
 
 ## Progress log
 
@@ -157,3 +206,10 @@ Tool 1 is accepted. Continue downstream tool implementation and integration. Reo
 - Added `scripts/review-tool-1.sh` as a user-facing one-command review helper.
 - The helper synchronizes the current branch when safe, prepares the locked environment, runs a dry-run against `sample-files/` by default, starts the localhost review portal, and opens it in the browser when supported.
 - This is operational convenience only; Tool 1 archive behavior and the accepted build plan are unchanged.
+
+### 2026-09-13 — First real portal walkthrough / PR #5
+- User screenshot exposed accumulated registry rows (2,040 tracked / 841 review) and dashboard usability problems.
+- R-025 traced the inflated counts to non-reused dry-run tracking IDs plus the review helper using the long-lived operational registry.
+- R-026 captured the requested dashboard improvements.
+- PR #5 implements both corrections without changing finalized naming semantics.
+- Required GitHub CI passed at reviewed head `54c69d2`: 70 tests, shell validation, and package build all successful.

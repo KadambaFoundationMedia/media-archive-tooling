@@ -57,6 +57,8 @@ if [ -n "$UPSTREAM" ]; then
   elif [ "$LOCAL_HEAD" = "$MERGE_BASE" ]; then
     printf '%s\n' "Local branch is behind $UPSTREAM; fast-forwarding..."
     git merge --ff-only "$UPSTREAM"
+    printf '%s\n' "Repository updated. Restarting review helper from the new version..."
+    exec "$0" "$@"
   elif [ "$REMOTE_HEAD" = "$MERGE_BASE" ]; then
     echo "ERROR: Local branch has unpushed commits. Push or deliberately reconcile them first."
     exit 1
@@ -68,17 +70,27 @@ else
   printf '%s\n' "No upstream is configured for '$BRANCH'; continuing without an automatic pull."
 fi
 
-if [ ! -e "$TARGET" ]; then
-  echo "ERROR: Review target does not exist: $TARGET"
+if [ ! -d "$TARGET" ]; then
+  echo "ERROR: Review target directory does not exist: $TARGET"
   echo "Usage: ./scripts/review-tool-1.sh [directory]"
   exit 1
 fi
 
+TARGET_ABS=$(cd "$TARGET" && pwd -P)
+TARGET_KEY=$(printf '%s' "$TARGET_ABS" | cksum | awk '{print $1}')
+REVIEW_STATE_DIR="${REVIEW_STATE_DIR:-.renamer/review}"
+REVIEW_REGISTRY="${REVIEW_REGISTRY_PATH:-${REVIEW_STATE_DIR}/tool-1-${TARGET_KEY}.db}"
+REVIEW_LOG_DIR="${REVIEW_LOG_DIR:-${REVIEW_STATE_DIR}/logs-${TARGET_KEY}}"
+mkdir -p "$REVIEW_STATE_DIR" "$REVIEW_LOG_DIR"
+
 printf '%s\n' "Preparing Python environment..."
 uv sync --extra dev --frozen
 
-printf '%s\n' "Running Tool 1 safe dry-run on: $TARGET"
-uv run media-archive renamer "$TARGET" --dry-run
+printf '%s\n' "Running Tool 1 safe dry-run on: $TARGET_ABS"
+printf '%s\n' "Review registry: $REVIEW_REGISTRY"
+uv run media-archive renamer "$TARGET_ABS" --dry-run \
+  --registry-path "$REVIEW_REGISTRY" \
+  --log-dir "$REVIEW_LOG_DIR"
 
 printf '%s\n' "Starting Tool 1 review portal: $URL"
 printf '%s\n' "Press Ctrl-C in this terminal when you are finished reviewing."
@@ -94,4 +106,8 @@ if [ "${REVIEW_OPEN_BROWSER:-1}" != "0" ]; then
   ) >/dev/null 2>&1 &
 fi
 
-exec uv run media-archive review --host "$HOST" --port "$PORT"
+exec uv run media-archive review \
+  --host "$HOST" \
+  --port "$PORT" \
+  --registry-path "$REVIEW_REGISTRY" \
+  --review-root "$TARGET_ABS"

@@ -67,6 +67,8 @@ class LocalRegistry:
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(original_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_current_path ON files(current_path)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -80,6 +82,29 @@ class LocalRegistry:
                 d["review_reasons"] = json.loads(d["review_reasons"]) if d["review_reasons"] else []
                 return d
         return None
+
+    def find_tracking_id_by_path(self, file_path: Path) -> Optional[str]:
+        """Return the newest tracking ID already associated with this physical path.
+
+        Dry-runs do not write the temporary ID into the source filename, so path lookup is
+        required to make repeated analysis idempotent instead of generating a new registry
+        row on every scan.
+        """
+        normalized = str(Path(file_path).expanduser().resolve())
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT tracking_id
+                FROM files
+                WHERE original_path = ? OR current_path = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (normalized, normalized),
+            )
+            row = cursor.fetchone()
+            return str(row["tracking_id"]) if row else None
 
     def list_files(self, status: Optional[str] = None, needs_review: Optional[bool] = None) -> List[Dict[str, Any]]:
         query = "SELECT * FROM files WHERE 1=1"
@@ -269,5 +294,3 @@ class LocalRegistry:
 
     def get_history(self, tracking_id: str) -> List[Dict[str, Any]]:
         return self.get_review_actions(tracking_id)
-
-

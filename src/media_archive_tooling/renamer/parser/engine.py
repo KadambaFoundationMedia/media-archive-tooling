@@ -77,8 +77,12 @@ class RenamerParser:
         parent_folder = file_path.parent.name
         ancestor_folders = [p.name for p in file_path.parents if p.name and p != file_path.parent]
 
-        # 1. Identity & Tracking ID with registry collision check
-        tracking_id, working_name, _ = extract_or_generate_tracking_id(filename, registry=self.registry)
+        # 1. Identity & Tracking ID with stable path reuse and registry collision check
+        tracking_id, working_name, _ = extract_or_generate_tracking_id(
+            filename,
+            registry=self.registry,
+            file_path=file_path,
+        )
         # Remove extension from working name
         if working_name.lower().endswith(ext):
             stem = working_name[:-len(ext)] if ext else working_name
