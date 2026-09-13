@@ -9,7 +9,7 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch / PR: `main`  
 Last implementation update: 2026-09-13  
@@ -17,15 +17,16 @@ Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review repository checkpoint inspected: `5f78b8f`  
+Last planning/review repository checkpoint inspected: `ecdc691`  
 Current implementation code reviewed: `80e6ea9`  
 Previous implementation baseline: `7efe96d`  
 Fundamental-change review pending: no
 
 Relevant builder commits since the previous implementation review:
 - `80e6ea9` — fix(renamer): resolve R-023 route generic unresolved WHAT to Tools 2 and 5
+- `ecdc691` — docs(status): record Tool 1 implementation HEAD 80e6ea9 and review readiness
 
-Project protocol/bootstrap commits between the previous implementation baseline and `7efe96d` are not Tool 1 behavior commits.
+Planning/review also inspected the affected parser/service routing code and R-023 regression tests. No finalized build-plan change was made by the builder.
 
 ## Builder-reported verification
 
@@ -56,6 +57,8 @@ Human review reason triggers across the 5 flagged files:
 - `Filename date '2011-12-30' conflicts with folder year '2012'`: 2
 - `Filename date '2011-12-31' conflicts with folder year '2012'`: 1
 
+There is no GitHub CI status configured for commit `80e6ea9`; the 67-test result is builder-reported. Planning/review inspected the committed regression tests and implementation diff.
+
 ## Milestones
 
 - [x] Requirements gathered
@@ -67,23 +70,48 @@ Human review reason triggers across the 5 flagged files:
 - [x] Second review R-011 through R-021 completed and corrected in `f285a6d`
 - [x] R-022 human-review/downstream-routing separation corrected in `7efe96d`
 - [x] Corrected 260-file sample routing evaluation completed
-- [x] R-023 unresolved WHAT routing corrected in `80e6ea9`
-- [x] Corrected routing tests/evaluation committed and pushed
+- [x] R-023 generic unresolved WHAT routing corrected in `80e6ea9`
+- [x] R-023 implementation/diff/regression tests reviewed
+- [ ] R-024 ancestor-folder class evidence preserved during ENRICH routing recomputation
+- [ ] Final acceptance review completed
 - [ ] Accepted
 
 ## Resolved review history
 
 R-001 through R-023 are considered resolved unless a later regression reopens them. Their full descriptions remain recoverable from Git history and GitHub issue #1.
 
-R-023 is resolved: generic unresolved WHAT is routed in fixed pipeline order to Tool 2 (Media Database Reviewer) and Tool 5 (Content Discoverer) rather than assuming the recording is already a class. Tool 7 (Class Classification) is reserved for items already established as a Class where specific class WHAT is unidentified. Tool 2 and Tool 3 descriptions have been corrected to reflect their actual Baserow database review roles.
+R-023 is accepted: generic unresolved WHAT no longer jumps directly to Tool 7. Generic unresolved WHAT routes to Tool 2 / later Tool 5 processing, established Class items may route to Tool 7, and combination items remain routed to Tools 5/6. The corrected sample keeps immediate human review at 5 / 260 files.
 
-## Active review findings
+## Active review finding — 2026-09-13
 
-None. All review findings R-001 through R-023 resolved.
+### R-024 — ENRICH routing can lose established Class evidence that came from an ancestor folder
+
+Severity: **CROSS-TOOL ROUTING / EDITED-FILE BLOCKER**
+
+R-023 correctly introduced `has_class_evidence(...)` and, during initial parsing, passes the filename, parent folder, and ancestor folders. Therefore an item can be correctly established as a Class because an ancestor folder such as `Classes/` or `Lekce/` supplies that evidence.
+
+However, `RenamerApplicationService.apply_enrichment()` recomputes downstream routing after later-tool evidence and currently calls `has_class_evidence(...)` with only the current filename and immediate parent folder. It does not pass the already-preserved `parser_res.context.ancestor_folders`.
+
+That can change a previously established Class back into generic unresolved WHAT merely because Tool 2/3 supplied unrelated enrichment such as WHERE or `baserow_check_complete`.
+
+This is especially important for `_edited` files: the Tool 1 build plan says edited files may still use Tool 7 when WHAT genuinely requires resolution while skipping Tools 5/6. Losing ancestor Class evidence after the required Baserow check can therefore remove the Tool 7 route and replace it with a generic Tool 2/5 route that the edited-file workflow is not supposed to follow.
+
+Required correction:
+
+1. When ENRICH recomputes unresolved-WHAT routing, preserve all already-known structural Class evidence, including `parser_res.context.ancestor_folders`.
+2. Do not weaken a previously established Class classification merely because unrelated later evidence was applied.
+3. Add a regression test using a nested ancestor class folder, for example `.../Classes/<year>/file_edited.mp3`, where WHAT is unresolved.
+4. Apply a Tool 2-style enrichment such as `baserow_check_complete=true` and/or WHERE enrichment and verify the resulting stored `ParserResult.downstream_routing` still includes `tool_7_class_classification` and does not regress to generic `tool_5_content_discovery` merely because the immediate parent is not a Class folder.
+5. Keep the file out of immediate human review unless a genuine conflict/ambiguity exists.
+6. Run the full test suite. The 260-file sample does not need another full rerun unless this correction changes initial parsing/sample routing; this defect is specifically in later ENRICH recomputation.
+
+No user/archive-policy decision is needed. This follows directly from the finalized rule that Tool 7 may resolve genuine class WHAT and from the requirement that later enrichment preserves stronger/previous evidence rather than weakening it.
 
 ## Known defects / limitations
 
-None currently blocking.
+Active finding: R-024.
+
+The R-023 initial-routing correction itself is accepted. The remaining defect is limited to preserving ancestor-folder Class evidence when later enrichment recomputes routing.
 
 ## Open questions / contradictions
 
@@ -91,7 +119,7 @@ None currently requiring user input.
 
 ## Next milestone
 
-Reviewer verification of R-023 resolution, 67-test suite, and corrected downstream routing evaluation.
+Builder runs `./scripts/builder-start.sh 1`, addresses R-024 without changing the finalized build plan, adds the targeted regression test, runs the full suite, commits and pushes all changes, records the final reachable HEAD, and returns Tool 1 to `READY_FOR_REVIEW`.
 
 ## Progress log
 
@@ -114,15 +142,15 @@ Reviewer verification of R-023 resolution, 67-test suite, and corrected downstre
 
 ### 2026-09-13 — Planning/review inspection of R-022 implementation
 - Inspected the actual `7efe96d` implementation and `5f78b8f` status handoff.
-- Confirmed R-022 separation works in principle: unresolved/provisional metadata is no longer automatically treated as a human decision, while ambiguity/conflicts/corruption remain human-review conditions.
-- Found one remaining cross-tool routing error: every unresolved WHAT is labeled for Tool 7 even when the recording has not been established as a class.
-- Added R-023 and returned Tool 1 to `CHANGES_REQUESTED`.
+- Confirmed R-022 separation works in principle.
+- Found generic unresolved WHAT incorrectly routed directly to Tool 7; added R-023.
 
-### 2026-09-13 — R-023 unresolved WHAT routing correction completed
-- Implemented `has_class_evidence` in `engine.py` and `service.py`.
-- Routed generic unresolved WHAT to `tool_2_media_database_review` and `tool_5_content_discovery` in fixed pipeline order.
-- Reserved `tool_7_class_classification` strictly for items established as a Class (via category, filename tokens, or parent/ancestor folders).
-- Corrected descriptions of Tool 2 (Media Database Reviewer) and Tool 3 (Travel Schedule Reviewer) in sample report and walkthrough documentation.
-- Added regression test `test_unresolved_class_what_routing_when_class_evidence_exists` (total 67 tests passing).
-- Reran sample evaluation on `sample-files/`: 151 files to Tool 2/3, 80 files to Tool 2 and Tool 5, 8 files to Tool 7, 2 files to Tools 5/6, 5 files in human review.
-- Committed implementation as `80e6ea9`.
+### 2026-09-13 — Builder R-023 correction
+- Builder implemented `has_class_evidence`, generic Tool 2/5 routing, class-specific Tool 7 routing, updated docs/tests, and committed `80e6ea9` with status handoff `ecdc691`.
+- Reported 67 passing tests and 260-file sample with 5 immediate human reviews.
+
+### 2026-09-13 — Planning/review inspection of R-023 implementation
+- Inspected actual commit `80e6ea9`, affected parser/service code, sample report changes, and regression tests.
+- Accepted R-023 initial-routing behavior.
+- Found R-024: `apply_enrichment()` recomputation fails to pass stored ancestor folders into `has_class_evidence`, so later unrelated enrichment can weaken an established Class route, including for `_edited` files that depend on Tool 7 while skipping Tools 5/6.
+- Returned Tool 1 to `CHANGES_REQUESTED` pending the targeted preservation fix.
