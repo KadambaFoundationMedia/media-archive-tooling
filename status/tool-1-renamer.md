@@ -9,7 +9,7 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch / PR: `main`  
 Last implementation update: 2026-09-13  
@@ -17,15 +17,16 @@ Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review repository checkpoint inspected: `7bcc9a1`  
+Last planning/review repository checkpoint inspected: `5f78b8f`  
 Current implementation code reviewed: `7efe96d`  
 Previous implementation baseline: `f285a6d`  
 Fundamental-change review pending: no
 
 Relevant builder commits since the previous implementation review:
 - `7efe96d` — fix(renamer): resolve R-022 separate downstream routing from human review
+- `5f78b8f` — docs(status): record Tool 1 implementation HEAD 7efe96d and review readiness
 
-Project protocol commits made after the builder handoff are not Tool 1 implementation commits and do not change the reviewed implementation baseline.
+Project protocol/bootstrap commits between the previous implementation baseline and `7efe96d` are not Tool 1 behavior commits.
 
 ## Builder-reported verification
 
@@ -44,7 +45,7 @@ Builder reports:
   - `downstream_split`: 2 (0.8%)
   - `blocked_error`: 0 (0.0%)
 
-Downstream routing counts across the 255 unblocked files:
+Downstream routing counts in the builder report:
 - `tool_2_3_media_enrichment`: 154
 - `tool_7_class_classification`: 80
 - `tool_5_6_split_combination`: 2
@@ -63,25 +64,62 @@ Human review reason triggers across the 5 flagged files:
 - [x] Initial implementation completed
 - [x] First review R-001 through R-010 completed and corrected
 - [x] Second review R-011 through R-021 completed and corrected in `f285a6d`
-- [x] 63-test regression suite reported passing under Python 3.12
-- [x] 260-file objective sample evaluation produced
-- [x] R-022 review-routing correction completed in `7efe96d`
-- [x] Corrected sample routing evaluation completed (66 tests passing, 5 files in human review)
+- [x] R-022 human-review/downstream-routing separation corrected in `7efe96d`
+- [x] Corrected 260-file sample routing evaluation completed
+- [ ] R-023 unresolved WHAT routing corrected
+- [ ] Corrected routing tests/evaluation committed and pushed
 - [ ] Accepted
 
 ## Resolved review history
 
-R-001 through R-022 are considered resolved in implementation commit `7efe96d` unless a later regression reopens them. Their full descriptions remain recoverable from Git history and GitHub issue #1.
+R-001 through R-022 are considered resolved unless a later regression reopens them. Their full descriptions remain recoverable from Git history and GitHub issue #1.
 
-They covered CLI dry-run safety, unresolved WHAT behavior, `_edited` lifecycle, Baserow authority and write safety, Vedabase, online location lookup, sibling grammar, service boundaries, Python 3.12, documentation/checkpoints, scripture WHAT preservation, combination preservation, direct WHERE evidence, conservative fuzzy/geocoding behavior, regional dates, extension-agnostic processing, tracking-ID/length/transliteration safety, enrichment interfaces, finalization collisions, review validation, objective sample reporting, and separation of downstream routing and diagnostic notes from human review (R-022).
+R-022 is confirmed substantially correct: diagnostic/downstream work is now separated from immediate human review; unresolved/provisional values remain visible; ambiguous/conflicting/corrupted cases still enter the human queue; combination candidates route downstream instead of becoming human-review tasks; and the sample human-review count fell from 172 to 5 without simply discarding the unresolved evidence.
 
-## Active review findings
+## Active review finding — 2026-09-13
 
-None. All review findings R-001 through R-022 resolved.
+### R-023 — Generic unresolved WHAT is incorrectly routed directly to Tool 7 as if the recording were already known to be a class
+
+Severity: **WORKFLOW / CROSS-TOOL INTERFACE BLOCKER**
+
+The R-022 implementation currently does this for every unresolved WHAT:
+
+```text
+WHAT is unresolved
+→ downstream_routing += tool_7_class_classification
+```
+
+The new regression test explicitly asserts this behavior for `2012-05-13_Sydney.mp3`, even though that filename contains no evidence that the recording is a class.
+
+This overstates what Tool 1 knows and conflicts with the fixed pipeline responsibilities:
+
+- Tool 2 reviews the existing Media database and may supply missing WHAT from an existing logical media item;
+- Tool 5 Content Discoverer determines whether content is Class, Mantra singing, or a combination when still unresolved later;
+- Tool 7 resolves unidentified **class** WHAT/class type after the recording is known to be a class;
+- Tool 1 must not invent a class classification merely to complete routing, just as it must not invent WHAT in the filename.
+
+The sample report also describes Tool 2/3 enrichment as using an "audio transcript / recording context". Tool 2 is the Media Database Reviewer and Tool 3 is the Travel Schedule Reviewer; neither is the audio/content-discovery stage. That wording blurs the finalized tool boundaries.
+
+Required correction:
+
+1. Do not route a generic unresolved WHAT directly to Tool 7 unless existing evidence already establishes that the item is a class requiring Tool 7 classification.
+2. Respect the fixed pipeline order. In the initial/fast metadata stage, Tool 2 may resolve WHAT from Media data. If WHAT remains unresolved into content processing, Tool 5 should establish Class/Mantra/Combination before Tool 7 is selected for class-specific resolution.
+3. The exact internal routing labels are an implementation detail, but they must not imply an unproven content class or skip an earlier owning stage.
+4. Correct the sample report/walkthrough wording so Tool 2/3 are described according to their actual Media-database/travel-schedule roles, not as transcription/audio-context tools.
+5. Add regression tests proving:
+   - a generic unresolved WHAT does **not** imply `tool_7_class_classification`;
+   - a class already established by stronger evidence may route to Tool 7 when its class WHAT remains unresolved;
+   - combination routing remains Tools 5/6;
+   - unresolved/provisional metadata still does not re-enter the human queue merely because it needs downstream work.
+6. Rerun the 260-file sample and report the corrected downstream-routing counts separately from human-review counts.
+
+No user/archive-policy decision is required. The existing finalized workflow and Tool 1 rule that Tool 7 resolves unidentified **class** WHAT are sufficient.
 
 ## Known defects / limitations
 
-None currently blocking. Missing/downstream metadata is safely routed to downstream stages, and human review is reserved strictly for genuine contradictions and corruptions.
+Active finding: R-023.
+
+The corrected `5 / 260` immediate-human-review count is plausible and the R-022 separation is accepted in principle. The remaining issue is the destination of some downstream work, not a reason to put those files back into human review.
 
 ## Open questions / contradictions
 
@@ -89,7 +127,7 @@ None currently requiring user input.
 
 ## Next milestone
 
-Reviewer verification of R-022 resolution, 66-test suite, and corrected 260-file sample evaluation results.
+Builder addresses R-023 without changing the finalized build plan, corrects routing/documentation/tests, reruns the 260-file routing evaluation, commits and pushes all work, records the final reachable HEAD, and returns Tool 1 to `READY_FOR_REVIEW`.
 
 ## Progress log
 
@@ -103,18 +141,15 @@ Reviewer verification of R-022 resolution, 66-test suite, and corrected 260-file
 - Builder later committed status handoff `5b86a781`.
 
 ### 2026-09-13 — Focused sample-routing review
-- Reviewed the reported `88 clean / 172 human review` sample result.
-- Found that the majority of review flags are unresolved fields rather than genuine human decisions.
-- Added R-022 to separate downstream enrichment/diagnostic flags from immediate human review.
-- Tool returned to `CHANGES_REQUESTED` pending corrected routing and sample evaluation.
+- The reported `88 clean / 172 human review` result was traced mainly to missing/provisional metadata being mislabeled as human review.
+- Added R-022 to separate diagnostic/downstream work from immediate human decisions.
 
-### 2026-09-13 — R-022 downstream routing correction completed
-- Separated diagnostic/enrichment state from human review in `engine.py`, `planner.py`, and `service.py`.
-- Added `diagnostic_notes` and `downstream_routing` attributes to `ParserResult` and `RenameProposal`.
-- Preserved original wording + tracking ID for missing WHAT (routed to `tool_7_class_classification`) and combination candidates (routed to `tool_5_6_split_combination`).
-- Missing and provisional WHERE routed to `tool_2_3_media_enrichment` with `needs_review=False`.
-- Updated `logger.py` with objective categories (`safe_automatic`, `downstream_enrichment`, `downstream_split`, `human_review_required`, `blocked_error`).
-- Updated `detail.html` review portal template to display diagnostic notes and downstream pipeline routing separately from human review reasons.
-- Added 3 regression tests in `tests/test_routing_and_review_separation.py` (total 66 passing).
-- Reran dry-run evaluation on `sample-files/`: 255 safe automatic/downstream proposals (98.1%), only 5 genuine human review conflicts (1.9%).
-- Committed implementation as `7efe96d`.
+### 2026-09-13 — Builder R-022 correction
+- Builder committed `7efe96d` and status handoff `5f78b8f`.
+- Reported 66 passing tests and a rerun of 260 files: 255 continue/downstream, 5 immediate human review, 0 blocked errors.
+
+### 2026-09-13 — Planning/review inspection of R-022 implementation
+- Inspected the actual `7efe96d` implementation and `5f78b8f` status handoff.
+- Confirmed R-022 separation works in principle: unresolved/provisional metadata is no longer automatically treated as a human decision, while ambiguity/conflicts/corruption remain human-review conditions.
+- Found one remaining cross-tool routing error: every unresolved WHAT is labeled for Tool 7 even when the recording has not been established as a class.
+- Added R-023 and returned Tool 1 to `CHANGES_REQUESTED`.
