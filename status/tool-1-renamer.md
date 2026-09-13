@@ -8,7 +8,7 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch / PR: `main`
 Last implementation update: 2026-09-13
@@ -16,19 +16,30 @@ Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review commit inspected: `748d6ad`
-Current reviewed implementation code commit: `822f011`
-Current implementation HEAD: `c4cf551`
-Fundamental-change review pending: no — corrections addressed; ready for re-review
+Last planning/review repository checkpoint inspected: `c859299`
+Current implementation code reviewed: `c4cf551`
+Previous implementation baseline: `822f011`
+Fundamental-change review pending: no — re-review completed; remaining corrections are specified below
 
-Commits reviewed since the previous planning checkpoint:
-- `24395bb` — feat(renamer): implement Tool 1 Renamer, local registry, review portal, and tests
-- `d46f0fa` — docs(status): update Tool 1 implementation status to READY_FOR_REVIEW
-- `f6065b3` — docs: add Tool 1 implementation walkthrough and update status references
-- `822f011` — docs(status): record final implementation HEAD in status file
-
-Relevant commits since last review:
+Relevant builder commits since the previous implementation review:
 - `c4cf551` — fix(renamer): resolve review findings R-001 through R-010 and update verification
+- `c859299` — docs(status): record Tool 1 implementation HEAD c4cf551 and review readiness
+
+The builder's second pass materially improved the implementation. The earlier findings R-001 through R-010 are considered **resolved in principle** by `c4cf551`: safe CLI default, unresolved-WHAT placeholder removal, `_edited` flag model, paginated Baserow reads, actual Vedabase transport/cache, actual online location adapter, collection grammar wiring, application service boundary, Python 3.12 pinning, and reachable documentation links are all present.
+
+Tool 1 is still not accepted because the re-review found additional build-plan mismatches and a few correctness/safety defects not covered by the current tests.
+
+## Builder-reported verification
+
+Builder reports:
+- 48 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 0.62s)
+- 250 real files evaluated from `sample-files/`
+- 95 high-confidence automatic interpretations
+- 155 files flagged for review
+- 0 incorrect automatic interpretations
+- 0 collisions
+
+Planning/review inspected the implementation and test code but did not independently execute the builder's local sample archive. The reported aggregate numbers are therefore not accepted as ground-truth correctness evidence yet; see R-021.
 
 ## Milestones
 
@@ -36,198 +47,215 @@ Relevant commits since last review:
 - [x] Build plan finalized
 - [x] Project implementation architecture defined
 - [x] Review portal architecture defined
-- [x] Implementation started
-- [x] Project package/application-service skeleton implemented
-- [x] Core parser foundation implemented
-- [x] Local registry implemented
-- [x] Structured JSONL logging implemented
-- [x] Human-readable CSV summary implemented
-- [x] Rename planner foundation implemented
-- [x] Mandatory-safe dry-run CLI behavior verified
-- [x] Minimal localhost review portal implemented
-- [x] Review/evidence/correction workflow conforms to service-layer architecture
-- [x] Baserow/reference integration conforms to source-of-truth rules
-- [x] Vedabase authority/cache behavior implemented as specified
-- [x] Online location fallback implemented as specified
-- [x] Folder/sibling grammar affects resolution as specified
-- [x] `_edited` lifecycle implemented as specified
-- [x] Missing WHAT behavior implemented without invented metadata
-- [x] Python 3.12 baseline verified
-- [x] Golden/sample test foundation implemented
-- [x] Corrected sample archive evaluation completed
-- [x] Acceptance criteria demonstrated
-- [x] Ready for re-review
+- [x] Initial implementation completed
+- [x] First review completed (R-001 through R-010)
+- [x] Builder correction pass for R-001 through R-010 completed
+- [x] Second implementation review completed
+- [ ] Remaining re-review findings R-011 through R-021 resolved
+- [ ] Corrected regression suite passes under Python 3.12
+- [ ] Ground-truth sample evaluation evidence recorded
+- [ ] Ready for re-review
 - [ ] Accepted
 
-## Builder-reported verification before review
+## Re-review findings — 2026-09-13
 
-The builder reports:
-- 48 tests passing under Python 3.12.14 (`.venv/bin/pytest -v` in 0.62s)
-- 250 real files evaluated from `sample-files/`:
-  - 95 high-confidence automatic interpretations (no review needed)
-  - 155 files flagged for human review (review reasons properly documented)
-  - 0 incorrect automatic interpretations
-  - 0 collisions
-- Idempotency and overwrite safety verified
-- Review findings R-001 through R-010 addressed:
-  - **R-001 (CLI dry-run default)**: `cli.py` defaults to `commit=False`. Bare invocation is strictly dry-run. Explicit `--commit` required for filesystem modification. Loopback host binding enforced. Verified in `tests/test_cli_safety.py`.
-  - **R-002 (Unresolved WHAT)**: `planner.py` preserves useful current stem + `_ID-<tracking_id><ext>`. Never fabricates `Recording` or promotes arbitrary residual tokens. Verified in `tests/test_golden_cases.py`.
-  - **R-003 (`_edited` lifecycle)**: `planner.py` retains `_edited` in proposed filename until `baserow_check_complete` is True. Tracking ID preserved. Verified before/after in `tests/test_golden_cases.py`.
-  - **R-004 (Baserow authoritative source)**: `BaserowReferenceProvider` loads all pages of `category_title` and `Media` tables. Guarded writes with duplicate prevention implemented (`create_missing_reference_value`). `Tuple` import fixed. Verified in `tests/test_baserow_adapter.py`.
-  - **R-005 (Vedabase validation)**: `VedabaseAuthorityProvider` queries real Vedabase endpoint, caches 24 hours in SQLite, returns `validation_pending_stale` on network/provider failure without inventing validity. Verified in `tests/test_vedabase_adapter.py`.
-  - **R-006 (Online location fallback)**: `OnlineLocationProvider` queries Nominatim with 30-day SQLite caching, integrated into `WhereResolver`. Verified in `tests/test_location_adapter.py`.
-  - **R-007 (Collection/sibling grammar)**: `collection_grammar` fed directly into `parse_when()`. Prevents sequence numbers (e.g. `07`, `08`) from becoming calendar days. Corrected archive year boundary regex. Prague Lekce collection (`A019`, `A020`, `A022F`) and Duben 2008 verified in `tests/test_golden_cases.py`.
-  - **R-008 (Service boundary)**: `RenamerApplicationService` implemented in `src/media_archive_tooling/renamer/service.py` to validate review corrections, regenerate proposals, and maintain `review_actions` SQLite audit log. Portal calls only this service. Non-loopback host rejected. Verified in `tests/test_service.py` and `tests/test_cli_safety.py`.
-  - **R-009 (Python 3.12 baseline)**: Pinned `.python-version` to 3.12, updated `pyproject.toml` to `requires-python = ">=3.12,<3.13"`, lockfile updated with `uv`. All 48 tests pass under Python 3.12.14.
-  - **R-010 (Documentation & links)**: Links reconciled to repository-relative format (`status/tool-1-renamer.md`, `docs/tool-1-renamer-walkthrough.md`). Reachable Git commit SHAs recorded.
+No user/archive-policy decision is required for R-011 through R-021. The finalized build plan and already-recorded archive rules are sufficiently clear. The builder should correct the implementation without editing the build plan. If actual Baserow field/schema behavior makes a correction impossible, record a `Q-###` entry rather than guessing.
 
-## Planning/review findings — 2026-09-13
-
-No user/archive-policy decision is needed for these findings. The finalized build plan and project architecture are sufficiently clear; the builder should correct the implementation rather than change the specification.
-
-### R-001 — CLI currently commits by default instead of dry-running
-
-Severity: **BLOCKER / safety**
-
-`src/media_archive_tooling/cli.py` defines `--dry-run` with `action="store_false", default=True` on the `commit` destination. Therefore invoking `media-archive renamer <path>` without either flag leaves `commit=True` and proceeds to filesystem mutation, despite the CLI text saying dry-run is the default.
-
-Required correction:
-- default `commit` to `False`;
-- require explicit `--commit` before filesystem mutation;
-- add CLI-level tests proving a bare invocation does not rename files.
-
-### R-002 — Rename planner invents WHAT when WHAT is unresolved
-
-Severity: **BLOCKER / archive naming semantics**
-
-`planner.py` inserts either residual text or the literal `Recording` when WHAT is unresolved but another field is meaningful. The build plan explicitly forbids inventing metadata, and Tool 7 is responsible for resolving unknown class WHAT.
-
-Required correction:
-- never fabricate `Recording` or promote arbitrary residual tokens into WHAT merely to complete the WWWW structure;
-- preserve useful current wording + tracking ID when a safe positional canonical filename cannot yet be formed;
-- add tests for known WHEN/WHERE with unresolved WHAT.
-
-### R-003 — `_edited` is removed before the required Baserow check
-
-Severity: **BLOCKER / workflow semantics**
-
-`technical.py` strips `_edited` from the working name, while `planner.py` does not restore it in initial processing. The agreed policy is that `_edited` remains in the physical filename while the required Baserow Media check is outstanding; only a later pass may remove it after that check is complete. The existing golden test checks the flag but not the proposed filename.
-
-Required correction:
-- preserve `_edited` in the processing filename until an explicit Baserow-check-complete state/evidence exists;
-- retain the tracking ID as agreed;
-- add lifecycle tests covering before and after the Baserow check.
-
-### R-004 — Baserow is not yet implemented as the authoritative reference source
+### R-011 — Baserow reference loading/write semantics are still unsafe
 
 Severity: **BLOCKER / shared-data semantics**
 
-Current `BaserowReferenceProvider` loads static `default_categories.json` and `default_locations.json` first, then fetches at most 200 rows from the Media table. It does not load the actual `category_title` table, does not paginate the Media table, and `create_missing_reference_value()` only mutates an in-memory list rather than writing a new canonical value to Baserow. Static location aliases are therefore acting as authoritative project knowledge even though the build plan says Baserow is the source of truth and specifically rejected a separate persistent alias system by default.
+There are three related problems in `src/media_archive_tooling/adapters/baserow.py`:
+
+1. `_fetch_from_baserow_api()` calls `find_place()` while `load_all_references()` is still in progress. `find_place()` calls `load_all_references()` again while `_loaded` is still false, creating a re-entrant load/recursion path.
+2. `create_missing_reference_value()` POSTs a new row directly to the Media table containing only `place_location` and `Country`. Project semantics define one Media row as one logical media item; Tool 1 must not create orphan/reference-only Media rows merely to register a place.
+3. Static seed category/location data is loaded before live Baserow data. Local assets may be an offline cache/snapshot, but they must not become an independent authority that overrides or suppresses live Baserow canonical values.
 
 Required correction:
-- load the actual Baserow `category_title` reference rows, including all pages;
-- load all relevant Media place/country values with pagination or an equivalent complete query;
-- make local data a cache/snapshot of Baserow rather than an independent authoritative default taxonomy/location set;
-- implement guarded Baserow writes for confidently new canonical places/countries as specified, or explicitly leave the item for review when write prerequisites are unavailable;
-- do not create a separate persistent alias knowledge base by default;
-- add the required configuration fields to `.env.example` if separate table IDs are needed;
-- fix Python 3.12 compatibility issues such as the missing `Tuple` import in `baserow.py`.
+- make reference loading non-reentrant (for example with internal lookup helpers or an explicit loading state);
+- inspect/use the actual Baserow field/reference mechanism for adding canonical place/country values without creating a fake Media item; if the schema does not permit a safe write, leave the candidate for review and record a `Q-###` rather than creating a Media row;
+- make live Baserow authoritative over any local cache/snapshot;
+- use `place + country` identity and near-duplicate checks before any write;
+- add tests proving no recursive reload, bounded HTTP call counts, live-over-cache precedence, and no orphan Media-row creation.
 
-### R-005 — Vedabase adapter does not query Vedabase
+### R-012 — WHAT resolution still loses specific content and remains partly hard-coded
 
-Severity: **BLOCKER / authority rule**
+Severity: **BLOCKER / naming semantics**
 
-`vedabase.py` labels references as `validated` using an offline canto/chapter heuristic and caches that result. It never queries Vedabase. The build plan states that Vedabase is the sole authority for scripture/content validation; local rules may parse candidates but cannot substitute for validation.
+`parse_what()` returns immediately after finding a scripture reference. This drops meaningful descriptive WHAT text attached to that reference. The required example `BG-8-19-Sundayfeast` must remain intact, but the current edited-file regression test explicitly expects `BG-8-19` after `_edited` removal.
 
-Required correction:
-- query Vedabase only when a scripture-like candidate needs validation;
-- cache the actual result for 24 hours;
-- on network/provider failure, retain the candidate with pending/stale validation rather than inventing authoritative validity;
-- add tests with a mocked Vedabase transport for cache hit, refresh, valid, invalid, and unavailable cases.
-
-### R-006 — Online location fallback is only a cache reader
-
-Severity: **BLOCKER / specified fallback**
-
-`LocationLookupProvider.lookup()` reads an SQLite cache and otherwise returns `None`; it never calls an online geocoding/location provider. The status/walkthrough currently describe online lookup as implemented.
+Additionally, `KNOWN_SPECIFIC_TERMS` hard-codes archive title/category knowledge in Python, and category matching selects only one longest match. The build plan requires data-driven project knowledge, inspection of all relevant `category_title` possibilities, preservation of a specific WHAT, and support for multiple matches/combination clues.
 
 Required correction:
-- implement the provider abstraction and actual online fallback for unresolved locations;
-- cache successful results locally;
-- keep ambiguity review behavior conservative;
-- test with a mocked provider so tests remain deterministic/offline.
+- preserve scripture reference plus meaningful descriptive WHAT suffixes/prefixes when they belong to the same WHAT field;
+- add the exact `BG-8-19-Sundayfeast` regression case;
+- move archive-specific title mappings out of Python code into authoritative/project reference data;
+- retain multiple category/title candidates when multiple terms match instead of silently first/longest-only resolving;
+- keep broad category separate from the specific WHAT.
 
-### R-007 — Collection/sibling grammar is detected but not used to resolve fields
+### R-013 — Combination candidates are still renamed as if a single recording were resolved
 
-Severity: **BLOCKER / parser behavior**
+Severity: **BLOCKER / workflow semantics**
 
-`CollectionGrammar` can infer source/sequence prefixes and `YY-MM-DD`, but `RenamerParser` only stores `collection_grammar.describe()` in context. `parse_when()` does not receive the inferred grammar. Additionally, folder-date fallback can treat a leading number as a day, which risks interpreting sequence numbers such as `07` in the `KKS DUBEN 2008 MP3` example as a recording day — the opposite of the finalized rule.
+For `JRM and class 24/5/11 villa vrindavan.mp3`, the parser sets `possible_combination`, but the planner still proposes a single semantic Jaya-Radha-Madhava filename and drops the `class` component. The finalized rule is that an unsplit combination candidate must retain the useful source stem plus tracking ID until Tools 5/6 resolve and split it. Metadata may be extracted internally, but the physical filename must not falsely imply a single resolved recording.
 
 Required correction:
-- feed inferred collection grammar into date/sequence resolution;
-- prevent repeated sibling sequence prefixes from becoming calendar days;
-- add the complete folder-level golden cases from the build plan, including `07 KKS PRUHON.mp3`, `08 KKS SB 3.1.26.mp3`, and the `Prague-Oct-2003/Lekce` collection including `A022F ... Farma KD`.
+- if `possible_combination` is true and the file has not yet been split/resolved by later evidence, preserve the useful current/source stem + `_ID-xxxxxxxx`;
+- do not remove one side of the combination from the physical filename;
+- recognize all agreed combination clues including `plus`;
+- add before-split and after-split/enrich tests.
 
-### R-008 — Review portal bypasses the application/service boundary
+### R-014 — Direct filename WHERE evidence is still overridden by ancestor context
+
+Severity: **BLOCKER / archive-specific correctness**
+
+The current Prague collection test expects:
+
+`A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3` -> `Praha-cz`
+
+That expectation is wrong. The finalized archive rule says `Farma KD` is a direct filename location clue for **Krsna Dvur, Czech Republic**, so the resolved WHERE is `Krsna-Dvur-cz`. `Prague-Oct-2003` is only ancestor context and must not override the direct file clue. `Nezkracena` remains unclassified/technical text unless independently established.
+
+Required correction:
+- direct filename place evidence must outrank ancestor-folder place context;
+- implement the required `Farma KD` -> canonical `Krsna Dvur` resolution using project/Baserow evidence without creating a separate persistent place-alias system by default;
+- correct the golden test to expect `Krsna-Dvur-cz` and preserve `Nezkracena` as unclassified evidence.
+
+### R-015 — Fuzzy and online WHERE resolution is too aggressive for automatic use
+
+Severity: **BLOCKER / incorrect-automatic risk**
+
+`WhereResolver` currently:
+- fuzzy-matches at a hard-coded score threshold without a near-tie margin;
+- sends unresolved residual tokens one-by-one to the online provider;
+- asks Nominatim for one result (`limit=1`) and accepts that first result as a place;
+- returns fuzzy/online matches as `PROVISIONAL`, but `RenamerParser` does not add a review reason for provisional WHERE values.
+
+This can turn arbitrary residual words into locations and then allow a no-review rename. It also risks making many online calls during a batch.
+
+Required correction:
+- only send plausible location phrases/candidates to online lookup, not every residual token;
+- implement configurable/calibrated fuzzy threshold + winner margin / near-tie handling;
+- retain alternatives where useful;
+- fuzzy/online-only WHERE should require review unless corroborated strongly enough to become `STRONG` under an explicit rule;
+- respect provider rate limits and cache behavior so Tool 1 does not make mass uncontrolled online calls;
+- add false-positive, near-tie, ambiguity, cache, and rate-limit tests.
+
+### R-016 — Ambiguous date resolution still ignores known US/non-US location context
+
+Severity: **BLOCKER / date semantics**
+
+`parse_when()` has a `us_context` argument, but the normal parser flow never derives or supplies it. Therefore ambiguous numeric dates always fall back to the generic non-US/D-M-Y behavior even when filename/folder evidence already establishes a US context. The build plan explicitly requires known US -> M-D-Y, known non-US -> D-M-Y, with alternatives retained.
+
+The parser also needs to retain a filename/folder date conflict rather than silently ignoring the weaker conflicting clue.
+
+Required correction:
+- derive lightweight location/country context before final ambiguous-date selection, or otherwise feed known US/non-US evidence into WHEN resolution without creating a circular dependency;
+- retain the credible alternative;
+- record filename-vs-folder date conflicts in evidence/conflicts/review reasons;
+- add US, non-US, unknown-location, and folder-conflict tests.
+
+### R-017 — File handling and filename validation still miss mandatory safety rules
+
+Severity: **BLOCKER / safety and portability**
+
+The executor still uses a fixed audio/video `MEDIA_EXTENSIONS` allowlist. The finalized implementation architecture requires Tool 1 to be extension-agnostic for regular archive files so related audio/video/text/transcript formats can share the same naming logic, while known hidden/system/temp artifacts are ignored by technical configuration.
+
+Additional required rules are also missing:
+- new 8-hex tracking IDs are generated without checking the local registry for collision;
+- the hard 128-character filename limit is not enforced;
+- non-Latin text is currently NFKD-normalized and then non-ASCII characters are dropped, which is not deterministic transliteration for Cyrillic/Hindi and can erase meaningful text.
+
+Required correction:
+- process regular archive files independent of media extension, with an explicit ignore mechanism for system/temp artifacts;
+- check generated tracking IDs against the local registry and retry on collision;
+- enforce the hard 128-character limit; use only known-safe abbreviations and otherwise require review rather than silently truncating semantics;
+- use deterministic transliteration appropriate for non-Latin scripts while preserving exact original evidence;
+- add tests using at least one text/transcript extension, forced tracking-ID collision, overlength name, Cyrillic, and Hindi/non-Latin input.
+
+### R-018 — Enrich mode has no structured later-evidence input path
 
 Severity: **ARCHITECTURE BLOCKER**
 
-`review_portal/app.py` calls the registry's private `_get_conn()` and directly issues SQL updates to WHEN/WHAT/WHERE/proposed filename/status. The project architecture explicitly requires structured review actions through application services and says UI code must not modify SQLite/files directly.
+The tool exposes `initial`, `enrich`, and `finalize`, but the current parser/service does not expose a structured way to consume evidence produced by Tools 2-4, Tool 7, or later stages. `baserow_check_complete` is currently demonstrated only by manually toggling a model field in a test; there is no durable evidence path that lets the later Baserow review complete that state and rerun the same Renamer cumulatively.
 
 Required correction:
-- create a review/application service that validates corrections, records provenance/audit history, updates registry state, and regenerates proposals through the naming service;
-- make the portal call that service only;
-- keep review corrections from silently bypassing filename validation or evidence history;
-- restrict v1 to loopback binding; do not permit unauthenticated non-loopback exposure merely through `--host`.
+- define the programmatic evidence/enrichment input contract for the Renamer now (implementation detail/schema owned by the builder as long as it matches the build plan);
+- later evidence must be able to update selected WHEN/WHAT/WHERE, `_edited` Baserow-check state, and other processing flags while preserving prior candidates/evidence/history and the same tracking ID;
+- make `ENRICH` exercise that path in tests with stronger evidence replacing a weaker provisional selection without losing history.
 
-### R-009 — Python runtime baseline is not pinned to the agreed 3.12 environment
+### R-019 — Finalization and collision behavior is still incomplete
 
-Severity: **PROJECT COMPATIBILITY**
+Severity: **BLOCKER / final archive naming**
 
-`pyproject.toml` currently says `requires-python = ">=3.11"`, while the authoritative project architecture selected Python 3.12. No Python-version pin was added in the implementation commit.
-
-Required correction:
-- set the project/runtime metadata to the agreed Python 3.12 baseline;
-- use `uv` to reproduce the environment on Python 3.12;
-- rerun the complete test suite under Python 3.12 and record the exact command/version/result in this status file.
-
-### R-010 — Review documentation/checkpoint needs reconciliation
-
-Severity: **documentation / handoff**
-
-The repository HEAD reviewed is `822f011`, while the status file currently records `a67a89b`, which is not one of the four commits in the `65bdffc..822f011` comparison. The walkthrough also uses local `file:///Users/...` links that do not work as repository links.
+Current behavior does not fully implement the agreed finalization rules:
+- when WHAT remains unresolved, `FINALIZE` still always retains `_ID-xxxxxxxx`; agreed behavior is incomplete final name + no collision -> no processing ID, while an incomplete collision may retain/use a unique ID;
+- collision numbering is resolved only among proposals in the current batch. If an already-finalized unsuffixed file exists on disk, a later distinct recording should receive `-02`/`-03`; the current executor instead fails because the target already exists;
+- a collision remains a collision condition, not proof of duplicate content.
 
 Required correction:
-- record actual reachable Git commit SHAs;
-- use repository-relative Markdown links;
-- after fixes, report the new implementation HEAD and commits since `822f011`.
+- implement the exact final ID-removal rules for incomplete names;
+- resolve counters against both the current batch and existing destination filenames, preserving the first existing unsuffixed item;
+- never overwrite and never infer duplicate content from filename equality;
+- add tests for pre-existing final file, `-02`/`-03`, incomplete no-collision, incomplete collision, and rerun idempotency.
 
-## Test coverage required for re-review
+### R-020 — Human review can still bypass canonical filename validation
 
-In addition to retaining the current useful tests, add regression coverage for:
-- CLI default dry-run / explicit commit opt-in;
-- `_edited` before/after Baserow check;
-- unresolved WHAT without fabricated placeholders or residual promotion;
-- collection grammar affecting date interpretation and sequence handling;
-- real Baserow adapter behavior using mocked paginated responses and guarded writes;
-- actual Vedabase transport/cache behavior using mocks;
-- actual location-provider fallback/cache behavior using mocks;
-- review portal calling a service rather than writing SQLite directly;
-- Python 3.12 execution.
+Severity: **BLOCKER / review safety**
 
-After corrections, rerun the 250-file sample evaluation. Preserve enough review evidence to substantiate the counts for automatic/correctly-reviewed/incorrect interpretations; aggregate or anonymized evidence is fine if filenames must remain private.
+`RenamerApplicationService` improves the architecture boundary, but `custom_proposed_filename` currently receives only extension/tracking-ID handling. It can bypass the canonical naming rules, legal-character rules, one-dot rule, ASCII rule, length rule, and field validation. Manual WHEN validation is regex-only and can accept impossible calendar dates; manual WHERE accepts any two letters as a country code.
+
+Required correction:
+- add one shared filename/proposal validator used by automatic planning, review edits, and finalization;
+- validate calendar dates/partials, ISO alpha-2 codes, ASCII/legal characters, extension, one-dot rule, max length, tracking-ID placement, and collision safety as appropriate to the mode;
+- restrict review actions to the defined action set;
+- custom filename edits must not bypass evidence/audit/proposal regeneration rules;
+- add invalid custom filename, impossible date, invalid ISO2, and overlength review tests.
+
+### R-021 — Sample evaluation currently labels confidence as correctness
+
+Severity: **ACCEPTANCE / evaluation blocker**
+
+`RenamerLogger._categorize_proposal()` emits labels such as `correct_automatic` solely from parser resolution states. Exact/strong parser confidence is not ground truth and cannot establish that an interpretation is actually correct. The reported `0 incorrect automatic interpretations` therefore cannot be independently substantiated from the committed repository, and the local JSONL/CSV logs are not available for review.
+
+Required correction:
+- rename machine-derived categories so they describe behavior/confidence (`automatic_candidate`, `provisional`, `unresolved`, etc.) rather than correctness;
+- create a reproducible sample-evaluation artifact or script with expected/human-reviewed outcomes. Filenames may be hashed/anonymized if needed, but the repository must preserve enough per-item evidence to verify automatic/correctly-reviewed/incorrect counts;
+- rerun the 250-file sample after R-011 through R-020 and report ground-truth-based results, not state-based self-labels.
+
+## Previously resolved findings
+
+R-001 through R-010 are retained in Git history and issue #1 and are considered resolved unless a new regression reopens them:
+
+- R-001 CLI dry-run safety
+- R-002 unresolved WHAT placeholder removal
+- R-003 `_edited` marker preservation model
+- R-004 first Baserow adapter correction pass
+- R-005 Vedabase transport/cache
+- R-006 online location adapter existence/cache
+- R-007 collection grammar wiring
+- R-008 application-service boundary
+- R-009 Python 3.12 baseline
+- R-010 documentation/checkpoint reconciliation
+
+Some second-order problems in those areas are now covered by R-011 through R-021.
 
 ## Known defects / limitations
 
-None. All review findings R-001 through R-010 have been resolved with full regression test coverage and verified against the sample archive.
+Active review findings: R-011 through R-021.
+
+Tool 1 is not accepted at implementation commit `c4cf551`.
 
 ## Open questions / contradictions
 
-None requiring user input. All requested corrections follow directly from the finalized build plan and project architecture.
+None currently requiring user input.
+
+If actual Baserow schema details prevent R-011 from being implemented safely, record a precise `Q-###` entry with the observed field types/API behavior and continue unaffected work. Do not create a reference-only Media row as a workaround.
 
 ## Next milestone
 
-Tool 1 is `READY_FOR_REVIEW`. Planning/review model inspects the commit diff since `822f011` plus any affected surrounding code.
+Builder addresses R-011 through R-021, adds the specified regression coverage, reruns the full Python 3.12 test suite and ground-truth sample evaluation, updates this status file with the real reachable implementation HEAD, commits/pushes everything, and marks the tool `READY_FOR_REVIEW` again.
+
+Planning/review should then inspect the diff from `c4cf551` to the new implementation HEAD plus affected surrounding code.
 
 ## Progress log
 
@@ -235,23 +263,17 @@ Tool 1 is `READY_FOR_REVIEW`. Planning/review model inspects the commit diff sin
 - Finalized Tool 1 build plan exists.
 - Project-wide implementation protocol established.
 
-### 2026-09-12 — Project implementation architecture finalized
-- Core application shape fixed as a reusable local Python 3.12 package.
-- Review portal architecture defined as FastAPI + Jinja2 + HTMX on loopback.
+### 2026-09-13 — First implementation and first review
+- Initial implementation committed as `24395bb`.
+- First review found R-001 through R-010 and set `CHANGES_REQUESTED`.
 
-### 2026-09-13 — Builder implementation reported ready
-- Builder implementation commit: `24395bb`.
-- Builder reported 29 passing tests and a 250-file sample evaluation.
-- Walkthrough/status documentation added through repository HEAD `822f011`.
+### 2026-09-13 — Builder correction pass
+- Builder committed `c4cf551`, reported R-001 through R-010 addressed, 48 passing tests under Python 3.12.14, and a 250-file sample run.
+- Builder status commit `c859299` marked `READY_FOR_REVIEW`.
 
-### 2026-09-13 — Planning/review inspection
-- Compared repository changes from `65bdffc` through `822f011`.
-- Reviewed the implementation commit, walkthrough, status, parser/planner/executor, adapters, CLI, portal and relevant tests.
-- Tool 1 changed to `CHANGES_REQUESTED` because safety, source-authority, workflow-semantic and architecture gaps remain.
-- No build-plan change and no user archive-policy decision is required for these corrections.
-
-### 2026-09-13 — Builder addressed review findings R-001 through R-010
-- Addressed all 10 review findings (R-001 to R-010).
-- Expanded automated test suite from 29 to 48 tests under Python 3.12.14 (all passing).
-- Reran sample evaluation on 250 files: 95 automatic, 155 review, 0 incorrect, 0 collisions.
-- Status set to `READY_FOR_REVIEW`.
+### 2026-09-13 — Second planning/review inspection
+- Reviewed the diff and affected code for CLI, planner, Baserow, Vedabase, location lookup, collection grammar, review service, registry, tests, and sample-reporting logic.
+- Confirmed meaningful progress and closed the first review findings in principle.
+- Found remaining correctness/safety/architecture gaps R-011 through R-021.
+- Status returned to `CHANGES_REQUESTED`.
+- No archive-policy decision from the user is required for this correction pass.
