@@ -2,12 +2,15 @@
 import re
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlencode
+
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..config import load_config
+from ..renamer.commit_service import RenameCommitService
 from ..renamer.registry.registry import LocalRegistry
 from ..renamer.service import RenamerApplicationService
 
@@ -17,13 +20,14 @@ MODULE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = MODULE_DIR / "templates"
 STATIC_DIR = MODULE_DIR / "static"
 TRACKING_TOKEN_RE = re.compile(r"_ID-[0-9a-fA-F]{8}(?=\.|$)", re.IGNORECASE)
-BATCH_REVIEW_ACTIONS = {"approve", "defer"}
+BATCH_ACTIONS = {"approve", "defer", "commit", "approve_commit"}
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 _service: Optional[RenamerApplicationService] = None
+_commit_service: Optional[RenameCommitService] = None
 _review_root: Optional[Path] = None
 
 
@@ -32,10 +36,12 @@ def configure_review_context(
     review_root: Optional[Path] = None,
 ) -> None:
     """Configure the portal to use the same local review registry/root as the scan."""
-    global _service, _review_root
+    global _service, _commit_service, _review_root
     config = load_config()
     selected_registry = Path(registry_path) if registry_path else config.registry_path
-    _service = RenamerApplicationService(registry=LocalRegistry(selected_registry))
+    registry = LocalRegistry(selected_registry)
+    _service = RenamerApplicationService(registry=registry)
+    _commit_service = RenameCommitService(registry=registry)
     _review_root = Path(review_root).expanduser().resolve() if review_root else None
 
 
@@ -45,6 +51,13 @@ def get_service() -> RenamerApplicationService:
         config = load_config()
         _service = RenamerApplicationService(registry=LocalRegistry(config.registry_path))
     return _service
+
+
+def get_commit_service() -> RenameCommitService:
+    global _commit_service
+    if _commit_service is None:
+        _commit_service = RenameCommitService(registry=get_service().registry)
+    return _commit_service
 
 
 def get_registry() -> LocalRegistry:
@@ -77,14 +90,21 @@ def healthz():
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, filter: str = "all"):
+def dashboard(
+    request: Request,
+    filter: str = "all",
+    batch_message: str = "",
+    batch_error: str = "",
+):
     service = get_service()
     data = service.list_files(filter_mode=filter)
     data["files"] = [_dashboard_record(record) for record in data["files"]]
+    data["batch_message"] = batch_message
+    data["batch_error"] = batch_error
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context=data
+        context=data,
     )
 
 
@@ -98,10 +118,18 @@ def file_detail(request: Request, tracking_id: str):
     return templates.TemplateResponse(
         request=request,
         name="detail.html",
-        context={
-            "file": file_record,
-        }
+        context={"file": file_record},
     )
+
+
+def _batch_redirect(filter_mode: str, message: str = "", error: str = "") -> RedirectResponse:
+    safe_filter = filter_mode if filter_mode in {"all", "review", "committed"} else "review"
+    params = {"filter": safe_filter}
+    if message:
+        params["batch_message"] = message
+    if error:
+        params["batch_error"] = error
+    return RedirectResponse(url=f"/?{urlencode(params)}", status_code=303)
 
 
 @app.post("/batch/update")
@@ -110,39 +138,92 @@ def batch_update(
     action: str = Form(...),
     filter: str = Form("review"),
 ):
-    """Apply a safe review-state action to multiple selected review rows."""
-    if action not in BATCH_REVIEW_ACTIONS:
-        raise HTTPException(status_code=400, detail="Batch action must be approve or defer")
+    """Apply review and/or filesystem actions to multiple selected rows."""
+    if action not in BATCH_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Batch action must be approve, defer, commit, or approve_commit",
+        )
 
     selected = list(dict.fromkeys(tid.strip() for tid in tracking_ids if tid.strip()))
     if not selected:
         raise HTTPException(status_code=400, detail="No files selected")
 
     service = get_service()
+    commit_service = get_commit_service()
     records = []
     for tracking_id in selected:
         record = service.get_file(tracking_id)
         if not record:
             raise HTTPException(status_code=404, detail=f"File {tracking_id} not found in registry")
-        if not record.get("needs_review"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"File {tracking_id} is not currently in the human-review queue",
-            )
         records.append(record)
 
-    try:
-        for record in records:
-            service.apply_review_action(
-                tracking_id=record["tracking_id"],
-                action=action,
-                reviewer="review_portal_batch",
+    if action in {"approve", "defer", "approve_commit"}:
+        non_review = [record for record in records if not record.get("needs_review")]
+        if non_review:
+            raise HTTPException(
+                status_code=400,
+                detail="Approve/defer actions only apply to files currently requiring human review",
             )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    elif action == "commit":
+        blocked = [record for record in records if record.get("needs_review")]
+        if blocked:
+            raise HTTPException(
+                status_code=400,
+                detail="Commit requires all selected files to have their human-review blockers resolved first",
+            )
 
-    safe_filter = filter if filter in {"all", "review", "committed"} else "review"
-    return RedirectResponse(url=f"/?filter={safe_filter}", status_code=303)
+    succeeded = 0
+    failures = []
+    for record in records:
+        try:
+            tracking_id = record["tracking_id"]
+            if action == "approve":
+                service.apply_review_action(
+                    tracking_id=tracking_id,
+                    action="approve",
+                    reviewer="review_portal_batch",
+                )
+            elif action == "defer":
+                service.apply_review_action(
+                    tracking_id=tracking_id,
+                    action="defer",
+                    reviewer="review_portal_batch",
+                )
+            elif action == "commit":
+                commit_service.commit_file(
+                    tracking_id=tracking_id,
+                    reviewer="review_portal_batch",
+                )
+            elif action == "approve_commit":
+                service.apply_review_action(
+                    tracking_id=tracking_id,
+                    action="approve",
+                    reviewer="review_portal_batch",
+                )
+                commit_service.commit_file(
+                    tracking_id=tracking_id,
+                    reviewer="review_portal_batch",
+                )
+            succeeded += 1
+        except ValueError as exc:
+            failures.append(f"{record.get('original_filename') or record['tracking_id']}: {exc}")
+
+    action_label = {
+        "approve": "approved",
+        "defer": "deferred",
+        "commit": "committed",
+        "approve_commit": "approved and committed",
+    }[action]
+    message = f"{succeeded} file{'s' if succeeded != 1 else ''} {action_label}."
+    error = ""
+    if failures:
+        preview = "; ".join(failures[:3])
+        if len(failures) > 3:
+            preview += f"; and {len(failures) - 3} more"
+        error = f"{len(failures)} file{'s' if len(failures) != 1 else ''} failed: {preview}"
+
+    return _batch_redirect(filter, message=message, error=error)
 
 
 @app.post("/file/{tracking_id}/update")
