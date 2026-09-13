@@ -9,25 +9,28 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `ACCEPTED`
 
 Implementation branch / PR: `main`  
+Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`  
+Builder status handoff reviewed: `769c88709a1dd5f3b08daee1fad6b49cd769d0c1`  
 Last implementation update: 2026-09-13  
 Last planning/review update: 2026-09-13
 
 ## Review checkpoint
 
-Last planning/review repository checkpoint inspected: `ecdc691`  
-Current implementation code reviewed: `9e96c45`  
+Last planning/review repository checkpoint inspected: `769c887`  
+Accepted implementation code reviewed: `9e96c45`  
 Previous implementation baseline: `80e6ea9`  
 Fundamental-change review pending: no
 
-Relevant builder commits since the previous implementation review:
+Relevant builder commits in the final review:
 - `9e96c45` — fix(renamer): resolve R-024 preserve ancestor folder class evidence in enrich routing
+- `769c887` — docs(status): record Tool 1 implementation HEAD 9e96c45 and review readiness
 
-Planning/review also inspected the affected parser/service routing code and R-023 regression tests. No finalized build-plan change was made by the builder.
+Planning/review inspected the actual R-024 implementation diff, affected service/routing behavior, regression test, status handoff, and the surrounding R-023 routing behavior. No finalized build-plan change was introduced by the builder.
 
-## Builder-reported verification
+## Final verification evidence
 
 Builder reports:
 - 68 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 0.96s)
@@ -44,7 +47,7 @@ Builder reports:
   - `downstream_split`: 2 (0.8%)
   - `blocked_error`: 0 (0.0%)
 
-Downstream routing counts in the builder report:
+Downstream routing counts in the final builder report:
 - `tool_2_3_media_enrichment`: 151
 - `tool_2_media_database_review`: 80
 - `tool_5_content_discovery`: 80
@@ -56,7 +59,7 @@ Human review reason triggers across the 5 flagged files:
 - `Filename date '2011-12-30' conflicts with folder year '2012'`: 2
 - `Filename date '2011-12-31' conflicts with folder year '2012'`: 1
 
-There is no GitHub CI status configured for commit `9e96c45`; the 68-test result is builder-reported.
+There is no GitHub CI status configured for accepted implementation commit `9e96c45`; the 68-test execution is builder-reported. Planning/review independently inspected the committed implementation and regression-test changes. The representative 260-file sample is not committed to GitHub, so its execution evidence remains the builder-produced sample report/status record.
 
 ## Milestones
 
@@ -72,24 +75,29 @@ There is no GitHub CI status configured for commit `9e96c45`; the 68-test result
 - [x] R-023 generic unresolved WHAT routing corrected in `80e6ea9`
 - [x] R-023 implementation/diff/regression tests reviewed
 - [x] R-024 ancestor-folder class evidence preserved during ENRICH routing recomputation
-- [ ] Final acceptance review completed
-- [ ] Accepted
+- [x] Final acceptance review completed
+- [x] Accepted
 
 ## Resolved review history
 
-R-001 through R-024 are considered resolved unless a later regression reopens them. Their full descriptions remain recoverable from Git history and GitHub issue #1.
+R-001 through R-024 are resolved for the accepted v1 implementation. Their full descriptions remain recoverable from Git history and GitHub issue #1.
 
-R-023 is accepted: generic unresolved WHAT no longer jumps directly to Tool 7. Generic unresolved WHAT routes to Tool 2 / later Tool 5 processing, established Class items may route to Tool 7, and combination items remain routed to Tools 5/6. The corrected sample keeps immediate human review at 5 / 260 files.
+The final review confirmed:
 
-R-024 is resolved: `apply_enrichment()` recomputation now preserves all ancestor folders from `parser_res.context.ancestor_folders` (with fallback to `Path(proposal.original_path).parents`) and passes them into `has_class_evidence()`. Any previously established `tool_7_class_classification` route is preserved when applying later enrichment unless explicit non-class evidence is provided, safeguarding edited files in nested class directories from regressing to Tool 5.
+- generic unresolved WHAT does not jump directly to Tool 7;
+- established Class items can retain Tool 7 routing;
+- combination items remain routed to Tools 5/6;
+- ordinary missing/provisional metadata is downstream work rather than immediate human review;
+- R-024 preserves ancestor-folder Class evidence during ENRICH recomputation, including `_edited` files receiving later Baserow/WHERE enrichment;
+- no new fundamental architecture or archive-policy change was introduced in the final correction.
 
-## Active review finding
+## Active review findings
 
-None (all findings R-001 through R-024 resolved).
+None.
 
 ## Known defects / limitations
 
-None currently known. All findings R-001 through R-024 resolved and verified with 68 passing tests.
+None currently known that block Tool 1 v1 acceptance. Later integration with Tools 2–7 may reveal new interface or regression issues; those should be recorded as new findings rather than rewriting the accepted build plan.
 
 ## Open questions / contradictions
 
@@ -97,7 +105,7 @@ None currently requiring user input.
 
 ## Next milestone
 
-Orchestrator / Planning / Reviewer performs final acceptance review on commit `9e96c45`.
+Tool 1 is accepted. Continue downstream tool implementation and integration. Reopen Tool 1 only for a demonstrated regression, an integration defect, or an explicitly approved new requirement.
 
 ## Progress log
 
@@ -130,11 +138,17 @@ Orchestrator / Planning / Reviewer performs final acceptance review on commit `9
 ### 2026-09-13 — Planning/review inspection of R-023 implementation
 - Inspected actual commit `80e6ea9`, affected parser/service code, sample report changes, and regression tests.
 - Accepted R-023 initial-routing behavior.
-- Found R-024: `apply_enrichment()` recomputation fails to pass stored ancestor folders into `has_class_evidence`, so later unrelated enrichment can weaken an established Class route, including for `_edited` files that depend on Tool 7 while skipping Tools 5/6.
+- Found R-024: ENRICH recomputation failed to preserve ancestor-folder Class evidence.
 - Returned Tool 1 to `CHANGES_REQUESTED` pending the targeted preservation fix.
 
 ### 2026-09-13 — Builder R-024 correction
 - Builder resolved R-024 in `src/media_archive_tooling/renamer/service.py` by propagating `ancestor_folders` to `has_class_evidence()` and preserving prior class routes during ENRICH recomputation.
 - Added regression test `test_enrichment_preserves_ancestor_folder_class_evidence` in `tests/test_routing_and_review_separation.py`.
-- Executed full test suite: 68 tests passing under Python 3.12.14.
-- Implementation committed as `9e96c45` and submitted for review.
+- Reported 68 tests passing under Python 3.12.14.
+- Implementation committed as `9e96c45`; status handoff committed as `769c887`.
+
+### 2026-09-13 — Final acceptance review
+- Planning/review inspected the complete builder diff from `0ae4534` through `769c887`; only the targeted R-024 implementation, regression test, walkthrough/status documentation changed.
+- Verified the R-024 implementation preserves parent/ancestor class evidence, prior Tool 7 routing, and the edited-file workflow without introducing a new archive-policy or architectural change.
+- Confirmed no active R-### findings remain.
+- Accepted Tool 1 v1 at implementation code commit `9e96c45`.
