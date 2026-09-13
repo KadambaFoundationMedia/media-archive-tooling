@@ -16,13 +16,14 @@ Last implementation update: 2026-09-13
 ## Review checkpoint
 
 Last planning/review commit: 65bdffc
-Current implementation HEAD: f9eaf14
+Current implementation HEAD: a67a89b
 Fundamental-change review pending: no
 
 Relevant commits since last review:
 - 24395bb — feat(renamer): implement Tool 1 Renamer, local registry, review portal, and tests
 - d46f0fa — docs(status): update Tool 1 implementation status to READY_FOR_REVIEW
-- f9eaf14 — docs: add Tool 1 implementation walkthrough and update status references
+- f6065b3 — docs: add Tool 1 implementation walkthrough and update status references
+- a67a89b — docs(status): record final implementation HEAD in status file
 
 ## Milestones
 
