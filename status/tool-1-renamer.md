@@ -152,3 +152,8 @@ Tool 1 is accepted. Continue downstream tool implementation and integration. Reo
 - Verified the R-024 implementation preserves parent/ancestor class evidence, prior Tool 7 routing, and the edited-file workflow without introducing a new archive-policy or architectural change.
 - Confirmed no active R-### findings remain.
 - Accepted Tool 1 v1 at implementation code commit `9e96c45`.
+
+### 2026-09-13 — Post-acceptance review convenience
+- Added `scripts/review-tool-1.sh` as a user-facing one-command review helper.
+- The helper synchronizes the current branch when safe, prepares the locked environment, runs a dry-run against `sample-files/` by default, starts the localhost review portal, and opens it in the browser when supported.
+- This is operational convenience only; Tool 1 archive behavior and the accepted build plan are unchanged.

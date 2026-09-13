@@ -65,8 +65,9 @@ On every push to `main`, every pull request, and manual workflow dispatch, CI:
 2. uses Python 3.12;
 3. installs `uv`;
 4. reproduces the locked environment with `uv sync --extra dev --frozen`;
-5. runs the full `pytest` suite;
-6. verifies that the Python package builds successfully with `uv build`.
+5. validates repository shell helper syntax;
+6. runs the full `pytest` suite;
+7. verifies that the Python package builds successfully with `uv build`.
 
 CI deliberately does not use the local `.env` or live Baserow/Vedabase/location credentials. Automated tests must mock external services so repository verification remains deterministic and safe.
 
@@ -97,6 +98,24 @@ Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`.
 Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness.
 
 The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub Actions CI is now operational for subsequent commits; Tool 1's original acceptance remains based on the reviewed implementation/test evidence recorded in its status file.
+
+#### One-command local review
+
+From the repository root, run:
+
+```sh
+./scripts/review-tool-1.sh
+```
+
+The helper safely synchronizes the current branch when possible, prepares the locked Python environment, performs a Tool 1 **dry-run** against `sample-files/`, starts the localhost review portal, and opens `http://127.0.0.1:8000` in the default browser on macOS/Linux when supported. The dry-run does not rename files.
+
+To review another directory instead of `sample-files/`:
+
+```sh
+./scripts/review-tool-1.sh /path/to/media/files
+```
+
+Press `Ctrl-C` in the terminal to stop the local review portal when finished.
 
 ### Tool 2 — Media Database Reviewer
 
