@@ -24,7 +24,7 @@ The Builder implementation was produced from planning checkpoint `f744d4ef92ea71
 
 ## Review checkpoint
 
-Last planning/review commit: pending current status commit  
+Last planning/review commit: current `CHANGES_REQUESTED` status update on PR #19 (see PR branch HEAD)  
 Current implementation HEAD reviewed: `1c33ae254313a4a3be5681ef2426c9a56e386e98`  
 Fundamental-change review pending: yes — live shared-state semantics and automatic-association safety require correction
 
