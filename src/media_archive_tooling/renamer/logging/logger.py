@@ -84,23 +84,24 @@ class RenamerLogger:
 
     def _categorize_proposal(self, p: RenameProposal) -> str:
         pr = p.parser_result
-        # Categorize: correct_automatic, correct_provisional, correctly_unresolved, incorrect_automatic
+        # Categorize objectively based on machine resolution states and review requirements
         if (
             pr.when.state in (ResolutionState.EXACT, ResolutionState.STRONG)
             and pr.what.state in (ResolutionState.EXACT, ResolutionState.STRONG)
             and pr.where.state in (ResolutionState.EXACT, ResolutionState.STRONG)
+            and not p.needs_review
         ):
-            return "correct_automatic"
+            return "automatic_candidate"
         elif (
             pr.when.state == ResolutionState.PROVISIONAL
             or pr.what.state == ResolutionState.PROVISIONAL
             or pr.where.state == ResolutionState.PROVISIONAL
         ):
-            return "correct_provisional"
+            return "provisional_candidate"
         elif (
             pr.when.state == ResolutionState.UNRESOLVED
             and pr.what.state == ResolutionState.UNRESOLVED
         ):
-            return "correctly_unresolved"
+            return "unresolved_candidate"
         else:
-            return "partial_or_review"
+            return "review_candidate"

@@ -1,7 +1,7 @@
 """Technical annotations, tracking ID, and source sequence extraction."""
 import re
 import uuid
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Any
 from ..models import FileMetadata
 
 TRACKING_ID_REGEX = re.compile(r"_ID-([0-9a-fA-F]{8})(?=\.|$)", re.IGNORECASE)
@@ -18,8 +18,8 @@ SOURCE_SEQ_REGEX = re.compile(
 )
 
 
-def extract_or_generate_tracking_id(filename: str) -> Tuple[str, str, bool]:
-    """Find existing _ID-xxxxxxxx or generate a new 8-hex character ID.
+def extract_or_generate_tracking_id(filename: str, registry: Optional[Any] = None) -> Tuple[str, str, bool]:
+    """Find existing _ID-xxxxxxxx or generate a new 8-hex character ID with registry collision check.
     
     Returns:
         (tracking_id, cleaned_filename, was_existing)
@@ -31,7 +31,10 @@ def extract_or_generate_tracking_id(filename: str) -> Tuple[str, str, bool]:
         cleaned = filename[:match.start()] + filename[match.end():]
         return tracking_id, cleaned, True
     else:
-        new_id = uuid.uuid4().hex[:8].lower()
+        while True:
+            new_id = uuid.uuid4().hex[:8].lower()
+            if registry is None or not registry.get_file(new_id):
+                break
         return new_id, filename, False
 
 
@@ -70,7 +73,7 @@ def extract_technical_metadata(filename: str) -> Tuple[str, FileMetadata]:
         working = working[source_match.end():].lstrip(" _-")
         
     # Check combination clues
-    if re.search(r"\b(and|with|&|\+)\b", working, re.IGNORECASE):
+    if re.search(r"\b(and|with|&|\+|plus|followed\s+by)\b", working, re.IGNORECASE):
         metadata.possible_combination = True
         
     return working.strip(), metadata

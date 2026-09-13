@@ -83,3 +83,60 @@ def test_where_resolver_with_online_fallback(location_env):
     assert where_res.state == ResolutionState.PROVISIONAL
     assert any(e.source == "online_location_lookup" for e in where_res.evidence)
 
+
+def test_location_lookup_rate_limiting(location_env):
+    """Verify that LocationLookupProvider enforces min_request_interval."""
+    import time
+    call_times = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_times.append(time.time())
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = LocationLookupProvider(cache_db=location_env, client=client)
+    provider.min_request_interval = 0.1  # Short interval for test
+
+    provider.lookup("LocationOne")
+    provider.lookup("LocationTwo")
+
+    assert len(call_times) == 2
+    assert call_times[1] - call_times[0] >= 0.09
+
+
+def test_where_resolver_near_tie_ambiguity():
+    """Verify near-tie fuzzy candidates produce AMBIGUOUS resolution state with alternatives."""
+    locations = [
+        {"canonical_place": "Springfield-IL", "country": "United States", "country_iso2": "us", "aliases": ["springfielda"]},
+        {"canonical_place": "Springfield-MO", "country": "United States", "country_iso2": "us", "aliases": ["springfieldb"]}
+    ]
+    resolver = WhereResolver(locations_data=locations, countries_data={"United States": "us"})
+    res, _ = resolver.resolve("Lecture in Springfield")
+
+    assert res.state == ResolutionState.AMBIGUOUS
+    assert len(res.alternatives) >= 1
+    assert "Springfield-MO-us" in res.alternatives
+
+
+def test_where_resolver_candidate_filtering_for_online(location_env):
+    """Verify short words and technical/stop words are skipped for online lookups."""
+    queried = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queried.append(str(request.url))
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    loc_provider = LocationLookupProvider(cache_db=location_env, client=client)
+
+    resolver = WhereResolver(
+        locations_data=[],
+        countries_data={},
+        location_lookup_provider=loc_provider
+    )
+
+    # All tokens are stop words ("kks", "part", "lecture", "clean") or short (<4 chars)
+    resolver.resolve("kks part 1 lecture clean 01")
+    assert len(queried) == 0
+
+

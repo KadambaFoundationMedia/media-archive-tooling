@@ -15,10 +15,27 @@ from ...adapters.baserow import BaserowReferenceProvider
 from ...adapters.vedabase import VedabaseValidator
 from ...adapters.location import LocationLookupProvider
 
-MEDIA_EXTENSIONS = {
-    ".mp3", ".wav", ".wma", ".m4a", ".aac", ".flac", ".ogg",
-    ".mp4", ".avi", ".mkv", ".mov", ".mpg", ".wmv"
-}
+IGNORED_FILENAMES = {"thumbs.db", "desktop.ini"}
+IGNORED_EXTENSIONS = {".tmp", ".temp", ".bak", ".swp", ".part", ".crdownload"}
+
+
+def is_ignored_file(filename: Any) -> bool:
+    """Check if a file should be ignored (hidden, system, temp, backup artifacts)."""
+    name = filename.name if isinstance(filename, Path) else str(filename).strip()
+    if not name:
+        return True
+    if name.startswith("."):
+        return True
+    if name.startswith("~$"):
+        return True
+    if name.lower() in IGNORED_FILENAMES:
+        return True
+    suffix = Path(name).suffix.lower()
+    if not suffix:
+        return True
+    if suffix in IGNORED_EXTENSIONS or name.endswith("~"):
+        return True
+    return False
 
 
 class BatchExecutor:
@@ -46,6 +63,7 @@ class BatchExecutor:
             countries_ref=self.provider.get_country_values(),
             vedabase_validator=self.vedabase_validator,
             location_lookup_provider=self.location_provider,
+            registry=self.registry,
         )
         self.planner = RenamePlanner(mode=self.mode)
 
@@ -61,16 +79,16 @@ class BatchExecutor:
         # Walk directory
         for root, dirs, files in os.walk(target_dir):
             root_path = Path(root)
-            # Filter media files
-            media_files = [f for f in files if Path(f).suffix.lower() in MEDIA_EXTENSIONS and not f.startswith(".")]
-            if not media_files:
+            # Filter regular archive files (extension-agnostic, ignoring system/temp artifacts)
+            archive_files = [f for f in files if not is_ignored_file(f)]
+            if not archive_files:
                 continue
 
             # Inferred sibling grammar for this folder
-            grammar = CollectionGrammar(root_path, media_files)
+            grammar = CollectionGrammar(root_path, archive_files)
 
             folder_proposals: List[RenameProposal] = []
-            for filename in media_files:
+            for filename in archive_files:
                 file_path = root_path / filename
                 # Parse
                 parser_res = self.parser.parse_file(

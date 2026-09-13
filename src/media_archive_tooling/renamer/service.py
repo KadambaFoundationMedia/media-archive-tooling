@@ -5,12 +5,15 @@ import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from .models import ParserResult, ResolutionState, Evidence, RenameMode
+from .models import ParserResult, ResolutionState, Evidence, RenameMode, EnrichmentEvidence
 from .registry.registry import LocalRegistry
 from .planner.planner import RenamePlanner
+from .validator import validate_calendar_date, validate_iso2_country, validate_canonical_filename
 from ..common.ascii_latin import to_ascii_latin, sanitize_filename_token
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_REVIEW_ACTIONS = {"approve", "edit", "defer"}
 
 
 class RenamerApplicationService:
@@ -48,6 +51,109 @@ class RenamerApplicationService:
             "current_filter": filter_mode,
         }
 
+    def apply_enrichment(self, evidence: EnrichmentEvidence) -> Dict[str, Any]:
+        """Apply structured later evidence (Tools 2-4, 7, or Baserow) to update file resolution."""
+        record = self.registry.get_file(evidence.tracking_id)
+        if not record:
+            raise ValueError(f"File with tracking_id '{evidence.tracking_id}' not found in registry")
+
+        previous_values = {
+            "when_val": record.get("when_val"),
+            "what_val": record.get("what_val"),
+            "where_val": record.get("where_val"),
+            "proposed_filename": record.get("proposed_filename"),
+            "status": record.get("status"),
+        }
+
+        parser_dict = record["parser_result"]
+        parser_res = ParserResult.model_validate(parser_dict)
+        changes = {}
+
+        source = evidence.source_tool or "enrichment"
+
+        if evidence.when_val is not None:
+            ok, msg = validate_calendar_date(evidence.when_val)
+            if not ok:
+                raise ValueError(msg or "Invalid date in enrichment")
+            parser_res.when.selected_value = evidence.when_val
+            parser_res.when.state = ResolutionState.STRONG if "DD" in evidence.when_val or "MM" in evidence.when_val else ResolutionState.EXACT
+            parser_res.when.evidence.append(Evidence(source=source, raw_value=evidence.when_val, details=evidence.details or "enriched"))
+            changes["when_val"] = evidence.when_val
+
+        if evidence.what_val is not None:
+            what_clean = sanitize_filename_token(to_ascii_latin(evidence.what_val))
+            parser_res.what.selected_value = what_clean
+            parser_res.what.state = ResolutionState.EXACT
+            parser_res.what.evidence.append(Evidence(source=source, raw_value=evidence.what_val, details=evidence.details or "enriched"))
+            changes["what_val"] = what_clean
+
+        if evidence.where_val is not None:
+            where_clean = evidence.where_val.strip()
+            if "-" in where_clean:
+                parts = where_clean.rsplit("-", 1)
+                place, iso = parts[0], parts[1]
+                ok_iso, _ = validate_iso2_country(iso)
+                if ok_iso:
+                    parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(place))
+                    parser_res.where.country_iso2 = iso.lower()
+                else:
+                    parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
+            else:
+                parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
+            parser_res.where.state = ResolutionState.EXACT
+            parser_res.where.evidence.append(Evidence(source=source, raw_value=where_clean, details=evidence.details or "enriched"))
+            changes["where_val"] = where_clean
+
+        if evidence.who_val is not None:
+            parser_res.who = sanitize_filename_token(to_ascii_latin(evidence.who_val))
+            changes["who"] = parser_res.who
+
+        if evidence.baserow_check_complete is not None:
+            parser_res.file_metadata.baserow_check_complete = evidence.baserow_check_complete
+            changes["baserow_check_complete"] = evidence.baserow_check_complete
+
+        if evidence.possible_combination is not None:
+            parser_res.file_metadata.possible_combination = evidence.possible_combination
+            changes["possible_combination"] = evidence.possible_combination
+
+        # Regenerate proposal through planner in ENRICH mode
+        enrich_planner = RenamePlanner(mode=RenameMode.ENRICH)
+        proposal = enrich_planner.plan_rename(parser_res)
+
+        # Clear review reasons that were resolved
+        remaining_reasons = []
+        if parser_res.when.state == ResolutionState.UNRESOLVED:
+            remaining_reasons.append("WHEN is unresolved")
+        if parser_res.what.state == ResolutionState.UNRESOLVED:
+            remaining_reasons.append("WHAT is unresolved")
+        if parser_res.where.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL, ResolutionState.AMBIGUOUS):
+            remaining_reasons.append(f"WHERE is {parser_res.where.state.value}")
+        if parser_res.file_metadata.possible_combination:
+            remaining_reasons.append("File has combination clue (possible multiple recordings)")
+        parser_res.review_reasons = remaining_reasons
+
+        self.registry.update_file_review(
+            tracking_id=evidence.tracking_id,
+            when_val=parser_res.when.selected_value,
+            what_val=parser_res.what.selected_value or "",
+            where_val=f"{parser_res.where.place_location or ''}-{parser_res.where.country_iso2 or ''}".strip("-"),
+            proposed_filename=proposal.proposed_filename,
+            status="enriched",
+            needs_review=bool(remaining_reasons),
+            review_reasons=remaining_reasons,
+            parser_result_json=parser_res.model_dump_json(),
+        )
+
+        self.registry.record_review_action(
+            tracking_id=evidence.tracking_id,
+            action="enrich",
+            reviewer=source,
+            changes=changes,
+            previous_values=previous_values,
+        )
+
+        return self.registry.get_file(evidence.tracking_id)
+
     def apply_review_action(
         self,
         tracking_id: str,
@@ -59,6 +165,9 @@ class RenamerApplicationService:
         reviewer: str = "human",
     ) -> Dict[str, Any]:
         """Validate review corrections, record audit history, regenerate proposal, and update registry."""
+        if action not in ALLOWED_REVIEW_ACTIONS:
+            raise ValueError(f"Invalid review action '{action}'. Must be one of {sorted(ALLOWED_REVIEW_ACTIONS)}")
+
         record = self.registry.get_file(tracking_id)
         if not record:
             raise ValueError(f"File with tracking_id '{tracking_id}' not found in registry")
@@ -83,9 +192,9 @@ class RenamerApplicationService:
         # 1. Validate & update WHEN
         if when_val is not None and when_val.strip() and when_val.strip() != record.get("when_val"):
             w_clean = when_val.strip()
-            # Validate format: YYYY-MM-DD or partials
-            if not re.match(r"^(?:199[3-9]|20[0-2]\d|YYYY)-(?:0[1-9]|1[0-2]|MM)-(?:0[1-9]|[12]\d|3[01]|DD)$", w_clean):
-                raise ValueError(f"Invalid date format '{w_clean}'. Must be YYYY-MM-DD or explicit partials.")
+            ok, msg = validate_calendar_date(w_clean)
+            if not ok:
+                raise ValueError(msg or f"Invalid date '{w_clean}'")
             parser_res.when.selected_value = w_clean
             parser_res.when.state = ResolutionState.EXACT if "DD" not in w_clean and "MM" not in w_clean else ResolutionState.STRONG
             parser_res.when.evidence.append(Evidence(source="human_review", raw_value=w_clean, details=f"corrected by {reviewer}"))
@@ -105,11 +214,11 @@ class RenamerApplicationService:
             if "-" in where_clean:
                 parts = where_clean.rsplit("-", 1)
                 place, iso = parts[0], parts[1]
-                if len(iso) == 2 and iso.isalpha():
-                    parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(place))
-                    parser_res.where.country_iso2 = iso.lower()
-                else:
-                    parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
+                ok_iso, msg_iso = validate_iso2_country(iso)
+                if not ok_iso:
+                    raise ValueError(msg_iso or f"Invalid country ISO2 code '{iso}'")
+                parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(place))
+                parser_res.where.country_iso2 = iso.lower()
             else:
                 parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
 
@@ -124,14 +233,10 @@ class RenamerApplicationService:
         # If human gave a custom proposed filename, validate it
         if custom_proposed_filename and custom_proposed_filename.strip():
             cpf = custom_proposed_filename.strip()
-            # Ensure valid extension and tracking ID
-            ext = parser_res.identity.extension.lower()
-            if not cpf.lower().endswith(ext):
-                cpf = f"{cpf}{ext}"
-            if f"_ID-{tracking_id}" not in cpf and self.planner.mode != RenameMode.FINALIZE:
-                # Retain tracking ID
-                p_stem = Path(cpf).stem
-                cpf = f"{p_stem}_ID-{tracking_id}{ext}"
+            # Strict shared validator check
+            ok_cpf, errors = validate_canonical_filename(cpf, mode=self.planner.mode, tracking_id=tracking_id)
+            if not ok_cpf:
+                raise ValueError("; ".join(errors))
             final_proposed = cpf
             changes["custom_proposed_filename"] = cpf
 
@@ -157,7 +262,7 @@ class RenamerApplicationService:
         self.registry.update_file_review(
             tracking_id=tracking_id,
             when_val=parser_res.when.selected_value,
-            what_val=parser_res.what.selected_value,
+            what_val=parser_res.what.selected_value or "",
             where_val=f"{parser_res.where.place_location or ''}-{parser_res.where.country_iso2 or ''}".strip("-"),
             proposed_filename=final_proposed,
             status=new_status,

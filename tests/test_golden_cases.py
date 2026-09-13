@@ -49,7 +49,8 @@ def test_golden_case_3(parser_and_planner):
     assert res.where.place_location == "Villa-Vrindavan"
     assert res.where.country_iso2 == "it"
     assert res.file_metadata.possible_combination is True
-    assert prop.proposed_filename.startswith("2011-05-24_KKS_Jaya-Radha-Madhava_Villa-Vrindavan-it")
+    # R-013: Unsplit combination candidate must retain useful source stem plus tracking ID
+    assert prop.proposed_filename == f"JRM and class 24/5/11 villa vrindavan_ID-{res.identity.tracking_id}.mp3"
 
 
 def test_golden_case_4_recorder_unresolved(parser_and_planner):
@@ -71,6 +72,7 @@ def test_golden_case_5_edited(parser_and_planner):
 
     assert res.when.selected_value == "2012-05-13"
     assert res.file_metadata.edited is True
+    assert res.what.selected_value == "BG-8-19-Sundayfeast"
     assert res.where.place_location == "Sydney"
     assert res.where.country_iso2 == "au"
     # Prior to Baserow check, _edited MUST be preserved
@@ -80,7 +82,7 @@ def test_golden_case_5_edited(parser_and_planner):
     res.file_metadata.baserow_check_complete = True
     prop_after = planner.plan_rename(res)
     assert "_edited" not in prop_after.proposed_filename
-    assert prop_after.proposed_filename.startswith("2012-05-13_KKS_BG-8-19_Sydney-au_ID-")
+    assert prop_after.proposed_filename.startswith("2012-05-13_KKS_BG-8-19-Sundayfeast_Sydney-au_ID-")
 
 
 def test_unresolved_what_does_not_fabricate_recording(parser_and_planner):
@@ -132,8 +134,11 @@ def test_golden_case_prague_collection(parser_and_planner):
     assert res3.file_metadata.source_sequence_id == "A022F"
     assert res3.when.selected_value == "2003-10-25"
     assert res3.what.selected_value == "SB-4-9-11"
-    assert res3.where.place_location == "Praha"
-    assert prop3.proposed_filename.startswith("2003-10-25_KKS_SB-4-9-11_Praha-cz")
+    # R-014: Direct filename evidence 'Farma KD' outranks folder context 'Praha' -> Krsna-Dvur-cz
+    assert res3.where.place_location == "Krsna-Dvur"
+    assert res3.where.country_iso2 == "cz"
+    assert prop3.proposed_filename.startswith("2003-10-25_KKS_SB-4-9-11_Krsna-Dvur-cz")
+    assert "Nezkracena" in res3.unclassified_text
 
 
 def test_golden_case_duben_2008_folder_grammar(parser_and_planner):

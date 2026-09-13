@@ -177,7 +177,7 @@ def parse_when(
                     if us_context:
                         selected = next((c for c, f in candidates if f == "M-D-Y"), candidates[0][0])
                     else:
-                        selected = candidates[0][0]
+                        selected = next((c for c, f in candidates if f == "D-M-Y"), candidates[0][0])
                     alternatives = [c for c, _ in candidates if c != selected]
                     
                 return WhenResult(

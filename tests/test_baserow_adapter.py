@@ -98,7 +98,7 @@ def test_baserow_guarded_write_missing_prerequisites():
 
 
 def test_baserow_guarded_write_success():
-    """Verify successful write creates row in Baserow and updates local snapshot."""
+    """Verify successful write creates row in dedicated location table and updates local snapshot."""
     created_payloads = []
 
     def custom_handler(request: httpx.Request) -> httpx.Response:
@@ -112,7 +112,8 @@ def test_baserow_guarded_write_success():
 
     provider = BaserowReferenceProvider(
         api_token="dummy-token",
-        media_table_id="200"
+        media_table_id="200",
+        location_table_id="300"
     )
     provider.load_all_references()
 
@@ -129,4 +130,48 @@ def test_baserow_guarded_write_success():
     found = provider.find_place("Munich")
     assert found is not None
     assert found["country_iso2"] == "de"
+
+
+def test_baserow_refuses_orphan_media_row_without_location_table():
+    """Verify that provider strictly refuses to create orphan/reference rows in media table."""
+    provider = BaserowReferenceProvider(
+        api_token="dummy-token",
+        media_table_id="200"
+        # Notice: location_table_id is None
+    )
+    provider.load_all_references()
+
+    success, err = provider.create_missing_reference_value("Munich", "Germany")
+    assert success is False
+    assert "no dedicated location table configured" in err
+
+
+def test_baserow_live_over_cache_precedence():
+    """Verify live Baserow reference data overrides static seed assets."""
+    # Suppose live Baserow defines Vrindavan as Country="India", but with a special canonical variation
+    page_live = {
+        "count": 1,
+        "next": None,
+        "results": [
+            {"place_location": "Vrindavan Dham", "Country": "India"}
+        ]
+    }
+
+    def custom_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=page_live)
+
+    mock_client = httpx.Client(transport=httpx.MockTransport(custom_handler))
+
+    provider = BaserowReferenceProvider(
+        api_token="dummy-token",
+        media_table_id="200"
+    )
+    with patch("httpx.Client", return_value=mock_client):
+        provider.load_all_references()
+
+    # Live data loaded
+    loc = provider.find_place("Vrindavan Dham")
+    assert loc is not None
+    assert loc["canonical_place"] == "Vrindavan Dham"
+
 

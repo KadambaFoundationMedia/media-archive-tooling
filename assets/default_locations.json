@@ -100,5 +100,23 @@
     "country": "United Kingdom",
     "country_iso2": "gb",
     "aliases": ["london"]
+  },
+  {
+    "canonical_place": "Krsna-Dvur",
+    "country": "Czech Republic",
+    "country_iso2": "cz",
+    "aliases": ["farma kd", "farma-kd", "krsna dvur", "krsnuv dvur", "krisnuv dvur", "krishna dvur"]
+  },
+  {
+    "canonical_place": "Alachua",
+    "country": "United States",
+    "country_iso2": "us",
+    "aliases": ["alachua"]
+  },
+  {
+    "canonical_place": "New-York",
+    "country": "United States",
+    "country_iso2": "us",
+    "aliases": ["new york", "new-york", "nyc"]
   }
 ]

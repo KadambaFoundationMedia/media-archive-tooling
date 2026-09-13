@@ -23,10 +23,12 @@ class RenamerParser:
         countries_ref: Optional[Dict[str, str]] = None,
         vedabase_validator: Optional[Any] = None,
         location_lookup_provider: Optional[Any] = None,
+        registry: Optional[Any] = None,
     ):
         self.categories_ref = categories_ref
         self.vedabase_validator = vedabase_validator
         self.location_lookup_provider = location_lookup_provider
+        self.registry = registry
         self.where_resolver = WhereResolver(
             locations_data=locations_ref,
             countries_data=countries_ref,
@@ -47,8 +49,8 @@ class RenamerParser:
         parent_folder = file_path.parent.name
         ancestor_folders = [p.name for p in file_path.parents if p.name and p != file_path.parent]
 
-        # 1. Identity & Tracking ID
-        tracking_id, working_name, _ = extract_or_generate_tracking_id(filename)
+        # 1. Identity & Tracking ID with registry collision check
+        tracking_id, working_name, _ = extract_or_generate_tracking_id(filename, registry=self.registry)
         # Remove extension from working name
         if working_name.lower().endswith(ext):
             stem = working_name[:-len(ext)] if ext else working_name
@@ -66,11 +68,20 @@ class RenamerParser:
                 file_metadata.source_sequence_id = seq_match.group(1)
                 working_stem = working_stem.strip()[seq_match.end():].lstrip(" _-")
 
+        # Derive lightweight location context before ambiguous-date selection
+        prelim_where, _ = self.where_resolver.resolve(
+            working_stem,
+            parent_folder=parent_folder,
+            ancestor_folders=ancestor_folders
+        )
+        us_context = (prelim_where.country_iso2 == "us")
+
         # 4. Resolve WHEN
         when_res, remaining_after_when = parse_when(
             working_stem,
             parent_folder=parent_folder,
             ancestors=ancestor_folders,
+            us_context=us_context,
             collection_grammar=collection_grammar,
         )
 
@@ -104,6 +115,17 @@ class RenamerParser:
             conflicts.append(what_conflict)
             review_reasons.append(what_conflict)
 
+        # Check filename-vs-folder date conflict
+        folder_text = " ".join([parent_folder] + ancestor_folders).lower()
+        folder_yr_match = re.search(r"\b(199[3-9]|20[01]\d|202[0-3])\b", folder_text)
+        if folder_yr_match and when_res.selected_value != "YYYY-MM-DD":
+            f_yr = folder_yr_match.group(1)
+            if not when_res.selected_value.startswith(f_yr) and "YYYY" not in when_res.selected_value:
+                date_conflict = f"Filename date '{when_res.selected_value}' conflicts with folder year '{f_yr}'"
+                when_res.conflicts.append(date_conflict)
+                conflicts.append(date_conflict)
+                review_reasons.append(date_conflict)
+
         if when_res.state in (ResolutionState.AMBIGUOUS, ResolutionState.PROVISIONAL):
             review_reasons.append(f"WHEN resolution is {when_res.state.value} ({when_res.selected_value})")
         elif when_res.state == ResolutionState.UNRESOLVED:
@@ -112,7 +134,9 @@ class RenamerParser:
         if what_res.state == ResolutionState.UNRESOLVED:
             review_reasons.append("WHAT is unresolved")
 
-        if where_res.state == ResolutionState.UNRESOLVED:
+        if where_res.state in (ResolutionState.PROVISIONAL, ResolutionState.AMBIGUOUS):
+            review_reasons.append(f"WHERE resolution is {where_res.state.value} ({where_res.place_location}-{where_res.country_iso2 or ''})")
+        elif where_res.state == ResolutionState.UNRESOLVED:
             review_reasons.append("WHERE is unresolved")
 
         if file_metadata.corrupted:

@@ -30,6 +30,7 @@ class WhenResult(BaseModel):
     precision: str = "unknown"  # "day", "month", "year", "none"
     state: ResolutionState = ResolutionState.UNRESOLVED
     alternatives: List[str] = Field(default_factory=list)
+    conflicts: List[str] = Field(default_factory=list)
     evidence: List[Evidence] = Field(default_factory=list)
 
 
@@ -37,6 +38,7 @@ class WhatResult(BaseModel):
     selected_value: Optional[str] = None  # e.g. "SB-1-4-5", "Kirtan", "Jaya-Radha-Madhava"
     category: Optional[str] = None  # Broad category e.g. "Srimad Bhagavatam", "Kirtan"
     state: ResolutionState = ResolutionState.UNRESOLVED
+    candidates: List[str] = Field(default_factory=list)
     evidence: List[Evidence] = Field(default_factory=list)
 
 
@@ -57,6 +59,19 @@ class FileMetadata(BaseModel):
     part_or_track_number: Optional[str] = None  # e.g. "01", "07", "part-1"
     possible_combination: bool = False
     other_annotations: List[str] = Field(default_factory=list)
+
+
+class EnrichmentEvidence(BaseModel):
+    tracking_id: str
+    when_val: Optional[str] = None
+    what_val: Optional[str] = None
+    where_val: Optional[str] = None
+    who_val: Optional[str] = None
+    baserow_check_complete: Optional[bool] = None
+    possible_combination: Optional[bool] = None
+    source_tool: Optional[str] = None
+    confidence: Optional[str] = None
+    details: Optional[str] = None
 
 
 class Identity(BaseModel):

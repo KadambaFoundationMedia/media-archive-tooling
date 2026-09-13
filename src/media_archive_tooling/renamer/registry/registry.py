@@ -251,3 +251,23 @@ class LocalRegistry:
             ))
             conn.commit()
 
+    def get_review_actions(self, tracking_id: str) -> List[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM review_actions WHERE tracking_id = ? ORDER BY id ASC",
+                (tracking_id,)
+            )
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["changes"] = json.loads(d["changes_json"])
+                d["previous_values"] = json.loads(d["previous_values_json"])
+                results.append(d)
+            return results
+
+    def get_history(self, tracking_id: str) -> List[Dict[str, Any]]:
+        return self.get_review_actions(tracking_id)
+
+

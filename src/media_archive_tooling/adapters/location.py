@@ -19,9 +19,11 @@ class LocationLookupProvider:
     ):
         self.cache_db = cache_db
         self.cache_db.parent.mkdir(parents=True, exist_ok=True)
+        self.provider_url = provider_url
         self._custom_client = client
         self._transport = transport
-        self.provider_url = provider_url
+        self._last_request_time: float = 0.0
+        self.min_request_interval: float = 1.0
         self._init_cache()
 
     def _init_cache(self):
@@ -68,7 +70,12 @@ class LocationLookupProvider:
                         # Cached negative result
                         return None
 
-        # 2. Query online provider
+        # 2. Rate limit online provider
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+        self._last_request_time = time.time()
+
         params = {
             "q": query.strip(),
             "format": "json",
