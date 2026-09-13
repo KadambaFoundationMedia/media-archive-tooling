@@ -35,144 +35,43 @@
             --shadow: rgba(0, 0, 0, 0.32);
         }
         * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 24px;
-            transition: background-color .15s ease, color .15s ease;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 20px;
-            border-bottom: 2px solid var(--border-color);
-            padding-bottom: 16px;
-            margin-bottom: 24px;
-        }
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 24px; transition: background-color .15s ease, color .15s ease; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; border-bottom: 2px solid var(--border-color); padding-bottom: 16px; margin-bottom: 24px; }
+        .header-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
         h1 { margin: 0; font-size: 24px; }
         .subtitle { color: var(--muted-color); font-size: 14px; margin-top: 4px; }
         .online { font-size: 13px; color: #16a34a; font-weight: 600; white-space: nowrap; }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 16px 20px;
-            box-shadow: 0 1px 3px var(--shadow);
-        }
+        .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px var(--shadow); }
         .stat-val { font-size: 28px; font-weight: bold; }
         .stat-lbl { font-size: 13px; color: var(--muted-color); text-transform: uppercase; }
-        .controls {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 10px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .batch-bar {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            padding: 10px 12px;
-            margin-bottom: 16px;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            background: var(--card-bg);
-        }
-        .selection-status {
-            margin-left: auto;
-            color: var(--muted-color);
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .batch-note {
-            color: var(--muted-color);
-            font-size: 12px;
-        }
-        .btn {
-            padding: 8px 16px;
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-            background: var(--card-bg);
-            cursor: pointer;
-            text-decoration: none;
-            color: var(--text-color);
-            font-weight: 500;
-        }
+        .controls { display: flex; gap: 12px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+        .batch-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); }
+        .selection-status { margin-left: auto; color: var(--muted-color); font-size: 13px; font-weight: 600; }
+        .batch-note { color: var(--muted-color); font-size: 12px; }
+        .feedback { padding: 10px 12px; margin-bottom: 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--card-bg); font-size: 13px; }
+        .feedback-success { border-color: #16a34a; }
+        .feedback-error { border-color: #dc2626; }
+        .btn { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--card-bg); cursor: pointer; text-decoration: none; color: var(--text-color); font-weight: 500; }
         .btn:hover { border-color: var(--primary); }
         .btn-primary { background: var(--primary); color: white; border: none; }
         .btn-primary:hover { background: var(--primary-hover); }
+        .btn-success { background: #16a34a; color: white; border-color: #16a34a; }
+        .btn-success:hover { background: #15803d; border-color: #15803d; }
         .btn.active { background: var(--header-bg); font-weight: bold; }
         .btn:disabled { opacity: .45; cursor: not-allowed; border-color: var(--border-color); }
         .theme-btn { min-width: 104px; }
-        table {
-            width: 100%;
-            min-width: 1450px;
-            border-collapse: separate;
-            border-spacing: 0;
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            box-shadow: 0 1px 3px var(--shadow);
-        }
-        th, td {
-            padding: 12px 14px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 14px;
-            vertical-align: top;
-        }
-        thead th {
-            position: sticky;
-            top: 0;
-            z-index: 5;
-            background: var(--header-bg);
-            font-weight: 600;
-            color: var(--muted-color);
-            box-shadow: 0 1px 0 var(--border-color);
-        }
+        table { width: 100%; min-width: 1450px; border-collapse: separate; border-spacing: 0; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 1px 3px var(--shadow); }
+        th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 14px; vertical-align: top; }
+        thead th { position: sticky; top: 0; z-index: 5; background: var(--header-bg); font-weight: 600; color: var(--muted-color); box-shadow: 0 1px 0 var(--border-color); }
         tbody tr:hover { background: var(--row-hover); }
         tbody tr:last-child td { border-bottom: none; }
         .select-col { width: 42px; text-align: center; }
         .select-col input { width: 16px; height: 16px; cursor: pointer; }
-        .filename-box {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 13px;
-            overflow-wrap: anywhere;
-        }
+        .filename-box { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
         .filename-new { font-weight: 650; }
-        .path-box {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 12px;
-            color: var(--muted-color);
-            overflow-wrap: anywhere;
-            max-width: 280px;
-        }
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 9999px;
-            font-size: 11px;
-            font-weight: 600;
-            color: white;
-            text-transform: uppercase;
-        }
+        .path-box { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: var(--muted-color); overflow-wrap: anywhere; max-width: 280px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; color: white; text-transform: uppercase; }
         .badge-exact { background: var(--exact); }
         .badge-strong { background: var(--strong); }
         .badge-provisional { background: var(--provisional); }
@@ -180,13 +79,7 @@
         .badge-unresolved { background: var(--unresolved); }
         .status-review { font-size: 11px; color: var(--provisional); font-weight: bold; margin-top: 3px; }
         .field-value { font-size: 13px; margin-top: 3px; overflow-wrap: anywhere; }
-        @media (max-width: 900px) {
-            body { padding: 14px; }
-            .stats { grid-template-columns: 1fr; }
-            .header { flex-direction: column; }
-            .header-actions { justify-content: flex-start; }
-            .selection-status { margin-left: 0; width: 100%; }
-        }
+        @media (max-width: 900px) { body { padding: 14px; } .stats { grid-template-columns: 1fr; } .header { flex-direction: column; } .header-actions { justify-content: flex-start; } .selection-status { margin-left: 0; width: 100%; } }
     </style>
 </head>
 <body>
@@ -202,18 +95,9 @@
     </div>
 
     <div class="stats">
-        <div class="stat-card">
-            <div class="stat-val">{{ total_count }}</div>
-            <div class="stat-lbl">Total Tracked Files</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-val" style="color: #d97706;">{{ review_count }}</div>
-            <div class="stat-lbl">Requires Human Review</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-val" style="color: #16a34a;">{{ committed_count }}</div>
-            <div class="stat-lbl">Committed Renames</div>
-        </div>
+        <div class="stat-card"><div class="stat-val">{{ total_count }}</div><div class="stat-lbl">Total Tracked Files</div></div>
+        <div class="stat-card"><div class="stat-val" style="color: #d97706;">{{ review_count }}</div><div class="stat-lbl">Requires Human Review</div></div>
+        <div class="stat-card"><div class="stat-val" style="color: #16a34a;">{{ committed_count }}</div><div class="stat-lbl">Committed Renames</div></div>
     </div>
 
     <div class="controls">
@@ -222,72 +106,37 @@
         <a href="/?filter=committed" class="btn {% if current_filter == 'committed' %}active{% endif %}">Committed</a>
     </div>
 
+    {% if batch_message %}<div class="feedback feedback-success">{{ batch_message }}</div>{% endif %}
+    {% if batch_error %}<div class="feedback feedback-error">{{ batch_error }}</div>{% endif %}
+
     <form id="batch-form" method="post" action="/batch/update" class="batch-bar">
         <input type="hidden" name="filter" value="{{ current_filter }}">
         <button id="batch-approve" class="btn btn-primary" type="submit" name="action" value="approve" disabled>Approve selected</button>
         <button id="batch-defer" class="btn" type="submit" name="action" value="defer" disabled>Defer selected</button>
+        <button id="batch-commit" class="btn btn-success" type="submit" name="action" value="commit" disabled>Commit selected</button>
+        <button id="batch-approve-commit" class="btn btn-success" type="submit" name="action" value="approve_commit" disabled>Approve + commit selected</button>
         <button id="clear-selection" class="btn" type="button" disabled>Clear selection</button>
-        <span class="batch-note">Batch actions only apply to files currently requiring human review. They do not rename files.</span>
+        <span class="batch-note">Approve accepts the current proposal and clears its warning without touching the file. Commit performs the filesystem rename and is only available after review blockers are resolved.</span>
         <span class="selection-status" id="selection-status">0 selected</span>
     </form>
 
     <table>
-        <thead>
-            <tr>
-                <th class="select-col"><input id="select-all" type="checkbox" aria-label="Select all visible files"></th>
-                <th>Original filename</th>
-                <th>Proposed filename</th>
-                <th>Path</th>
-                <th>WHEN</th>
-                <th>WHAT</th>
-                <th>WHERE</th>
-                <th>Status</th>
-                <th>Action</th>
-            </tr>
-        </thead>
+        <thead><tr><th class="select-col"><input id="select-all" type="checkbox" aria-label="Select all visible files"></th><th>Original filename</th><th>Proposed filename</th><th>Path</th><th>WHEN</th><th>WHAT</th><th>WHERE</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>
             {% for f in files %}
             <tr>
-                <td class="select-col">
-                    <input class="row-select" type="checkbox" name="tracking_ids" value="{{ f.tracking_id }}" form="batch-form" data-needs-review="{{ 'true' if f.needs_review else 'false' }}" aria-label="Select {{ f.original_filename }}">
-                </td>
-                <td>
-                    <div class="filename-box">{{ f.original_filename }}</div>
-                </td>
-                <td>
-                    <div class="filename-box filename-new">{{ f.display_proposed_filename }}</div>
-                </td>
-                <td>
-                    <div class="path-box">{{ f.display_path }}</div>
-                </td>
-                <td>
-                    <span class="badge badge-{{ f.parser_result.when.state }}">{{ f.parser_result.when.state }}</span>
-                    <div class="field-value">{{ f.when_val }}</div>
-                </td>
-                <td>
-                    <span class="badge badge-{{ f.parser_result.what.state }}">{{ f.parser_result.what.state }}</span>
-                    <div class="field-value">{{ f.what_val or "—" }}</div>
-                </td>
-                <td>
-                    <span class="badge badge-{{ f.parser_result.where.state }}">{{ f.parser_result.where.state }}</span>
-                    <div class="field-value">{{ f.where_val or "—" }}</div>
-                </td>
-                <td>
-                    <span style="font-weight: 500;">{{ f.status }}</span>
-                    {% if f.needs_review %}
-                        <div class="status-review">NEEDS REVIEW</div>
-                    {% endif %}
-                </td>
-                <td>
-                    <a href="/file/{{ f.tracking_id }}" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px; white-space: nowrap;">Inspect / Review</a>
-                </td>
+                <td class="select-col"><input class="row-select" type="checkbox" name="tracking_ids" value="{{ f.tracking_id }}" form="batch-form" data-needs-review="{{ 'true' if f.needs_review else 'false' }}" data-status="{{ f.status }}" aria-label="Select {{ f.original_filename }}"></td>
+                <td><div class="filename-box">{{ f.original_filename }}</div></td>
+                <td><div class="filename-box filename-new">{{ f.display_proposed_filename }}</div></td>
+                <td><div class="path-box">{{ f.display_path }}</div></td>
+                <td><span class="badge badge-{{ f.parser_result.when.state }}">{{ f.parser_result.when.state }}</span><div class="field-value">{{ f.when_val }}</div></td>
+                <td><span class="badge badge-{{ f.parser_result.what.state }}">{{ f.parser_result.what.state }}</span><div class="field-value">{{ f.what_val or "—" }}</div></td>
+                <td><span class="badge badge-{{ f.parser_result.where.state }}">{{ f.parser_result.where.state }}</span><div class="field-value">{{ f.where_val or "—" }}</div></td>
+                <td><span style="font-weight: 500;">{{ f.status }}</span>{% if f.needs_review %}<div class="status-review">NEEDS REVIEW</div>{% endif %}</td>
+                <td><a href="/file/{{ f.tracking_id }}" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px; white-space: nowrap;">Inspect / Review</a></td>
             </tr>
             {% else %}
-            <tr>
-                <td colspan="9" style="text-align: center; padding: 32px; color: var(--muted-color);">
-                    No files found in this review registry. Run <code>./scripts/review-tool-1.sh</code> to scan files into the review portal.
-                </td>
-            </tr>
+            <tr><td colspan="9" style="text-align: center; padding: 32px; color: var(--muted-color);">No files found in this review registry. Run <code>./scripts/review-tool-1.sh</code> to scan files into the review portal.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -298,17 +147,10 @@
             const themeButton = document.getElementById('theme-toggle');
             const storedTheme = localStorage.getItem('media-archive-theme');
             const initialTheme = storedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-
             function applyTheme(theme) {
-                if (theme === 'dark') {
-                    body.setAttribute('data-theme', 'dark');
-                    themeButton.textContent = 'Light mode';
-                } else {
-                    body.removeAttribute('data-theme');
-                    themeButton.textContent = 'Dark mode';
-                }
+                if (theme === 'dark') { body.setAttribute('data-theme', 'dark'); themeButton.textContent = 'Light mode'; }
+                else { body.removeAttribute('data-theme'); themeButton.textContent = 'Dark mode'; }
             }
-
             applyTheme(initialTheme);
             themeButton.addEventListener('click', function () {
                 const next = body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
@@ -321,6 +163,8 @@
             const selectionStatus = document.getElementById('selection-status');
             const approveButton = document.getElementById('batch-approve');
             const deferButton = document.getElementById('batch-defer');
+            const commitButton = document.getElementById('batch-commit');
+            const approveCommitButton = document.getElementById('batch-approve-commit');
             const clearButton = document.getElementById('clear-selection');
             const batchForm = document.getElementById('batch-form');
 
@@ -328,40 +172,29 @@
                 const selectedRows = rows.filter(cb => cb.checked);
                 const selected = selectedRows.length;
                 const allReviewRows = selected > 0 && selectedRows.every(cb => cb.dataset.needsReview === 'true');
-
-                selectionStatus.textContent = allReviewRows || selected === 0
-                    ? `${selected} selected`
-                    : `${selected} selected — batch actions require review rows only`;
-
+                const allCommitReady = selected > 0 && selectedRows.every(cb => cb.dataset.needsReview === 'false' && cb.dataset.status !== 'committed' && cb.dataset.status !== 'deferred');
+                selectionStatus.textContent = (selected === 0 || allReviewRows || allCommitReady) ? `${selected} selected` : `${selected} selected — choose rows with the same review state for a batch action`;
                 approveButton.disabled = !allReviewRows;
                 deferButton.disabled = !allReviewRows;
+                approveCommitButton.disabled = !allReviewRows;
+                commitButton.disabled = !allCommitReady;
                 clearButton.disabled = selected === 0;
-
-                if (selectAll) {
-                    selectAll.checked = rows.length > 0 && selected === rows.length;
-                    selectAll.indeterminate = selected > 0 && selected < rows.length;
-                }
+                if (selectAll) { selectAll.checked = rows.length > 0 && selected === rows.length; selectAll.indeterminate = selected > 0 && selected < rows.length; }
             }
 
-            if (selectAll) {
-                selectAll.addEventListener('change', function () {
-                    rows.forEach(cb => { cb.checked = selectAll.checked; });
-                    updateSelectionStatus();
-                });
-            }
-
-            clearButton.addEventListener('click', function () {
-                rows.forEach(cb => { cb.checked = false; });
-                if (selectAll) selectAll.checked = false;
-                updateSelectionStatus();
-            });
+            if (selectAll) selectAll.addEventListener('change', function () { rows.forEach(cb => { cb.checked = selectAll.checked; }); updateSelectionStatus(); });
+            clearButton.addEventListener('click', function () { rows.forEach(cb => { cb.checked = false; }); if (selectAll) selectAll.checked = false; updateSelectionStatus(); });
 
             batchForm.addEventListener('submit', function (event) {
                 const selected = rows.filter(cb => cb.checked).length;
-                if (event.submitter && event.submitter.value === 'approve') {
-                    const ok = window.confirm(`Approve ${selected} selected file${selected === 1 ? '' : 's'}? This clears their human-review flag but does not rename files.`);
-                    if (!ok) event.preventDefault();
-                }
+                if (!event.submitter) return;
+                const action = event.submitter.value;
+                let message = null;
+                if (action === 'approve') message = `Approve ${selected} selected file${selected === 1 ? '' : 's'}? This accepts the current proposal and clears the human-review warning. No files will be renamed.`;
+                if (action === 'defer') message = `Defer ${selected} selected file${selected === 1 ? '' : 's'}? They will remain in the human-review queue. No files will be renamed.`;
+                if (action === 'commit') message = `Commit ${selected} selected file${selected === 1 ? '' : 's'}? This WILL rename the files on disk to their stored proposed filenames.`;
+                if (action === 'approve_commit') message = `Approve and commit ${selected} selected file${selected === 1 ? '' : 's'}? This WILL clear their review warnings and immediately rename the files on disk.`;
+                if (message && !window.confirm(message)) event.preventDefault();
             });
 
             rows.forEach(cb => cb.addEventListener('change', updateSelectionStatus));
