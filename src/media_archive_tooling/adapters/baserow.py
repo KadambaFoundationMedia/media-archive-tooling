@@ -15,6 +15,52 @@ DEFAULT_LOCATIONS_PATH = ASSETS_DIR / "default_locations.json"
 COUNTRIES_PATH = ASSETS_DIR / "country_codes.json"
 
 
+def _baserow_text_values(value: Any) -> List[str]:
+    """Normalize Baserow scalar/select/link values into plain text values.
+
+    With ``user_field_names=true`` Baserow can return plain strings, select objects
+    such as ``{"id": 1, "value": "Germany"}``, or linked-row lists such as
+    ``[{"id": 2, "value": "Leipzig"}]``. Archive parsing must never pass those
+    container objects to string-normalization functions.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, dict):
+        for key in ("value", "name", "title", "label"):
+            if key in value:
+                values = _baserow_text_values(value.get(key))
+                if values:
+                    return values
+        return []
+    if isinstance(value, (list, tuple)):
+        values: List[str] = []
+        for item in value:
+            for text in _baserow_text_values(item):
+                if text not in values:
+                    values.append(text)
+        return values
+    return []
+
+
+def _baserow_single_text(value: Any) -> str:
+    """Return one unambiguous semantic value, otherwise an empty string."""
+    values = _baserow_text_values(value)
+    return values[0] if len(values) == 1 else ""
+
+
+def _row_value(row: Dict[str, Any], *field_names: str) -> Any:
+    """Return the first present, non-empty raw Baserow field value."""
+    for name in field_names:
+        if name in row and row[name] not in (None, "", []):
+            return row[name]
+    return None
+
+
 class BaserowReferenceProvider:
     """Provides reference metadata (categories, places, countries) from Baserow or local cache."""
 
@@ -118,20 +164,19 @@ class BaserowReferenceProvider:
                         data = resp.json()
                         rows = data.get("results", [])
                         for row in rows:
-                            cat_name = row.get("category")
-                            terms_raw = row.get("title_matching_terms") or ""
-                            if isinstance(terms_raw, str):
-                                terms = [t.strip() for t in terms_raw.split(",") if t.strip()]
-                            elif isinstance(terms_raw, list):
-                                terms = [str(t).strip() for t in terms_raw if str(t).strip()]
-                            else:
-                                terms = []
+                            cat_name = _baserow_single_text(_row_value(row, "category", "Category"))
+                            term_values = _baserow_text_values(_row_value(row, "title_matching_terms", "Title matching terms"))
+                            terms: List[str] = []
+                            for term_value in term_values:
+                                terms.extend(t.strip() for t in term_value.split(",") if t.strip())
                             if cat_name:
+                                folder_path = _baserow_single_text(_row_value(row, "folder_path", "Folder path")) or cat_name
+                                color = _baserow_single_text(_row_value(row, "color", "Color")) or "#7f8c8d"
                                 cat_list.append({
                                     "category": cat_name,
-                                    "title_matching_terms": ", ".join(terms),
-                                    "folder_path": row.get("folder_path") or cat_name,
-                                    "color": row.get("color") or "#7f8c8d"
+                                    "title_matching_terms": ", ".join(dict.fromkeys(terms)),
+                                    "folder_path": folder_path,
+                                    "color": color,
                                 })
                         next_url = data.get("next")
                     else:
@@ -150,17 +195,25 @@ class BaserowReferenceProvider:
                         data = resp.json()
                         rows = data.get("results", [])
                         for row in rows:
-                            place = row.get("place_location") or row.get("canonical_place")
-                            country = row.get("Country") or row.get("country")
+                            # The live archive schema uses "Place, location" and "Country".
+                            # Legacy/local fixtures may still use snake_case aliases.
+                            place = _baserow_single_text(_row_value(
+                                row,
+                                "Place, location",
+                                "place_location",
+                                "canonical_place",
+                                "Place",
+                            ))
+                            country = _baserow_single_text(_row_value(row, "Country", "country"))
                             if place:
                                 existing = self._internal_find_place(place)
                                 if not existing:
                                     iso2 = self._internal_find_country(country) if country else None
                                     fetched_locations.append({
                                         "canonical_place": place,
-                                        "country": country,
+                                        "country": country or None,
                                         "country_iso2": iso2,
-                                        "aliases": [place.lower()]
+                                        "aliases": [place.lower()],
                                     })
                         next_url = data.get("next")
                     else:
