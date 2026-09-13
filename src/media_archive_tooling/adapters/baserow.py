@@ -153,7 +153,10 @@ class BaserowReferenceProvider:
         fetched_categories = None
         fetched_locations: List[Dict[str, Any]] = []
 
-        with httpx.Client(timeout=15.0) as client:
+        # Baserow deployments may redirect a public/API hostname to the canonical
+        # HTTPS/API endpoint. Following redirects keeps read-only reference loading
+        # working instead of silently dropping to local fallback on 301/302.
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
             # 1. Fetch category_title reference rows with pagination
             if self.category_table_id:
                 next_url: Optional[str] = f"{self.api_url}/api/database/rows/table/{self.category_table_id}/?user_field_names=true&size=200"
@@ -281,7 +284,7 @@ class BaserowReferenceProvider:
             payload["Country"] = country_name
 
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=10.0, follow_redirects=True) as client:
                 resp = client.post(url, json=payload, headers=headers)
                 if resp.status_code in (200, 201):
                     iso2 = self.find_country(country_name) if country_name else None
