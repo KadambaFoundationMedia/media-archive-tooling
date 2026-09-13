@@ -6,11 +6,13 @@ This describes the verse structure that is used in the books by A.C. Bhaktivedan
 
 For media filenames, scripture references use a fixed hierarchy and a final optional verse range:
 
-- **Bhagavad-gita (BG)** is always `chapter.verse` or `chapter.verse-end`. Example: `BG 1.1-3` means chapter 1, verses 1 through 3. Canonical filename forms are `BG-1-1` and `BG-1-1-3`.
-- **Srimad-Bhagavatam (SB)** is always `canto.chapter.verse` or `canto.chapter.verse-end`. Example: `SB 1.1.2-4` means canto 1, chapter 1, verses 2 through 4. Canonical filename forms are `SB-1-1-2` and `SB-1-1-2-4`.
-- **Caitanya-caritamrta (CC)** follows the same hierarchical/range rule as SB: the first level is the lila/division (for example `Adi`), followed by chapter and verse, with an optional final verse range. Example: `CC Adi 9.48-50` becomes `CC-Adi-9-48-50`.
+- **Bhagavad-gita (BG)** is always `chapter.verse` or `chapter.verse-end`. Example: `BG 1.1-3` means chapter 1, verses 1, 2, and 3. Canonical filename forms are `BG-1-1` and `BG-1-1-3`.
+- **Srimad-Bhagavatam (SB)** is always `canto.chapter.verse` or `canto.chapter.verse-end`. Example: `SB 1.1.2-4` means canto 1, chapter 1, verses 2, 3, and 4. Canonical filename forms are `SB-1-1-2` and `SB-1-1-2-4`.
+- **Caitanya-caritamrta (CC)** follows the same hierarchical/range rule as SB: the first level is the lila/division (for example `Adi`), followed by chapter and verse, with an optional final verse range. Example: `CC Adi 9.48-50` means Adi-lila chapter 9, verses 48, 49, and 50, and becomes `CC-Adi-9-48-50`.
 
-The range is represented only by the final hyphen before the ending verse. A dotted extra numeric component is not another valid range form. Vedabase validation of a range must validate the referenced endpoint verses rather than assuming a combined range URL exists.
+A range is **inclusive of every verse from the starting verse through the ending verse**. Therefore `BG-13-8-12` means BG 13.8, 13.9, 13.10, 13.11, and 13.12. Validation must account for every represented verse, not only the first and last verse.
+
+The range is represented only by the final hyphen before the ending verse. A dotted extra numeric component is not another valid range form. Vedabase validation of a range must validate every verse page in the inclusive span rather than assuming a combined range URL exists.
 
 The standard structure is
 
