@@ -72,6 +72,28 @@ Stop implementation work unless the user explicitly asks for another change. Ens
 ### `ACCEPTED`
 Do not modify the accepted tool unless a new task, bug, or revised build plan explicitly requires it.
 
+## Mandatory completion rule
+
+**Implementation work is not complete until it has been committed and pushed to the repository.**
+
+Every time the builder finishes a requested implementation task, correction pass, milestone, or review handoff that changed repository files, it must complete all of the following before saying it is ready:
+
+1. run the relevant tests/evaluation;
+2. update the tool status file with the work performed and exact results;
+3. commit **all intended repository changes** with a descriptive commit message;
+4. push the commit(s) to the documented implementation branch/remote;
+5. verify the pushed commit is reachable;
+6. update the status file/review checkpoint so it records the real implementation HEAD and relevant commits;
+7. if that status update itself creates another commit, push that commit too and report the final reachable HEAD.
+
+Do **not** say `BUILDER READY`, `READY_FOR_REVIEW`, `done`, `complete`, or equivalent while relevant local changes are uncommitted or unpushed.
+
+If pushing fails, the work is **not** ready for handoff. Report the push/repository problem precisely and do not present a local-only SHA as the review target.
+
+If a task genuinely makes no repository changes, no empty commit is required; state that no repository changes were necessary.
+
+This rule applies equally to initial implementation, review corrections, documentation/status changes, tests, and later maintenance work.
+
 ## Non-negotiable rules
 
 - **Never edit a finalized build plan merely because implementation is difficult.**
@@ -79,6 +101,7 @@ Do not modify the accepted tool unless a new task, bug, or revised build plan ex
 - Continue unaffected work when possible.
 - Do not silently change archive policy, naming semantics, Baserow authority/data ownership, tool boundaries, persistent schemas, safety behavior, orchestrator-facing interfaces, authoritative providers, or acceptance criteria.
 - Keep the status file current at meaningful milestones.
+- **Always commit and push completed implementation work before handing it back.**
 - Commit/push before declaring `READY_FOR_REVIEW`.
 - The planning/review model will independently inspect actual commits and diffs; summaries alone are not sufficient.
 
@@ -96,5 +119,7 @@ Sample evaluation: <summary>
 Review findings addressed: <R-IDs or none>
 Open questions: <Q-IDs or none>
 ```
+
+The reported `HEAD` must be the **final pushed/reachable commit**, including any final status-file update commit.
 
 Do not claim acceptance. Only the planning/review step can mark a tool `ACCEPTED`.
