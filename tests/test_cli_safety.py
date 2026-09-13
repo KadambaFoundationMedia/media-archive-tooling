@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import patch
 
 from media_archive_tooling.cli import main, run_review
+from media_archive_tooling.renamer.registry.registry import LocalRegistry
 
 
 @pytest.fixture
@@ -62,6 +63,31 @@ def test_cli_explicit_dry_run_flag(cli_test_env):
     assert env["f1"].exists()
 
 
+def test_cli_repeated_dry_run_reuses_tracking_id(cli_test_env):
+    """Repeated scans of the same unchanged path must not multiply registry rows."""
+    env = cli_test_env
+    test_args = [
+        "media-archive",
+        "renamer",
+        str(env["source_dir"]),
+        "--dry-run",
+        "--registry-path", str(env["reg_db"]),
+        "--log-dir", str(env["log_dir"]),
+    ]
+
+    with patch("sys.argv", test_args):
+        main()
+    first_rows = LocalRegistry(env["reg_db"]).list_files()
+    assert len(first_rows) == 1
+    first_id = first_rows[0]["tracking_id"]
+
+    with patch("sys.argv", test_args):
+        main()
+    second_rows = LocalRegistry(env["reg_db"]).list_files()
+    assert len(second_rows) == 1
+    assert second_rows[0]["tracking_id"] == first_id
+
+
 def test_cli_explicit_commit_flag(cli_test_env):
     """Test that only explicit --commit applies renames to the filesystem."""
     env = cli_test_env
@@ -92,4 +118,3 @@ def test_cli_review_rejects_non_loopback():
     with pytest.raises(SystemExit) as exc_info:
         run_review(DummyArgs())
     assert exc_info.value.code == 1
-
