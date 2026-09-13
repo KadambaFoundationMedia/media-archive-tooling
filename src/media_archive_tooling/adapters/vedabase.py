@@ -1,14 +1,18 @@
 """Vedabase scripture reference validation adapter with 24-hour local SQLite cache."""
 import sqlite3
 import time
-import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 import httpx
 
 
 def build_vedabase_url(ref_key: str) -> Optional[str]:
-    """Convert a canonical scripture reference key into a Vedabase library URL."""
+    """Convert a canonical scripture reference key into a Vedabase library URL.
+
+    For range keys this returns the conventional combined range URL. Runtime
+    validation does not rely on that URL existing; it validates the start and end
+    verse pages individually via ``_build_validation_urls``.
+    """
     norm = ref_key.strip().upper()
     parts = norm.split("-")
     if not parts:
@@ -20,11 +24,11 @@ def build_vedabase_url(ref_key: str) -> Optional[str]:
         chapter = parts[2]
         verse = "-".join(parts[3:])
         return f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{verse}/"
-    elif book == "BG" and len(parts) >= 3:
+    if book == "BG" and len(parts) >= 3:
         chapter = parts[1]
         verse = "-".join(parts[2:])
         return f"https://vedabase.io/en/library/bg/{chapter}/{verse}/"
-    elif book == "CC" and len(parts) >= 3:
+    if book == "CC" and len(parts) >= 3:
         if parts[1].lower() in ("adi", "madhya", "antya"):
             lila = parts[1].lower()
             chapter = parts[2]
@@ -35,6 +39,85 @@ def build_vedabase_url(ref_key: str) -> Optional[str]:
             verse = "-".join(parts[2:])
         return f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{verse}/"
     return None
+
+
+def _build_validation_urls(ref_key: str) -> Optional[List[str]]:
+    """Return concrete Vedabase verse pages that prove a reference exists.
+
+    Archive range syntax represents a span, not a separate scripture identifier:
+    ``BG-1-1-3`` means BG 1.1 through 1.3, while ``SB-1-1-2-4`` means SB
+    1.1.2 through 1.1.4. Vedabase may not expose a dedicated page for the
+    combined range, so a range is validated by checking both endpoints.
+    """
+    norm = ref_key.strip().upper()
+    parts = norm.split("-")
+    if not parts:
+        return None
+
+    book = parts[0]
+    urls: List[str] = []
+
+    if book == "BG":
+        if len(parts) == 3:
+            chapter, verse = parts[1], parts[2]
+            urls = [f"https://vedabase.io/en/library/bg/{chapter}/{verse}/"]
+        elif len(parts) == 4:
+            chapter, start, end = parts[1], parts[2], parts[3]
+            urls = [
+                f"https://vedabase.io/en/library/bg/{chapter}/{start}/",
+                f"https://vedabase.io/en/library/bg/{chapter}/{end}/",
+            ]
+        else:
+            return None
+
+    elif book == "SB":
+        if len(parts) == 4:
+            canto, chapter, verse = parts[1], parts[2], parts[3]
+            urls = [f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{verse}/"]
+        elif len(parts) == 5:
+            canto, chapter, start, end = parts[1], parts[2], parts[3], parts[4]
+            urls = [
+                f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{start}/",
+                f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{end}/",
+            ]
+        else:
+            return None
+
+    elif book == "CC":
+        if len(parts) < 3:
+            return None
+        if parts[1].lower() in ("adi", "madhya", "antya"):
+            lila = parts[1].lower()
+            if len(parts) == 4:
+                chapter, verse = parts[2], parts[3]
+                urls = [f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{verse}/"]
+            elif len(parts) == 5:
+                chapter, start, end = parts[2], parts[3], parts[4]
+                urls = [
+                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{start}/",
+                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{end}/",
+                ]
+            else:
+                return None
+        else:
+            # Preserve the existing archive fallback where an omitted lila means Adi.
+            lila = "adi"
+            if len(parts) == 3:
+                chapter, verse = parts[1], parts[2]
+                urls = [f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{verse}/"]
+            elif len(parts) == 4:
+                chapter, start, end = parts[1], parts[2], parts[3]
+                urls = [
+                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{start}/",
+                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{end}/",
+                ]
+            else:
+                return None
+    else:
+        return None
+
+    # A one-verse range such as 1-1 does not need a duplicate request.
+    return list(dict.fromkeys(urls))
 
 
 class VedabaseValidator:
@@ -79,11 +162,12 @@ class VedabaseValidator:
             conn.commit()
 
     def validate_scripture_reference(self, scripture_ref: str) -> Tuple[bool, str]:
-        """Validate if a scripture reference exists in Vedabase.
+        """Validate whether a canonical scripture reference exists in Vedabase.
 
         Returns:
             (is_valid, validation_status)
-            where validation_status can be 'validated', 'cached', 'not_found', or 'validation_pending_stale'.
+            where validation_status can be 'validated', 'cached', 'not_found',
+            'invalid_format', or 'validation_pending_stale'.
         """
         ref_key = scripture_ref.strip().upper()
         now = time.time()
@@ -99,24 +183,25 @@ class VedabaseValidator:
                 if (now - cached_at) < ttl:
                     return bool(is_valid), status or "cached"
 
-        url = build_vedabase_url(ref_key)
-        if not url:
+        urls = _build_validation_urls(ref_key)
+        if not urls:
             return False, "invalid_format"
 
         try:
             headers = {"User-Agent": "MediaArchiveTooling/1.0 (archive research)"}
+
             if self._custom_client:
-                resp = self._custom_client.get(url, headers=headers)
+                responses = [self._custom_client.get(url, headers=headers) for url in urls]
             else:
                 with httpx.Client(transport=self._transport, timeout=10.0, follow_redirects=True) as client:
-                    resp = client.get(url, headers=headers)
+                    responses = [client.get(url, headers=headers) for url in urls]
 
-            if resp.status_code == 200:
-                is_valid = True
-                status = "validated"
-            elif resp.status_code == 404:
+            if any(resp.status_code == 404 for resp in responses):
                 is_valid = False
                 status = "not_found"
+            elif all(resp.status_code == 200 for resp in responses):
+                is_valid = True
+                status = "validated"
             else:
                 if existing_row:
                     return bool(existing_row[0]), "validation_pending_stale"
