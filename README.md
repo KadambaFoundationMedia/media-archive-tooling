@@ -33,6 +33,20 @@ BUILD TOOL 2
 
 The builder must run the helper command (or follow `BUILDER.md` manually if shell execution is unavailable). It must not depend on previous chat history.
 
+## Protected `main`, implementation branches, and pull requests
+
+`main` is protected by the active GitHub ruleset **Protect main**. Normal implementation work is no longer performed directly on `main`.
+
+Each tool uses a durable implementation branch with the standard name:
+
+```text
+tool-<number>-implementation
+```
+
+When `./scripts/builder-start.sh <number>` is started from `main` for a mutable tool state, the helper automatically creates or resumes that branch and restarts there. The user-facing `BUILD TOOL <number>` command therefore does not change.
+
+Implementation, correction, tests, walkthrough, and status changes remain on the tool branch through review cycles. A pull request from the tool branch to `main` is the review surface, and planning/review findings are committed back to the same branch rather than merging partial work into `main`.
+
 ## Project implementation architecture
 
 The project uses a **local, reusable Python 3.12 application/package** with two first-class interfaces: a CLI for automation/testing/batch work and a **localhost browser-based review portal** for human review and corrections.
@@ -55,6 +69,8 @@ On every push to `main`, every pull request, and manual workflow dispatch, CI:
 6. verifies that the Python package builds successfully with `uv build`.
 
 CI deliberately does not use the local `.env` or live Baserow/Vedabase/location credentials. Automated tests must mock external services so repository verification remains deterministic and safe.
+
+The `Protect main` ruleset requires the status check **Python 3.12 tests** to pass and requires the PR branch to be up to date before merge. It also blocks branch deletion/force-push behavior covered by the ruleset and requires pull-request review flow with conversations resolved.
 
 ## Build plans
 
@@ -80,7 +96,7 @@ Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`.
 
 Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness.
 
-The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub CI is now configured for subsequent commits; Tool 1's original acceptance remains based on the reviewed implementation/test evidence recorded in its status file.
+The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub Actions CI is now operational for subsequent commits; Tool 1's original acceptance remains based on the reviewed implementation/test evidence recorded in its status file.
 
 ### Tool 2 — Media Database Reviewer
 
@@ -91,6 +107,8 @@ Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
 Implementation status: `status/tool-2-media-database-reviewer.md`
 
 Implementation tracking/discussion: GitHub issue #2
+
+Planned implementation branch: `tool-2-implementation`
 
 Tool 2 is the reusable **read-only Baserow Media database lookup and reconciliation service**. It consumes structured Tool 1 evidence, searches plausible Media rows, compares database metadata field-by-field, preserves contradictions, distinguishes confirmed matches from probable/multiple/conflicting candidates, and returns only confirmed Media metadata to the Renamer for enrichment.
 
@@ -104,6 +122,8 @@ To begin implementation:
 ./scripts/builder-start.sh 2
 ```
 
+The helper will synchronize the repository and create/resume `tool-2-implementation` automatically before implementation begins.
+
 ## Project progress protocol
 
 GitHub is the durable communication channel between planning/review and implementation models.
@@ -114,11 +134,13 @@ For each tool:
 2. Create a per-tool implementation status file under `status/`.
 3. Create a GitHub implementation issue when useful for discussion/notifications.
 4. The implementation model starts from `BUILDER.md` / `./scripts/builder-start.sh <tool-number>` and uses the status file to determine the current action.
-5. The implementation model updates the status file at meaningful milestones with completed work, commits/PRs, tests, observed behavior, blockers, open questions, and the next milestone.
-6. The implementation model must not change the finalized build plan. Unclear or contradictory requirements are recorded in the status file for planning/review resolution.
-7. The status file maintains the current implementation HEAD and the last planning/review commit checkpoint.
-8. The planning/review model inspects implementation commits/diffs since the previous checkpoint and checks for fundamental changes, including changes to archive behavior, tool boundaries, Baserow/shared-state semantics, persistent schemas, interfaces, safety/idempotency, authoritative providers, major framework choices, and acceptance criteria.
-9. A potentially fundamental implementation change must not silently become project policy. It is either corrected to match the build plan or raised as a specific decision for the user.
-10. When a tool is accepted, its build-plan acceptance criteria, current implementation HEAD, tests, and sample results must have been reviewed, and this README is updated with its final status and concise summary.
+5. Implementation occurs on the tool branch, with one pull request to protected `main` kept open across review/correction cycles.
+6. The implementation model updates the status file at meaningful milestones with completed work, commits/PRs, local tests, observed behavior, blockers, open questions, CI status, and the next milestone.
+7. The implementation model must not change the finalized build plan. Unclear or contradictory requirements are recorded in the status file for planning/review resolution.
+8. The status file maintains the current implementation HEAD and the last planning/review commit checkpoint.
+9. The planning/review model inspects implementation commits/diffs and the PR since the previous checkpoint and checks for fundamental changes, including changes to archive behavior, tool boundaries, Baserow/shared-state semantics, persistent schemas, interfaces, safety/idempotency, authoritative providers, major framework choices, and acceptance criteria.
+10. A potentially fundamental implementation change must not silently become project policy. It is either corrected to match the build plan or raised as a specific decision for the user.
+11. The required GitHub CI check must pass before acceptance/merge.
+12. When a tool is accepted, its build-plan acceptance criteria, current PR head, tests, sample results, and CI have been reviewed, and the accepted PR is merged to `main`.
 
 This process avoids relying on direct model-to-model memory and keeps the repository itself as the project record.
