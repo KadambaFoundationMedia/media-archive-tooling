@@ -53,17 +53,19 @@ Builder entry point: `BUILDER.md`
 
 ### Tool 1 — Renamer
 
-Status: **CHANGES_REQUESTED**
+Status: **ACCEPTED**
 
 Build plan: `docs/tool-1-renamer-build-plan.md`
 
-Implementation status and active review findings: `status/tool-1-renamer.md`
+Implementation status and acceptance record: `status/tool-1-renamer.md`
 
 Implementation tracking/discussion: GitHub issue #1
 
+Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`.
+
 Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness.
 
-The current implementation has completed multiple review/correction passes. The status file is authoritative for the remaining active finding(s) and current review checkpoint.
+The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub CI is not currently configured; the status file records the reviewed implementation commits and verification provenance.
 
 ### Tool 2 — Media Database Reviewer
 
