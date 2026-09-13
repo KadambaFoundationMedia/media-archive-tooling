@@ -161,7 +161,10 @@ def test_golden_case_duben_2008_folder_grammar(parser_and_planner):
     assert res07.where.country_iso2 == "cz"
     assert res07.what.selected_value is None
     assert "Recording" not in prop07.proposed_filename
-    assert prop07.needs_review is True
+    # Under R-022, incomplete-but-safe files continue without human review and route to Tool 7
+    assert prop07.needs_review is False
+    assert "tool_7_class_classification" in res07.downstream_routing
+    assert "WHAT is unresolved" in res07.diagnostic_notes
 
     # File 08: sequence index 08, not 8th of April!
     res08 = parser.parse_file(dir_path / filenames[1], collection_grammar=grammar)

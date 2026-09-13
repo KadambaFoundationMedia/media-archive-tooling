@@ -107,9 +107,11 @@ class RenamerParser:
             if t.strip() and t.lower() not in noise_tokens
         ]
 
-        # 8. Check conflicts & review reasons
+        # 8. Check conflicts, downstream routing, and review reasons
         conflicts = []
         review_reasons = []
+        diagnostic_notes = []
+        downstream_routing = []
 
         if what_conflict:
             conflicts.append(what_conflict)
@@ -126,24 +128,37 @@ class RenamerParser:
                 conflicts.append(date_conflict)
                 review_reasons.append(date_conflict)
 
-        if when_res.state in (ResolutionState.AMBIGUOUS, ResolutionState.PROVISIONAL):
-            review_reasons.append(f"WHEN resolution is {when_res.state.value} ({when_res.selected_value})")
+        # Genuine ambiguities / competing interpretations require human decision
+        if when_res.state == ResolutionState.AMBIGUOUS:
+            review_reasons.append(f"WHEN resolution is ambiguous between {when_res.selected_value} and alternatives {when_res.alternatives}")
+        elif when_res.state == ResolutionState.PROVISIONAL:
+            diagnostic_notes.append(f"WHEN resolution is provisional ({when_res.selected_value})")
         elif when_res.state == ResolutionState.UNRESOLVED:
-            review_reasons.append("WHEN is unresolved")
+            diagnostic_notes.append("WHEN is unresolved")
+            downstream_routing.append("tool_2_3_media_enrichment")
 
-        if what_res.state == ResolutionState.UNRESOLVED:
-            review_reasons.append("WHAT is unresolved")
+        if what_res.state == ResolutionState.AMBIGUOUS:
+            review_reasons.append(f"WHAT resolution is ambiguous for '{what_res.selected_value}'")
+        elif what_res.state == ResolutionState.UNRESOLVED:
+            diagnostic_notes.append("WHAT is unresolved")
+            downstream_routing.append("tool_7_class_classification")
 
-        if where_res.state in (ResolutionState.PROVISIONAL, ResolutionState.AMBIGUOUS):
-            review_reasons.append(f"WHERE resolution is {where_res.state.value} ({where_res.place_location}-{where_res.country_iso2 or ''})")
+        if where_res.state == ResolutionState.AMBIGUOUS:
+            review_reasons.append(f"WHERE resolution is ambiguous near-tie for '{where_res.place_location}' (alternatives: {where_res.alternatives})")
+        elif where_res.state == ResolutionState.PROVISIONAL:
+            diagnostic_notes.append(f"WHERE resolution is provisional ({where_res.place_location}-{where_res.country_iso2 or ''})")
+            downstream_routing.append("tool_2_3_media_enrichment")
         elif where_res.state == ResolutionState.UNRESOLVED:
-            review_reasons.append("WHERE is unresolved")
+            diagnostic_notes.append("WHERE is unresolved")
+            downstream_routing.append("tool_2_3_media_enrichment")
 
         if file_metadata.corrupted:
             review_reasons.append("File marked as CORRUPTED")
 
         if file_metadata.possible_combination:
-            review_reasons.append("File has combination clue (possible multiple recordings)")
+            # Combination is a downstream split task (Tools 5/6), not an immediate human review error
+            diagnostic_notes.append("File has combination clue; retaining source stem + ID for splitting")
+            downstream_routing.append("tool_5_6_split_combination")
 
         identity = Identity(
             tracking_id=tracking_id,
@@ -170,5 +185,7 @@ class RenamerParser:
             file_metadata=file_metadata,
             unclassified_text=residual_tokens,
             conflicts=conflicts,
-            review_reasons=review_reasons
+            review_reasons=review_reasons,
+            diagnostic_notes=diagnostic_notes,
+            downstream_routing=downstream_routing
         )

@@ -103,6 +103,8 @@ class RenamePlanner:
             is_collision=False,
             needs_review=needs_review,
             review_reasons=review_reasons,
+            diagnostic_notes=result.diagnostic_notes,
+            downstream_routing=result.downstream_routing,
             changes_detected=changes,
             parser_result=result
         )

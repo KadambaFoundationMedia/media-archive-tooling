@@ -120,16 +120,45 @@ class RenamerApplicationService:
         enrich_planner = RenamePlanner(mode=RenameMode.ENRICH)
         proposal = enrich_planner.plan_rename(parser_res)
 
-        # Clear review reasons that were resolved
-        remaining_reasons = []
+        # Update diagnostic notes & downstream routing based on new state
+        diag_notes = []
+        routing = []
         if parser_res.when.state == ResolutionState.UNRESOLVED:
-            remaining_reasons.append("WHEN is unresolved")
+            diag_notes.append("WHEN is unresolved")
+            routing.append("tool_2_3_media_enrichment")
+        elif parser_res.when.state == ResolutionState.PROVISIONAL:
+            diag_notes.append(f"WHEN resolution is provisional ({parser_res.when.selected_value})")
+
         if parser_res.what.state == ResolutionState.UNRESOLVED:
-            remaining_reasons.append("WHAT is unresolved")
-        if parser_res.where.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL, ResolutionState.AMBIGUOUS):
-            remaining_reasons.append(f"WHERE is {parser_res.where.state.value}")
+            diag_notes.append("WHAT is unresolved")
+            routing.append("tool_7_class_classification")
+
+        if parser_res.where.state == ResolutionState.UNRESOLVED:
+            diag_notes.append("WHERE is unresolved")
+            routing.append("tool_2_3_media_enrichment")
+        elif parser_res.where.state == ResolutionState.PROVISIONAL:
+            diag_notes.append(f"WHERE resolution is provisional ({parser_res.where.place_location}-{parser_res.where.country_iso2 or ''})")
+            routing.append("tool_2_3_media_enrichment")
+
         if parser_res.file_metadata.possible_combination:
-            remaining_reasons.append("File has combination clue (possible multiple recordings)")
+            diag_notes.append("File has combination clue; retaining source stem + ID for splitting")
+            routing.append("tool_5_6_split_combination")
+
+        parser_res.diagnostic_notes = diag_notes
+        parser_res.downstream_routing = routing
+
+        # Re-evaluate remaining review reasons: keep only those still active
+        remaining_reasons = []
+        for r in parser_res.review_reasons:
+            if "WHEN" in r and evidence.when_val is not None:
+                continue
+            if "WHAT" in r and evidence.what_val is not None:
+                continue
+            if "WHERE" in r and evidence.where_val is not None:
+                continue
+            if "combination" in r.lower() and evidence.possible_combination is False:
+                continue
+            remaining_reasons.append(r)
         parser_res.review_reasons = remaining_reasons
 
         self.registry.update_file_review(

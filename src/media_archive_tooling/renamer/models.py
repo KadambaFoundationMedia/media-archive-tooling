@@ -100,6 +100,8 @@ class ParserResult(BaseModel):
     unclassified_text: List[str] = Field(default_factory=list)
     conflicts: List[str] = Field(default_factory=list)
     review_reasons: List[str] = Field(default_factory=list)
+    diagnostic_notes: List[str] = Field(default_factory=list)
+    downstream_routing: List[str] = Field(default_factory=list)
 
 
 class RenameProposal(BaseModel):
@@ -112,6 +114,8 @@ class RenameProposal(BaseModel):
     is_collision: bool = False
     needs_review: bool = False
     review_reasons: List[str] = Field(default_factory=list)
+    diagnostic_notes: List[str] = Field(default_factory=list)
+    downstream_routing: List[str] = Field(default_factory=list)
     changes_detected: bool = False
     parser_result: ParserResult
     status: str = "pending"  # "pending", "approved", "committed", "failed", "deferred"

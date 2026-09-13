@@ -6,9 +6,9 @@ from ..models import FileMetadata
 
 TRACKING_ID_REGEX = re.compile(r"_ID-([0-9a-fA-F]{8})(?=\.|$)", re.IGNORECASE)
 EDITED_REGEX = re.compile(r"_edited(?=\.|$|_ID-)", re.IGNORECASE)
-CORRUPTED_REGEX = re.compile(r"\b(corrupted|damaged|broken)\b", re.IGNORECASE)
+CORRUPTED_REGEX = re.compile(r"(?:^|[_\W])(corrupted|damaged|broken)(?=[_\W]|$)", re.IGNORECASE)
 TECHNICAL_FLAGS_REGEX = re.compile(
-    r"\b(recovered|copy|final|hq|part-?\d+|track-?\d+|cd-?\d+)\b",
+    r"(?:^|[_\W])(recovered|copy|final|hq|part-?\d+|track-?\d+|cd-?\d+)(?=[_\W]|$)",
     re.IGNORECASE
 )
 # Source/sequence identifiers such as A019, A022F, R09_0004, sr-006

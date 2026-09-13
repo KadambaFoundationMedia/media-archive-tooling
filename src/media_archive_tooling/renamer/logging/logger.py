@@ -35,11 +35,14 @@ class RenamerLogger:
                     "changes_detected": p.changes_detected,
                     "status": p.status,
                     "error": p.error,
+                    "needs_review": p.needs_review,
+                    "review_reasons": p.review_reasons,
+                    "diagnostic_notes": p.diagnostic_notes,
+                    "downstream_routing": p.downstream_routing,
                     "evaluation_category": self._categorize_proposal(p),
                     "parser_result": pr.model_dump(),
                     "folder_grammar": pr.context.sibling_pattern_context,
                     "conflicts": pr.conflicts,
-                    "review_reasons": p.review_reasons,
                     "duration_secs": duration_secs,
                     "tool_version": "0.1.0"
                 }
@@ -60,6 +63,8 @@ class RenamerLogger:
                 "WHERE State",
                 "Needs Review",
                 "Review Reasons",
+                "Diagnostic Notes",
+                "Downstream Routing",
                 "Status",
                 "Evaluation Category"
             ])
@@ -78,30 +83,25 @@ class RenamerLogger:
                     pr.where.state.value,
                     "YES" if p.needs_review else "NO",
                     "; ".join(p.review_reasons),
+                    "; ".join(p.diagnostic_notes),
+                    "; ".join(p.downstream_routing),
                     p.status,
                     self._categorize_proposal(p)
                 ])
 
     def _categorize_proposal(self, p: RenameProposal) -> str:
+        if p.status == "error" or p.error:
+            return "blocked_error"
+        if p.needs_review:
+            return "human_review_required"
+        if p.parser_result.file_metadata.possible_combination:
+            return "downstream_split"
         pr = p.parser_result
-        # Categorize objectively based on machine resolution states and review requirements
-        if (
-            pr.when.state in (ResolutionState.EXACT, ResolutionState.STRONG)
-            and pr.what.state in (ResolutionState.EXACT, ResolutionState.STRONG)
-            and pr.where.state in (ResolutionState.EXACT, ResolutionState.STRONG)
-            and not p.needs_review
-        ):
-            return "automatic_candidate"
-        elif (
-            pr.when.state == ResolutionState.PROVISIONAL
-            or pr.what.state == ResolutionState.PROVISIONAL
-            or pr.where.state == ResolutionState.PROVISIONAL
-        ):
-            return "provisional_candidate"
-        elif (
-            pr.when.state == ResolutionState.UNRESOLVED
-            and pr.what.state == ResolutionState.UNRESOLVED
-        ):
-            return "unresolved_candidate"
-        else:
-            return "review_candidate"
+        has_unresolved_or_provisional = (
+            pr.when.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL)
+            or pr.what.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL)
+            or pr.where.state in (ResolutionState.UNRESOLVED, ResolutionState.PROVISIONAL)
+        )
+        if has_unresolved_or_provisional:
+            return "downstream_enrichment"
+        return "safe_automatic"

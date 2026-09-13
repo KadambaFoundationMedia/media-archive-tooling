@@ -52,14 +52,26 @@ Tool 1 (Renamer) has been implemented, verified, and updated in accordance with 
 - Wired into `service.py` to strictly reject invalid dates (e.g. `2011-02-30`), unrecognized ISO2 codes, and non-canonical filename syntax.
 
 ### R-021: Objective Sample Evaluation
-- Sample evaluation in `logger.py` uses objective confidence/behavior categories (`automatic_candidate`, `provisional_candidate`, `review_candidate`, `unresolved_candidate`).
+- Sample evaluation in `logger.py` uses objective confidence/behavior categories.
 - Created reproducible evaluation report in [docs/sample-evaluation-report.md](sample-evaluation-report.md).
+
+### R-022: Separation of Downstream Routing & Diagnostic Notes from Immediate Human Review
+- **Separation of Concerns**: Incompleteness or downstream metadata ownership (missing WHERE, unidentified class WHAT, combination splitting) is separated from `needs_review=True`.
+- **Domain Model Extension**: Added `diagnostic_notes: List[str]` and `downstream_routing: List[str]` to `ParserResult` and `RenameProposal`.
+- **Pipeline Routing**:
+  - Missing or provisional WHERE routes to `tool_2_3_media_enrichment` with `needs_review=False`.
+  - Missing WHAT routes to `tool_7_class_classification` with `needs_review=False`, retaining descriptive wording + tracking ID.
+  - Combination candidates route to `tool_5_6_split_combination` with `needs_review=False`, retaining source stem + tracking ID.
+- **Genuine Human Review Queue**: Reserved strictly for actual contradictions (e.g. filename date in 2011 conflicting with container folder year 2012), unresolvable ties, and corruptions.
+- **Objective Pipeline Categories**: `safe_automatic` (61), `downstream_enrichment` (192), `downstream_split` (2), `human_review_required` (5), `blocked_error` (0).
+- **Review Portal**: Updated `detail.html` to clearly distinguish diagnostic notes and downstream routing from human review reasons.
+- **Regression Suite**: Added `tests/test_routing_and_review_separation.py` verifying that safe partial improvements proceed without human review while genuine conflicts block.
 
 ---
 
 ## 2. Verification & Test Results
 
-### Automated Regression Suite (63 Tests)
+### Automated Regression Suite (66 Tests)
 Executed full test suite under Python 3.12.14 via `.venv/bin/pytest -v`:
 
 ```text
@@ -70,6 +82,7 @@ tests/test_enrichment_and_finalization.py (2 tests)
 tests/test_golden_cases.py (8 tests)
 tests/test_location_adapter.py (5 tests)
 tests/test_portal.py (3 tests)
+tests/test_routing_and_review_separation.py (3 tests)
 tests/test_service.py (2 tests)
 tests/test_technical.py (3 tests)
 tests/test_validator_and_safety.py (8 tests)
@@ -78,21 +91,22 @@ tests/test_what.py (4 tests)
 tests/test_when.py (5 tests)
 tests/test_where.py (4 tests)
 
-======================== 63 passed, 2 warnings in 1.03s ========================
+======================== 66 passed, 2 warnings in 1.03s ========================
 ```
 
 ### Sample Archive Evaluation (`sample-files/`)
 Executed dry-run analysis on the 260 media files in `sample-files/`:
 - **Files Analyzed**: 260
-- **Clean Automatic Proposals (No review flag)**: 88 (33.8%)
-- **Flagged for Human Review**: 172 (66.2%)
-- **Combination Candidates Held for Splitting**: 2 (0.8%)
-- **Collisions Detected**: 0
-- **Objective Categories**:
-  - `review_candidate`: 131
-  - `automatic_candidate`: 61
-  - `provisional_candidate`: 56
-  - `unresolved_candidate`: 12
+- **Safe Automatic Proposals (No human review)**: 255 (98.1%)
+- **Flagged for Immediate Human Review**: 5 (1.9%)
+- **Combination Candidates Routed to Split**: 2 (0.8%)
+- **Collisions Detected**: 0 (0.0%)
+- **Objective Behavior Categories**:
+  - `downstream_enrichment`: 192 (73.8%)
+  - `safe_automatic`: 61 (23.5%)
+  - `human_review_required`: 5 (1.9%)
+  - `downstream_split`: 2 (0.8%)
+  - `blocked_error`: 0 (0.0%)
 - Full details documented in [docs/sample-evaluation-report.md](sample-evaluation-report.md).
 
 ---
