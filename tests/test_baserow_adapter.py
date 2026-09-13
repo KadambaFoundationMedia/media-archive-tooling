@@ -73,6 +73,59 @@ def test_baserow_pagination_and_loading():
     assert loc["country_iso2"] == "sk"
 
 
+def test_baserow_structured_select_and_link_values_are_normalized():
+    """Real Baserow select/link fields may be dicts or one-item linked-row lists."""
+    category_page = {
+        "count": 1,
+        "next": None,
+        "results": [
+            {
+                "category": {"id": 7, "value": "Class", "color": "blue"},
+                "title_matching_terms": "class, lecture",
+                "folder_path": {"id": 8, "value": "Classes"},
+                "color": "#123456",
+            }
+        ],
+    }
+    media_page = {
+        "count": 1,
+        "next": None,
+        "results": [
+            {
+                "Place, location": [{"id": 42, "value": "Leipzig"}],
+                "Country": {"id": 3, "value": "Germany", "color": "green"},
+            }
+        ],
+    }
+
+    def custom_handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/table/100/" in url:
+            return httpx.Response(200, json=category_page)
+        if "/table/200/" in url:
+            return httpx.Response(200, json=media_page)
+        return httpx.Response(404)
+
+    mock_client = httpx.Client(transport=httpx.MockTransport(custom_handler))
+    provider = BaserowReferenceProvider(
+        api_token="dummy-token",
+        category_table_id="100",
+        media_table_id="200",
+    )
+
+    with patch("httpx.Client", return_value=mock_client):
+        provider.load_all_references()
+
+    classes = [row for row in provider.get_category_titles() if row["category"] == "Class"]
+    assert len(classes) == 1
+    assert classes[0]["folder_path"] == "Classes"
+
+    leipzig = provider.find_place("Leipzig")
+    assert leipzig is not None
+    assert leipzig["country"] == "Germany"
+    assert leipzig["country_iso2"] == "de"
+
+
 def test_baserow_guarded_write_duplicate_prevention():
     """Verify that create_missing_reference_value prevents duplicate writes."""
     provider = BaserowReferenceProvider(
@@ -173,5 +226,3 @@ def test_baserow_live_over_cache_precedence():
     loc = provider.find_place("Vrindavan Dham")
     assert loc is not None
     assert loc["canonical_place"] == "Vrindavan Dham"
-
-
