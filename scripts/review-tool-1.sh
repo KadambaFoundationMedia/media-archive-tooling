@@ -57,6 +57,8 @@ if [ -n "$UPSTREAM" ]; then
   elif [ "$LOCAL_HEAD" = "$MERGE_BASE" ]; then
     printf '%s\n' "Local branch is behind $UPSTREAM; fast-forwarding..."
     git merge --ff-only "$UPSTREAM"
+    printf '%s\n' "Repository updated. Restarting review helper from the new version..."
+    exec "$0" "$@"
   elif [ "$REMOTE_HEAD" = "$MERGE_BASE" ]; then
     echo "ERROR: Local branch has unpushed commits. Push or deliberately reconcile them first."
     exit 1
