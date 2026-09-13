@@ -109,6 +109,10 @@ From the repository root, run:
 
 The helper safely synchronizes the current branch when possible, prepares the locked Python environment, performs a Tool 1 **dry-run** against `sample-files/`, starts the localhost review portal, and opens `http://127.0.0.1:8000` in the default browser on macOS/Linux when supported. The dry-run does not rename files.
 
+The review helper uses a **separate per-target review registry** under `.renamer/review/` rather than the general operational registry. Re-running the same review therefore does not accumulate duplicate rows from earlier dry-runs, and each reviewed directory stays isolated from other review targets. Tool 1 also reuses the existing tracking ID for an unchanged file path on repeated scans.
+
+The dashboard shows original filename, proposed filename, source path, WHEN/WHAT/WHERE and review status. Technical tracking IDs remain part of Tool 1's underlying in-process identity and filename semantics, but the dashboard intentionally hides the ID column and `_ID-xxxxxxxx` token from the **displayed** proposed filename because they are not useful for human review. The dashboard also includes dark mode, sticky table headers and batch row selection.
+
 To review another directory instead of `sample-files/`:
 
 ```sh
