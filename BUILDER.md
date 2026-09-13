@@ -57,6 +57,23 @@ Do not silently stash, reset, discard, force-push, or auto-merge divergent imple
 
 A stale local `READY_FOR_REVIEW` or `ACCEPTED` state must never override a newer remote state on the active tool branch.
 
+## Planner-authored maintenance coordination
+
+The Builder remains the **default implementation agent**. Planning/review owns build plans, architecture, policy decisions, review findings, acceptance, and central handoff coordination.
+
+Planning/review may occasionally make a small corrective or maintenance source change directly when that is materially more efficient. Those changes are still part of the durable repository baseline and must not become invisible to the Builder.
+
+For every such planner-authored implementation change:
+
+- planning/review records the change in the affected tool status/handoff context, including the PR or merge SHA and the behavior/shared components affected;
+- if shared infrastructure or a later tool is affected, planning/review adds a pre-start coordination note to that later tool's status;
+- the Builder, after synchronization, reads those coordination notes and inspects the referenced diff when touching overlapping code;
+- the Builder must preserve and integrate the current `main` behavior rather than reverting, duplicating, or replacing it from an older accepted snapshot.
+
+The durable policy is documented in `docs/planner-builder-coordination.md`. If current `main` contains a planner-authored change but a status file appears stale or contradictory, preserve the current code, flag the coordination discrepancy in status, and do not guess an older intended state.
+
+This exception does **not** transfer normal implementation ownership to planning/review. Substantive implementation should continue to be performed by the Builder unless the user explicitly asks otherwise.
+
 ## Protected-main implementation rule
 
 `main` is protected by the repository ruleset `Protect main`.
@@ -85,12 +102,13 @@ Do not merge a partial implementation merely to communicate review findings. Pla
 For Tool `<number>`, after synchronization and branch selection read:
 
 1. `BUILDER.md` — this entry-point protocol.
-2. `status/tool-<number>-*.md` — **current action, review findings, blockers, last reviewed commit, and next milestone**.
+2. `status/tool-<number>-*.md` — **current action, review findings, blockers, last reviewed commit, next milestone, and planner-authored maintenance/coordination notes**.
 3. `docs/tool-<number>-*-build-plan.md` — **authoritative finalized tool specification**.
 4. `docs/project-implementation-architecture.md` — project-wide architecture and technology boundaries.
 5. `docs/implementation-protocol.md` — handoff, branch/PR/CI, status, commit-review, and contradiction rules.
-6. Any assets/documents explicitly referenced by the build plan or status file.
-7. Relevant implementation code and tests.
+6. `docs/planner-builder-coordination.md` when referenced by status or when shared planner-authored maintenance is present.
+7. Any assets/documents explicitly referenced by the build plan or status file.
+8. Relevant implementation code and tests.
 
 The status file can tell you what work is currently required, but it **cannot redefine the finalized build plan**.
 
