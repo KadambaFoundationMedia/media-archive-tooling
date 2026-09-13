@@ -101,11 +101,7 @@ def dashboard(
     data["files"] = [_dashboard_record(record) for record in data["files"]]
     data["batch_message"] = batch_message
     data["batch_error"] = batch_error
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-        context=data,
-    )
+    return templates.TemplateResponse(request=request, name="index.html", context=data)
 
 
 @app.get("/file/{tracking_id}", response_class=HTMLResponse)
@@ -114,12 +110,7 @@ def file_detail(request: Request, tracking_id: str):
     file_record = service.get_file(tracking_id)
     if not file_record:
         raise HTTPException(status_code=404, detail="File not found in registry")
-
-    return templates.TemplateResponse(
-        request=request,
-        name="detail.html",
-        context={"file": file_record},
-    )
+    return templates.TemplateResponse(request=request, name="detail.html", context={"file": file_record})
 
 
 def _batch_redirect(filter_mode: str, message: str = "", error: str = "") -> RedirectResponse:
@@ -140,17 +131,14 @@ def batch_update(
 ):
     """Apply review and/or filesystem actions to multiple selected rows."""
     if action not in BATCH_ACTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Batch action must be approve, defer, commit, or approve_commit",
-        )
+        raise HTTPException(status_code=400, detail="Batch action must be approve, defer, commit, or approve_commit")
 
     selected = list(dict.fromkeys(tid.strip() for tid in tracking_ids if tid.strip()))
     if not selected:
         raise HTTPException(status_code=400, detail="No files selected")
 
     service = get_service()
-    commit_service = get_commit_service()
+    commit_service = get_commit_service() if action in {"commit", "approve_commit"} else None
     records = []
     for tracking_id in selected:
         record = service.get_file(tracking_id)
@@ -161,17 +149,11 @@ def batch_update(
     if action in {"approve", "defer", "approve_commit"}:
         non_review = [record for record in records if not record.get("needs_review")]
         if non_review:
-            raise HTTPException(
-                status_code=400,
-                detail="Approve/defer actions only apply to files currently requiring human review",
-            )
+            raise HTTPException(status_code=400, detail="Approve/defer actions only apply to files currently requiring human review")
     elif action == "commit":
         blocked = [record for record in records if record.get("needs_review")]
         if blocked:
-            raise HTTPException(
-                status_code=400,
-                detail="Commit requires all selected files to have their human-review blockers resolved first",
-            )
+            raise HTTPException(status_code=400, detail="Commit requires all selected files to have their human-review blockers resolved first")
 
     succeeded = 0
     failures = []
@@ -179,42 +161,21 @@ def batch_update(
         try:
             tracking_id = record["tracking_id"]
             if action == "approve":
-                service.apply_review_action(
-                    tracking_id=tracking_id,
-                    action="approve",
-                    reviewer="review_portal_batch",
-                )
+                service.apply_review_action(tracking_id=tracking_id, action="approve", reviewer="review_portal_batch")
             elif action == "defer":
-                service.apply_review_action(
-                    tracking_id=tracking_id,
-                    action="defer",
-                    reviewer="review_portal_batch",
-                )
+                service.apply_review_action(tracking_id=tracking_id, action="defer", reviewer="review_portal_batch")
             elif action == "commit":
-                commit_service.commit_file(
-                    tracking_id=tracking_id,
-                    reviewer="review_portal_batch",
-                )
+                assert commit_service is not None
+                commit_service.commit_file(tracking_id=tracking_id, reviewer="review_portal_batch")
             elif action == "approve_commit":
-                service.apply_review_action(
-                    tracking_id=tracking_id,
-                    action="approve",
-                    reviewer="review_portal_batch",
-                )
-                commit_service.commit_file(
-                    tracking_id=tracking_id,
-                    reviewer="review_portal_batch",
-                )
+                assert commit_service is not None
+                service.apply_review_action(tracking_id=tracking_id, action="approve", reviewer="review_portal_batch")
+                commit_service.commit_file(tracking_id=tracking_id, reviewer="review_portal_batch")
             succeeded += 1
         except ValueError as exc:
             failures.append(f"{record.get('original_filename') or record['tracking_id']}: {exc}")
 
-    action_label = {
-        "approve": "approved",
-        "defer": "deferred",
-        "commit": "committed",
-        "approve_commit": "approved and committed",
-    }[action]
+    action_label = {"approve": "approved", "defer": "deferred", "commit": "committed", "approve_commit": "approved and committed"}[action]
     message = f"{succeeded} file{'s' if succeeded != 1 else ''} {action_label}."
     error = ""
     if failures:
@@ -222,7 +183,6 @@ def batch_update(
         if len(failures) > 3:
             preview += f"; and {len(failures) - 3} more"
         error = f"{len(failures)} file{'s' if len(failures) != 1 else ''} failed: {preview}"
-
     return _batch_redirect(filter, message=message, error=error)
 
 
@@ -248,5 +208,4 @@ def update_file(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
     return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
