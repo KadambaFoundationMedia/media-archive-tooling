@@ -48,49 +48,79 @@ def test_vedabase_validation_success_and_caching(vedabase_env):
     assert len(called) == 1
 
 
-def test_bg_range_validation_checks_every_inclusive_verse(vedabase_env):
+def test_bg_grouped_range_uses_canonical_range_page(vedabase_env):
     called = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         called.append(str(request.url))
-        return httpx.Response(200, text="Verse text")
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/8-12/":
+            return httpx.Response(200, text="Bg. 13.8-12")
+        return httpx.Response(404)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     validator = VedabaseValidator(cache_db=vedabase_env, client=client)
 
-    is_valid, status = validator.validate_scripture_reference("BG-13-8-12")
+    assert validator.validate_scripture_reference("BG-13-8-12") == (True, "validated")
+    assert called == ["https://vedabase.io/en/library/bg/13/8-12/"]
 
-    assert is_valid is True
-    assert status == "validated"
+
+def test_range_falls_back_to_chapter_coverage_when_exact_range_page_is_absent(vedabase_env):
+    called = []
+    chapter_html = """
+    <a href="/en/library/bg/13/6-7/">6-7</a>
+    <a href="/en/library/bg/13/8-12/">8-12</a>
+    <a href="/en/library/bg/13/13/">13</a>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called.append(str(request.url))
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/8-10/":
+            return httpx.Response(404, text="Not Found")
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/":
+            return httpx.Response(200, text=chapter_html)
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    validator = VedabaseValidator(cache_db=vedabase_env, client=client)
+
+    assert validator.validate_scripture_reference("BG-13-8-10") == (True, "validated")
     assert called == [
-        "https://vedabase.io/en/library/bg/13/8/",
-        "https://vedabase.io/en/library/bg/13/9/",
-        "https://vedabase.io/en/library/bg/13/10/",
-        "https://vedabase.io/en/library/bg/13/11/",
-        "https://vedabase.io/en/library/bg/13/12/",
+        "https://vedabase.io/en/library/bg/13/8-10/",
+        "https://vedabase.io/en/library/bg/13/",
     ]
 
 
-def test_sb_and_cc_ranges_validate_every_inclusive_verse(vedabase_env):
+def test_single_verse_inside_grouped_vedabase_page_is_valid(vedabase_env):
+    chapter_html = '<a href="/en/library/bg/13/8-12/">8-12</a>'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/8/":
+            return httpx.Response(404, text="Not Found")
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/":
+            return httpx.Response(200, text=chapter_html)
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    validator = VedabaseValidator(cache_db=vedabase_env, client=client)
+
+    assert validator.validate_scripture_reference("BG-13-8") == (True, "validated")
+
+
+def test_sb_and_cc_exact_ranges_use_canonical_range_pages(vedabase_env):
     called = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         called.append(str(request.url))
-        return httpx.Response(200, text="Verse text")
+        return httpx.Response(200, text="Range page")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     validator = VedabaseValidator(cache_db=vedabase_env, client=client)
 
     assert validator.validate_scripture_reference("SB-1-1-2-4") == (True, "validated")
     assert validator.validate_scripture_reference("CC-ADI-9-48-50") == (True, "validated")
-
     assert called == [
-        "https://vedabase.io/en/library/sb/1/1/2/",
-        "https://vedabase.io/en/library/sb/1/1/3/",
-        "https://vedabase.io/en/library/sb/1/1/4/",
-        "https://vedabase.io/en/library/cc/adi/9/48/",
-        "https://vedabase.io/en/library/cc/adi/9/49/",
-        "https://vedabase.io/en/library/cc/adi/9/50/",
+        "https://vedabase.io/en/library/sb/1/1/2-4/",
+        "https://vedabase.io/en/library/cc/adi/9/48-50/",
     ]
 
 
@@ -106,18 +136,23 @@ def test_vedabase_validation_not_found(vedabase_env):
     assert status == "not_found"
 
 
-def test_vedabase_range_not_found_when_middle_verse_is_missing(vedabase_env):
+def test_range_not_found_when_chapter_coverage_has_a_gap(vedabase_env):
+    chapter_html = """
+    <a href="/en/library/bg/13/8-9/">8-9</a>
+    <a href="/en/library/bg/13/11-12/">11-12</a>
+    """
+
     def handler(request: httpx.Request) -> httpx.Response:
-        if "/13/10/" in str(request.url):
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/8-12/":
             return httpx.Response(404, text="Not Found")
-        return httpx.Response(200, text="Verse text")
+        if str(request.url) == "https://vedabase.io/en/library/bg/13/":
+            return httpx.Response(200, text=chapter_html)
+        return httpx.Response(404)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     validator = VedabaseValidator(cache_db=vedabase_env, client=client)
 
-    is_valid, status = validator.validate_scripture_reference("BG-13-8-12")
-    assert is_valid is False
-    assert status == "not_found"
+    assert validator.validate_scripture_reference("BG-13-8-12") == (False, "not_found")
 
 
 def test_descending_range_is_invalid_format(vedabase_env):
@@ -134,44 +169,59 @@ def test_descending_range_is_invalid_format(vedabase_env):
     assert called == []
 
 
-def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
-    """A transient false 404 must not poison a real scripture reference for 24 hours."""
-    called = 0
-    first_attempt = True
+def test_legacy_false_negative_cache_does_not_poison_corrected_validator(vedabase_env):
+    validator = VedabaseValidator(cache_db=vedabase_env)
+    with sqlite3.connect(str(vedabase_env)) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vedabase_cache (ref_key, is_valid, status, cached_at) VALUES (?, ?, ?, ?)",
+            ("BG-13-8-12", 0, "not_found", time.time()),
+        )
+        conn.commit()
+
+    called = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal called, first_attempt
+        called.append(str(request.url))
+        return httpx.Response(200, text="Bg. 13.8-12")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    corrected = VedabaseValidator(cache_db=vedabase_env, client=client)
+
+    assert corrected.validate_scripture_reference("BG-13-8-12") == (True, "validated")
+    assert called == ["https://vedabase.io/en/library/bg/13/8-12/"]
+
+
+def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
+    called = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
         called += 1
-        # First request of the first attempt fails; the remaining range pages work.
-        if first_attempt:
-            first_attempt = False
+        if called <= 2:
             return httpx.Response(404, text="Not Found")
-        return httpx.Response(200, text="BG 13.8-12")
+        return httpx.Response(200, text="Bg. 13.8-12")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     validator = VedabaseValidator(cache_db=vedabase_env, client=client)
 
-    first_valid, first_status = validator.validate_scripture_reference("BG-13-8-12")
-    assert first_valid is False
-    assert first_status == "not_found"
-    assert called == 5  # Verses 8, 9, 10, 11, and 12 are all checked.
+    assert validator.validate_scripture_reference("BG-13-8-12") == (False, "not_found")
+    assert called == 2
 
-    # Age only the negative entry past the short negative TTL, but nowhere near 24 hours.
     with sqlite3.connect(str(vedabase_env)) as conn:
         conn.execute(
             "UPDATE vedabase_cache SET cached_at = ? WHERE ref_key = ?",
-            (time.time() - VedabaseValidator.NEGATIVE_TTL_SECS - 1, "BG-13-8-12"),
+            (
+                time.time() - VedabaseValidator.NEGATIVE_TTL_SECS - 1,
+                "v2:BG-13-8-12",
+            ),
         )
         conn.commit()
 
-    recovered_valid, recovered_status = validator.validate_scripture_reference("BG-13-8-12")
-    assert recovered_valid is True
-    assert recovered_status == "validated"
-    assert called == 10
+    assert validator.validate_scripture_reference("BG-13-8-12") == (True, "validated")
+    assert called == 3
 
 
 def test_vedabase_network_failure_returns_pending_stale(vedabase_env):
-    """On network failure, retain candidate with pending/stale validation without inventing validity."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="Service Unavailable")
 
@@ -198,7 +248,10 @@ def test_vedabase_cache_refresh_after_ttl(vedabase_env):
     assert called == 1
 
     with sqlite3.connect(str(vedabase_env)) as conn:
-        conn.execute("UPDATE vedabase_cache SET cached_at = ? WHERE ref_key = ?", (time.time() - 90000, "SB-1-1-1"))
+        conn.execute(
+            "UPDATE vedabase_cache SET cached_at = ? WHERE ref_key = ?",
+            (time.time() - 90000, "v2:SB-1-1-1"),
+        )
         conn.commit()
 
     validator.validate_scripture_reference("SB-1-1-1")
