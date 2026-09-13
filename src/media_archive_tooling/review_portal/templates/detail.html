@@ -163,6 +163,74 @@
         </div>
     </form>
 
+    {% if media_db_review %}
+    <div class="card">
+        <h2>Tool 2 — Baserow Media Database Reconciliation</h2>
+        <div style="margin-bottom: 16px;">
+            <div>Decision: <strong>{{ media_db_review.decision }}</strong> &middot; Database: <strong>{{ media_db_review.database_state }}</strong> (Snapshot: {{ media_db_review.snapshot_timestamp }})</div>
+            <div>Proposed Tool 4 Action: <code>{{ media_db_review.result.proposed_tool4_action }}</code></div>
+            {% if media_db_review.selected_media_row_id %}
+            <div style="margin-top: 4px; color: #16a34a; font-weight: 600;">Selected Baserow Media Row: #{{ media_db_review.selected_media_row_id }}</div>
+            {% endif %}
+            {% if media_db_review.result.renamer_enrichment.confirmed %}
+            <div style="margin-top: 4px; color: #0284c7; font-weight: 600;">Confirmed Title: {{ media_db_review.result.renamer_enrichment.title_full }}</div>
+            {% endif %}
+        </div>
+
+        {% if media_db_review.result.candidates %}
+        <h3>Candidate Media Rows</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px;">
+            <thead>
+                <tr style="background: #f1f5f9; text-align: left;">
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Row ID</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Date</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Title / What</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Location</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Field Comparisons</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Score & Reasons</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cand in media_db_review.result.candidates %}
+                <tr>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;"><strong>#{{ cand.media_row_id }}</strong></td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.normalized_row.date or "—" }}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.normalized_row.title or cand.normalized_row.what or "—" }}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.normalized_row.place or "—" }}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">
+                        {% for fname, comp in cand.field_comparisons.items() %}
+                        <div>{{ fname }}: <span class="badge" style="background: {% if comp.state == 'AGREES' %}#16a34a{% elif comp.state == 'CONFLICT' %}#dc2626{% else %}#64748b{% endif %};">{{ comp.state }}</span></div>
+                        {% endfor %}
+                    </td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">
+                        <div>Score: {{ "%.1f"|format(cand.score) }}</div>
+                        <ul style="margin: 4px 0 0 0; padding-left: 16px; font-size: 11px; color: #475569;">
+                            {% for r in cand.retrieval_reasons %}
+                            <li>{{ r }}</li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+
+        <form method="POST" action="/file/{{ file.tracking_id }}/media-db-action" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e2e8f0;">
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                {% if media_db_review.result.candidates %}
+                <label style="margin: 0; font-weight: normal;">Confirm Candidate ID:
+                    <input type="number" name="media_row_id" value="{{ media_db_review.selected_media_row_id or (media_db_review.result.candidates[0].media_row_id if media_db_review.result.candidates else '') }}" style="width: 100px; padding: 6px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                </label>
+                <button type="submit" name="action" value="confirm_existing" class="btn btn-success">Confirm Existing Row</button>
+                {% endif %}
+                <button type="submit" name="action" value="confirm_new" class="btn btn-primary">Confirm New Media Item</button>
+                <button type="submit" name="action" value="defer" class="btn">Defer Decision</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
     <div class="card">
         <h2>Evidence Provenance</h2>
         <ul>

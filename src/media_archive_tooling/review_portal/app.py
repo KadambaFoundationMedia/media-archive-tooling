@@ -110,7 +110,48 @@ def file_detail(request: Request, tracking_id: str):
     file_record = service.get_file(tracking_id)
     if not file_record:
         raise HTTPException(status_code=404, detail="File not found in registry")
-    return templates.TemplateResponse(request=request, name="detail.html", context={"file": file_record})
+    media_db_review = service.registry.get_media_db_review(tracking_id)
+    return templates.TemplateResponse(
+        request=request,
+        name="detail.html",
+        context={"file": file_record, "media_db_review": media_db_review},
+    )
+
+
+@app.post("/file/{tracking_id}/media-db-action")
+def media_db_action(
+    tracking_id: str,
+    action: str = Form(...),
+    media_row_id: Optional[int] = Form(None),
+    notes: str = Form(""),
+):
+    from ..media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+    from ..media_db_reviewer.service import MediaDatabaseReviewService
+
+    config = load_config()
+    registry = get_registry()
+    provider = BaserowSnapshotProvider(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
+        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
+        snapshot_path=config.baserow_snapshot_path,
+    )
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    try:
+        service.apply_human_decision(
+            tracking_id=tracking_id,
+            action=action,
+            media_row_id=media_row_id,
+            notes=notes,
+            reviewer="review_portal",
+        )
+        service.apply_enrichment_to_renamer(tracking_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
 
 
 def _batch_redirect(filter_mode: str, message: str = "", error: str = "") -> RedirectResponse:
