@@ -1,7 +1,7 @@
 """Localhost FastAPI review portal application."""
 import re
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +17,7 @@ MODULE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = MODULE_DIR / "templates"
 STATIC_DIR = MODULE_DIR / "static"
 TRACKING_TOKEN_RE = re.compile(r"_ID-[0-9a-fA-F]{8}(?=\.|$)", re.IGNORECASE)
+BATCH_REVIEW_ACTIONS = {"approve", "defer"}
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 if STATIC_DIR.exists():
@@ -101,6 +102,47 @@ def file_detail(request: Request, tracking_id: str):
             "file": file_record,
         }
     )
+
+
+@app.post("/batch/update")
+def batch_update(
+    tracking_ids: List[str] = Form(...),
+    action: str = Form(...),
+    filter: str = Form("review"),
+):
+    """Apply a safe review-state action to multiple selected review rows."""
+    if action not in BATCH_REVIEW_ACTIONS:
+        raise HTTPException(status_code=400, detail="Batch action must be approve or defer")
+
+    selected = list(dict.fromkeys(tid.strip() for tid in tracking_ids if tid.strip()))
+    if not selected:
+        raise HTTPException(status_code=400, detail="No files selected")
+
+    service = get_service()
+    records = []
+    for tracking_id in selected:
+        record = service.get_file(tracking_id)
+        if not record:
+            raise HTTPException(status_code=404, detail=f"File {tracking_id} not found in registry")
+        if not record.get("needs_review"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {tracking_id} is not currently in the human-review queue",
+            )
+        records.append(record)
+
+    try:
+        for record in records:
+            service.apply_review_action(
+                tracking_id=record["tracking_id"],
+                action=action,
+                reviewer="review_portal_batch",
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    safe_filter = filter if filter in {"all", "review", "committed"} else "review"
+    return RedirectResponse(url=f"/?filter={safe_filter}", status_code=303)
 
 
 @app.post("/file/{tracking_id}/update")
