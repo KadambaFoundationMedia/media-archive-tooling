@@ -104,8 +104,9 @@ class RenameCommitService:
 
         parser_res.identity.current_filename = target_path.name
         proposal.status = "committed"
-        proposal.current_filename = target_path.name
         proposal.parser_result = parser_res
+        # Keep proposal.current_filename as the pre-rename source name so the
+        # rename_history row accurately records from_filename -> to_filename.
         self.registry.record_commit(proposal, target_path)
         self.registry.update_file_review(
             tracking_id=tracking_id,
