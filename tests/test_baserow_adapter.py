@@ -126,6 +126,26 @@ def test_baserow_structured_select_and_link_values_are_normalized():
     assert leipzig["country_iso2"] == "de"
 
 
+def test_baserow_client_follows_redirects():
+    """Live Baserow reference fetches must survive canonical-host/HTTPS redirects."""
+    media_page = {
+        "count": 1,
+        "next": None,
+        "results": [{"Place, location": "Leipzig", "Country": "Germany"}],
+    }
+
+    mock_client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=media_page))
+    )
+    provider = BaserowReferenceProvider(api_token="dummy-token", media_table_id="200")
+
+    with patch("httpx.Client", return_value=mock_client) as client_factory:
+        provider.load_all_references()
+
+    assert client_factory.call_args.kwargs["follow_redirects"] is True
+    assert provider.find_place("Leipzig") is not None
+
+
 def test_baserow_guarded_write_duplicate_prevention():
     """Verify that create_missing_reference_value prevents duplicate writes."""
     provider = BaserowReferenceProvider(
