@@ -12,7 +12,18 @@ For media filenames, scripture references use a fixed hierarchy and a final opti
 
 A range is **inclusive of every verse from the starting verse through the ending verse**. Therefore `BG-13-8-12` means BG 13.8, 13.9, 13.10, 13.11, and 13.12. Validation must account for every represented verse, not only the first and last verse.
 
-The range is represented only by the final hyphen before the ending verse. A dotted extra numeric component is not another valid range form. Vedabase validation of a range must validate every verse page in the inclusive span rather than assuming a combined range URL exists.
+The range is represented only by the final hyphen before the ending verse. A dotted extra numeric component is not another valid range form.
+
+### Vedabase validation
+
+Vedabase is authoritative, but its page structure does not guarantee one URL per individual verse. It sometimes publishes consecutive verses together on a single canonical page. For example, BG 13.8 through 13.12 is represented by the canonical Vedabase page `/bg/13/8-12/`; individual `/bg/13/8/`, `/bg/13/9/`, and similar URLs must not be assumed to exist.
+
+Therefore range validation must:
+
+1. first check the exact canonical Vedabase URL for the requested reference/range;
+2. accept a successful exact range page as validation of the complete inclusive range;
+3. if an exact range URL does not exist, inspect the relevant Vedabase chapter index and verify that every verse represented by the requested inclusive range is covered by Vedabase's canonical single-verse or grouped-verse links;
+4. never mark a range invalid merely because an individual verse does not have a standalone URL.
 
 The standard structure is
 
