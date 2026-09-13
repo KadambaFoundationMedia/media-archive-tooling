@@ -73,17 +73,95 @@ def test_golden_case_5_edited(parser_and_planner):
     assert res.file_metadata.edited is True
     assert res.where.place_location == "Sydney"
     assert res.where.country_iso2 == "au"
+    # Prior to Baserow check, _edited MUST be preserved
+    assert "_edited_ID-" in prop.proposed_filename
+
+    # After Baserow check is complete, _edited is removed
+    res.file_metadata.baserow_check_complete = True
+    prop_after = planner.plan_rename(res)
+    assert "_edited" not in prop_after.proposed_filename
+    assert prop_after.proposed_filename.startswith("2012-05-13_KKS_BG-8-19_Sydney-au_ID-")
+
+
+def test_unresolved_what_does_not_fabricate_recording(parser_and_planner):
+    # Known WHEN and WHERE, but unresolved WHAT
+    parser, planner = parser_and_planner
+    res = parser.parse_file(Path("/archive/2012-05-13_Sydney.mp3"))
+    prop = planner.plan_rename(res)
+
+    assert res.what.selected_value is None
+    assert res.what.state == ResolutionState.UNRESOLVED
+    assert "Recording" not in prop.proposed_filename
+    # Must preserve useful current wording + tracking ID
+    assert prop.proposed_filename == f"2012-05-13_Sydney_ID-{res.identity.tracking_id}.mp3"
 
 
 def test_golden_case_prague_collection(parser_and_planner):
-    # Prague-Oct-2003/Lekce/A019 03-10-23 BG 3.12 Praha.mp3
+    from media_archive_tooling.renamer.parser.collection import CollectionGrammar
     parser, planner = parser_and_planner
-    file_path = Path("/archive/Prague-Oct-2003/Lekce/A019 03-10-23 BG 3.12 Praha.mp3")
-    res = parser.parse_file(file_path)
-    prop = planner.plan_rename(res)
+    dir_path = Path("/archive/Prague-Oct-2003/Lekce")
+    filenames = [
+        "A019 03-10-23 BG 3.12 Praha.mp3",
+        "A020 03-10-24 SB 9.23.22 Praha.mp3",
+        "A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3",
+    ]
+    grammar = CollectionGrammar(dir_path, filenames)
 
-    assert res.when.selected_value == "2003-10-23"
-    assert res.what.selected_value == "BG-3-12"
-    assert res.where.place_location == "Praha"
-    assert res.where.country_iso2 == "cz"
-    assert prop.proposed_filename.startswith("2003-10-23_KKS_BG-3-12_Praha-cz")
+    # 1. A019
+    res1 = parser.parse_file(dir_path / filenames[0], collection_grammar=grammar)
+    prop1 = planner.plan_rename(res1)
+    assert res1.file_metadata.source_sequence_id == "A019"
+    assert res1.when.selected_value == "2003-10-23"
+    assert res1.what.selected_value == "BG-3-12"
+    assert res1.where.place_location == "Praha"
+    assert res1.where.country_iso2 == "cz"
+    assert prop1.proposed_filename.startswith("2003-10-23_KKS_BG-3-12_Praha-cz")
+
+    # 2. A020
+    res2 = parser.parse_file(dir_path / filenames[1], collection_grammar=grammar)
+    prop2 = planner.plan_rename(res2)
+    assert res2.file_metadata.source_sequence_id == "A020"
+    assert res2.when.selected_value == "2003-10-24"
+    assert res2.what.selected_value == "SB-9-23-22"
+    assert res2.where.place_location == "Praha"
+    assert prop2.proposed_filename.startswith("2003-10-24_KKS_SB-9-23-22_Praha-cz")
+
+    # 3. A022F
+    res3 = parser.parse_file(dir_path / filenames[2], collection_grammar=grammar)
+    prop3 = planner.plan_rename(res3)
+    assert res3.file_metadata.source_sequence_id == "A022F"
+    assert res3.when.selected_value == "2003-10-25"
+    assert res3.what.selected_value == "SB-4-9-11"
+    assert res3.where.place_location == "Praha"
+    assert prop3.proposed_filename.startswith("2003-10-25_KKS_SB-4-9-11_Praha-cz")
+
+
+def test_golden_case_duben_2008_folder_grammar(parser_and_planner):
+    """Sequence indices like 07, 08 must not become calendar days."""
+    from media_archive_tooling.renamer.parser.collection import CollectionGrammar
+    parser, planner = parser_and_planner
+    dir_path = Path("/archive/KKS DUBEN 2008 MP3")
+    filenames = [
+        "07 KKS PRUHON.mp3",
+        "08 KKS SB 3.1.26.mp3",
+    ]
+    grammar = CollectionGrammar(dir_path, filenames)
+
+    # File 07: sequence index 07, not 7th of April!
+    res07 = parser.parse_file(dir_path / filenames[0], collection_grammar=grammar)
+    prop07 = planner.plan_rename(res07)
+    assert res07.file_metadata.source_sequence_id == "07"
+    assert res07.when.selected_value == "2008-04-DD"
+    assert res07.where.place_location == "Pruhonice"
+    assert res07.where.country_iso2 == "cz"
+    assert res07.what.selected_value is None
+    assert "Recording" not in prop07.proposed_filename
+    assert prop07.needs_review is True
+
+    # File 08: sequence index 08, not 8th of April!
+    res08 = parser.parse_file(dir_path / filenames[1], collection_grammar=grammar)
+    prop08 = planner.plan_rename(res08)
+    assert res08.file_metadata.source_sequence_id == "08"
+    assert res08.when.selected_value == "2008-04-DD"
+    assert res08.what.selected_value == "SB-3-1-26"
+    assert prop08.proposed_filename.startswith("2008-04-DD_KKS_SB-3-1-26")

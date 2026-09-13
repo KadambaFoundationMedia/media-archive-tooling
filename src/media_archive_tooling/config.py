@@ -10,6 +10,7 @@ class AppConfig(BaseModel):
     baserow_api_token: Optional[str] = None
     baserow_mcp_url: Optional[str] = None
     baserow_media_table_id: Optional[str] = None
+    baserow_category_table_id: Optional[str] = None
     baserow_database_id: Optional[str] = None
     youtube_api_key_kf: Optional[str] = None
     youtube_api_key_kksblog: Optional[str] = None
@@ -34,6 +35,7 @@ def load_config(env_path: Optional[Path] = None) -> AppConfig:
         baserow_api_token=env_vars.get("BASEROW_API_TOKEN"),
         baserow_mcp_url=env_vars.get("BASEROW_MCP_URL"),
         baserow_media_table_id=env_vars.get("BASEROW_MEDIA_TABLE_ID"),
+        baserow_category_table_id=env_vars.get("BASEROW_CATEGORY_TABLE_ID"),
         baserow_database_id=env_vars.get("BASEROW_DATABASE_ID"),
         youtube_api_key_kf=env_vars.get("YOUTUBE_API_KEY_KF"),
         youtube_api_key_kksblog=env_vars.get("YOUTUBE_API_KEY_KKSBLOG"),

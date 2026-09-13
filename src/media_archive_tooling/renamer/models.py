@@ -51,6 +51,7 @@ class WhereResult(BaseModel):
 
 class FileMetadata(BaseModel):
     edited: bool = False
+    baserow_check_complete: bool = False
     corrupted: bool = False
     source_sequence_id: Optional[str] = None  # e.g. "A019", "R09_0004"
     part_or_track_number: Optional[str] = None  # e.g. "01", "07", "part-1"

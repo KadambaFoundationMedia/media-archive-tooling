@@ -56,7 +56,8 @@ def load_category_definitions() -> List[Dict[str, Any]]:
 def parse_what(
     filename: str,
     parent_folder: str = "",
-    categories_ref: Optional[List[Dict[str, Any]]] = None
+    categories_ref: Optional[List[Dict[str, Any]]] = None,
+    vedabase_validator: Optional[Any] = None,
 ) -> Tuple[WhatResult, str, Optional[str]]:
     """Resolve WHAT topic and category from filename and folder context."""
     categories = categories_ref or load_category_definitions()
@@ -76,11 +77,20 @@ def parse_what(
         if "kirtan" in folder_context:
             conflict = f"Filename WHAT '{what_val}' contradicts parent folder category 'Kirtan'"
             
+        ev_details = "parsed"
+        state = ResolutionState.EXACT
+        if vedabase_validator:
+            is_valid, v_status = vedabase_validator.validate_scripture_reference(what_val)
+            ev_details = f"vedabase:{v_status}"
+            if not is_valid and v_status == "not_found":
+                state = ResolutionState.AMBIGUOUS
+                conflict = f"Scripture reference '{what_val}' not found in Vedabase"
+            
         res = WhatResult(
             selected_value=what_val,
             category="Srimad Bhagavatam",
-            state=ResolutionState.EXACT,
-            evidence=[Evidence(source="filename_scripture_sb", raw_value=sb_match.group(0).strip(" _.-"))]
+            state=state,
+            evidence=[Evidence(source="filename_scripture_sb", raw_value=sb_match.group(0).strip(" _.-"), details=ev_details)]
         )
         return res, cleaned.strip(), conflict
 
@@ -95,11 +105,20 @@ def parse_what(
         if "kirtan" in folder_context:
             conflict = f"Filename WHAT '{what_val}' contradicts parent folder category 'Kirtan'"
             
+        ev_details = "parsed"
+        state = ResolutionState.EXACT
+        if vedabase_validator:
+            is_valid, v_status = vedabase_validator.validate_scripture_reference(what_val)
+            ev_details = f"vedabase:{v_status}"
+            if not is_valid and v_status == "not_found":
+                state = ResolutionState.AMBIGUOUS
+                conflict = f"Scripture reference '{what_val}' not found in Vedabase"
+            
         res = WhatResult(
             selected_value=what_val,
             category="Bhagavad Gita",
-            state=ResolutionState.EXACT,
-            evidence=[Evidence(source="filename_scripture_bg", raw_value=bg_match.group(0).strip(" _.-"))]
+            state=state,
+            evidence=[Evidence(source="filename_scripture_bg", raw_value=bg_match.group(0).strip(" _.-"), details=ev_details)]
         )
         return res, cleaned.strip(), conflict
 
@@ -111,11 +130,20 @@ def parse_what(
         span = cc_match.span()
         cleaned = working[:span[0]] + " " + working[span[1]:]
         
+        ev_details = "parsed"
+        state = ResolutionState.EXACT
+        if vedabase_validator:
+            is_valid, v_status = vedabase_validator.validate_scripture_reference(what_val)
+            ev_details = f"vedabase:{v_status}"
+            if not is_valid and v_status == "not_found":
+                state = ResolutionState.AMBIGUOUS
+                conflict = f"Scripture reference '{what_val}' not found in Vedabase"
+            
         res = WhatResult(
             selected_value=what_val,
             category="Chaitanya Charitamrita",
-            state=ResolutionState.EXACT,
-            evidence=[Evidence(source="filename_scripture_cc", raw_value=cc_match.group(0).strip(" _.-"))]
+            state=state,
+            evidence=[Evidence(source="filename_scripture_cc", raw_value=cc_match.group(0).strip(" _.-"), details=ev_details)]
         )
         return res, cleaned.strip(), conflict
 

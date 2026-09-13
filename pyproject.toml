@@ -7,7 +7,7 @@ name = "media-archive-tooling"
 version = "0.1.0"
 description = "Tools for processing media files in the archive"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.7.0",
     "rapidfuzz>=3.8.0",

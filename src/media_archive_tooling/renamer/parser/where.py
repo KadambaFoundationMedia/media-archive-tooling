@@ -14,9 +14,15 @@ COUNTRIES_PATH = ASSETS_DIR / "country_codes.json"
 
 
 class WhereResolver:
-    def __init__(self, locations_data: Optional[List[Dict[str, Any]]] = None, countries_data: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        locations_data: Optional[List[Dict[str, Any]]] = None,
+        countries_data: Optional[Dict[str, str]] = None,
+        location_lookup_provider: Optional[Any] = None,
+    ):
         self.locations: List[Dict[str, Any]] = locations_data or self._load_locations()
         self.countries: Dict[str, str] = countries_data or self._load_countries()
+        self.location_lookup_provider = location_lookup_provider
         self._alias_list = []
         for loc in self.locations:
             all_aliases = [loc["canonical_place"]] + loc.get("aliases", [])
@@ -158,6 +164,34 @@ class WhereResolver:
                 )]
             )
             return res, filename_text.strip()
+
+        # 4. Online location lookup fallback
+        if self.location_lookup_provider:
+            for token in tokens:
+                token_clean = to_ascii_latin(token).strip(" _.-")
+                if len(token_clean) >= 3 and not token_clean.isdigit():
+                    loc_data = self.location_lookup_provider.lookup(token_clean)
+                    if loc_data and loc_data.get("canonical_place"):
+                        canon_place = loc_data["canonical_place"]
+                        c_name = loc_data.get("country")
+                        iso2 = loc_data.get("country_iso2")
+                        pattern = rf"(?:^|[\s_.-]){re.escape(token)}(?=[_.\s-]|$)"
+                        m = re.search(pattern, filename_text)
+                        if m:
+                            span = m.span()
+                            filename_text = filename_text[:span[0]] + " " + filename_text[span[1]:]
+                        res = WhereResult(
+                            place_location=canon_place,
+                            country=c_name,
+                            country_iso2=iso2.lower() if iso2 else None,
+                            state=ResolutionState.PROVISIONAL,
+                            evidence=[Evidence(
+                                source="online_location_lookup",
+                                raw_value=token,
+                                details=f"geocoded to '{canon_place}-{iso2}'"
+                            )]
+                        )
+                        return res, filename_text.strip()
 
         return WhereResult(
             place_location=None,

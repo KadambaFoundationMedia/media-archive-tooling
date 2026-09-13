@@ -12,6 +12,8 @@ from .planner import RenamePlanner
 from ..registry.registry import LocalRegistry
 from ..logging.logger import RenamerLogger
 from ...adapters.baserow import BaserowReferenceProvider
+from ...adapters.vedabase import VedabaseValidator
+from ...adapters.location import LocationLookupProvider
 
 MEDIA_EXTENSIONS = {
     ".mp3", ".wav", ".wma", ".m4a", ".aac", ".flac", ".ogg",
@@ -25,11 +27,15 @@ class BatchExecutor:
         registry: LocalRegistry,
         logger: RenamerLogger,
         provider: Optional[BaserowReferenceProvider] = None,
+        vedabase_validator: Optional[VedabaseValidator] = None,
+        location_provider: Optional[LocationLookupProvider] = None,
         mode: RenameMode = RenameMode.INITIAL
     ):
         self.registry = registry
         self.logger = logger
         self.provider = provider or BaserowReferenceProvider()
+        self.vedabase_validator = vedabase_validator or VedabaseValidator()
+        self.location_provider = location_provider or LocationLookupProvider()
         self.mode = mode
 
         # Load references and initialize parser
@@ -37,7 +43,9 @@ class BatchExecutor:
         self.parser = RenamerParser(
             categories_ref=self.provider.get_category_titles(),
             locations_ref=self.provider.get_known_locations(),
-            countries_ref=self.provider.get_country_values()
+            countries_ref=self.provider.get_country_values(),
+            vedabase_validator=self.vedabase_validator,
+            location_lookup_provider=self.location_provider,
         )
         self.planner = RenamePlanner(mode=self.mode)
 

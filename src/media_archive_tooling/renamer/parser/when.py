@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Any
 from ..models import WhenResult, ResolutionState, Evidence
 
 MIN_ARCHIVE_YEAR = 1993
@@ -59,7 +59,8 @@ def parse_when(
     filename: str,
     parent_folder: str = "",
     ancestors: Optional[List[str]] = None,
-    us_context: bool = False
+    us_context: bool = False,
+    collection_grammar: Optional[Any] = None,
 ) -> Tuple[WhenResult, str]:
     """Parse WHEN date information from filename and folder context."""
     month_map = _get_month_map()
@@ -103,7 +104,7 @@ def parse_when(
                 y_int = int(year_str)
                 year_val = y_int if len(year_str) == 4 else expand_two_digit_year(y_int)
             elif folder_context:
-                fy_match = re.search(r"\b(199[3-9]|20[0-2][0-3])\b", folder_context)
+                fy_match = re.search(r"\b(199[3-9]|20[01]\d|202[0-3])\b", folder_context)
                 if fy_match:
                     year_val = int(fy_match.group(1))
                     
@@ -155,13 +156,23 @@ def parse_when(
             else:
                 selected = None
                 alternatives = []
-                for cand, fmt in candidates:
-                    cyear, cmonth, cday = cand.split("-")
-                    if cyear in folder_context:
-                        selected = cand
-                    else:
-                        alternatives.append(cand)
-                        
+
+                # If collection grammar has a repeated date format (e.g. YY-MM-DD), prioritize it
+                if collection_grammar and getattr(collection_grammar, "repeated_date_format", None):
+                    target_fmt = collection_grammar.repeated_date_format
+                    for cand, fmt in candidates:
+                        if fmt == target_fmt:
+                            selected = cand
+                            break
+
+                if not selected:
+                    for cand, fmt in candidates:
+                        cyear, cmonth, cday = cand.split("-")
+                        if cyear in folder_context:
+                            selected = cand
+                        else:
+                            alternatives.append(cand)
+                            
                 if not selected:
                     if us_context:
                         selected = next((c for c, f in candidates if f == "M-D-Y"), candidates[0][0])
@@ -172,13 +183,13 @@ def parse_when(
                 return WhenResult(
                     selected_value=selected,
                     precision="day",
-                    state=ResolutionState.PROVISIONAL,
+                    state=ResolutionState.PROVISIONAL if not (collection_grammar and getattr(collection_grammar, "repeated_date_format", None)) else ResolutionState.STRONG,
                     alternatives=alternatives,
-                    evidence=[Evidence(source="numeric_ambiguous", raw_value=num_match.group(0).strip(" _.-"))]
+                    evidence=[Evidence(source="numeric_ambiguous", raw_value=num_match.group(0).strip(" _.-"), details=f"grammar:{getattr(collection_grammar, 'repeated_date_format', None)}" if collection_grammar else None)]
                 ), cleaned.strip()
 
     # 5. Check folder context if filename has no date
-    folder_year = re.search(r"\b(199[3-9]|20[0-2][0-3])\b", folder_context)
+    folder_year = re.search(r"\b(199[3-9]|20[01]\d|202[0-3])\b", folder_context)
     if folder_year:
         yr = int(folder_year.group(1))
         found_mo = None
@@ -187,9 +198,13 @@ def parse_when(
                 found_mo = mo
                 break
                 
+        is_sequence = bool(
+            (collection_grammar and getattr(collection_grammar, "has_sequence_prefix", False))
+            or re.match(r"^(\d{1,3})[\s_\-]+(?:KKS|SB|BG|CC)\b", filename.strip(), re.IGNORECASE)
+        )
         lead_num = re.match(r"^(\d{1,2})\b", filename.strip())
         day_str = "DD"
-        if lead_num and 1 <= int(lead_num.group(1)) <= 31:
+        if not is_sequence and lead_num and 1 <= int(lead_num.group(1)) <= 31:
             day_str = f"{int(lead_num.group(1)):02d}"
             
         val = f"{yr}-{found_mo or 'MM'}-{day_str}"

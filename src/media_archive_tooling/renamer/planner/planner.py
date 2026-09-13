@@ -20,20 +20,15 @@ class RenamePlanner:
             result.what.selected_value is not None
             and result.what.state != ResolutionState.UNRESOLVED
         )
-        has_meaningful_when = (
-            result.when.selected_value != "YYYY-MM-DD"
-            and result.when.state != ResolutionState.UNRESOLVED
-        )
 
-        if not has_meaningful_what and not has_meaningful_when:
-            # Cannot yet meaningfully interpret -> retain useful original wording + tracking ID
+        edited_suffix = "_edited" if (result.file_metadata.edited and not result.file_metadata.baserow_check_complete) else ""
+
+        if not has_meaningful_what:
+            # Cannot yet form a safe canonical filename -> retain useful original wording + tracking ID
             stem = Path(result.identity.original_filename).stem
-            clean_stem = re.sub(r"_ID-[0-9a-fA-F]{8}$", "", stem)
-            
-            if self.mode == RenameMode.FINALIZE:
-                proposed_name = f"{clean_stem}_ID-{tracking_id}{ext}"
-            else:
-                proposed_name = f"{clean_stem}_ID-{tracking_id}{ext}"
+            clean_stem = re.sub(r"_ID-[0-9a-fA-F]{8}$", "", stem, flags=re.IGNORECASE)
+            clean_stem = re.sub(r"_edited$", "", clean_stem, flags=re.IGNORECASE)
+            proposed_name = f"{clean_stem}{edited_suffix}_ID-{tracking_id}{ext}"
         else:
             parts = []
             
@@ -45,17 +40,8 @@ class RenamePlanner:
             parts.append(result.who)
             
             # WHAT
-            if result.what.selected_value:
-                what_clean = sanitize_filename_token(to_ascii_latin(result.what.selected_value))
-                parts.append(what_clean)
-            elif result.what.category:
-                cat_clean = sanitize_filename_token(to_ascii_latin(result.what.category))
-                parts.append(cat_clean)
-            else:
-                if result.unclassified_text:
-                    parts.append(sanitize_filename_token("-".join(result.unclassified_text[:2])))
-                else:
-                    parts.append("Recording")
+            what_clean = sanitize_filename_token(to_ascii_latin(result.what.selected_value))
+            parts.append(what_clean)
                     
             # WHERE
             if result.where.place_location:
@@ -69,10 +55,10 @@ class RenamePlanner:
                 
             base_canonical = "_".join(parts)
             
-            if self.mode == RenameMode.FINALIZE:
+            if self.mode == RenameMode.FINALIZE and not edited_suffix:
                 proposed_name = f"{base_canonical}{ext}"
             else:
-                proposed_name = f"{base_canonical}_ID-{tracking_id}{ext}"
+                proposed_name = f"{base_canonical}{edited_suffix}_ID-{tracking_id}{ext}"
 
         proposed_path = str(orig_path.parent / proposed_name)
         changes = (proposed_name != result.identity.current_filename)

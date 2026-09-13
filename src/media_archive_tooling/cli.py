@@ -29,7 +29,8 @@ def run_renamer(args):
     provider = BaserowReferenceProvider(
         api_url=config.baserow_api_url,
         api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
     )
 
     executor = BatchExecutor(registry=registry, logger=logger, provider=provider, mode=mode)
@@ -71,6 +72,9 @@ def run_renamer(args):
 def run_review(args):
     import uvicorn
     host = args.host or "127.0.0.1"
+    if host not in ("127.0.0.1", "localhost"):
+        print(f"Error: Non-loopback host '{host}' is forbidden. Review portal must bind to loopback (127.0.0.1 or localhost).", file=sys.stderr)
+        sys.exit(1)
     port = args.port or 8000
     print(f"Starting review portal on http://{host}:{port}")
     uvicorn.run("media_archive_tooling.review_portal.app:app", host=host, port=port, reload=False)
@@ -106,8 +110,8 @@ def main():
     renamer_parser = subparsers.add_parser("renamer", help="Run Tool 1: Renamer")
     renamer_parser.add_argument("target", help="Target directory containing media files")
     renamer_parser.add_argument("--mode", choices=["initial", "enrich", "finalize"], default="initial")
-    renamer_parser.add_argument("--dry-run", dest="commit", action="store_false", default=True, help="Perform dry-run (default)")
-    renamer_parser.add_argument("--commit", dest="commit", action="store_true", help="Apply renames to filesystem")
+    renamer_parser.add_argument("--commit", dest="commit", action="store_true", default=False, help="Apply renames to filesystem")
+    renamer_parser.add_argument("--dry-run", dest="commit", action="store_false", help="Perform dry-run without modifying filesystem (default)")
     renamer_parser.add_argument("--registry-path", help="Custom SQLite registry path")
     renamer_parser.add_argument("--log-dir", help="Custom log output directory")
     renamer_parser.set_defaults(func=run_renamer)
@@ -116,15 +120,15 @@ def main():
     scan_parser = subparsers.add_parser("scan", help="Alias for renamer")
     scan_parser.add_argument("target", help="Target directory containing media files")
     scan_parser.add_argument("--mode", choices=["initial", "enrich", "finalize"], default="initial")
-    scan_parser.add_argument("--dry-run", dest="commit", action="store_false", default=True)
-    scan_parser.add_argument("--commit", dest="commit", action="store_true")
+    scan_parser.add_argument("--commit", dest="commit", action="store_true", default=False, help="Apply renames to filesystem")
+    scan_parser.add_argument("--dry-run", dest="commit", action="store_false", help="Perform dry-run without modifying filesystem (default)")
     scan_parser.add_argument("--registry-path", help="Custom SQLite registry path")
     scan_parser.add_argument("--log-dir", help="Custom log output directory")
     scan_parser.set_defaults(func=run_renamer)
 
     # Review portal command
     review_parser = subparsers.add_parser("review", help="Start local review portal web server")
-    review_parser.add_argument("--host", default="127.0.0.1", help="Host (default: 127.0.0.1)")
+    review_parser.add_argument("--host", choices=["127.0.0.1", "localhost"], default="127.0.0.1", help="Loopback host only (default: 127.0.0.1)")
     review_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
     review_parser.set_defaults(func=run_review)
 

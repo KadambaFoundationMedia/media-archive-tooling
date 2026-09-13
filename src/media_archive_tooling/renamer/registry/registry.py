@@ -55,6 +55,18 @@ class LocalRegistry:
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS review_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                reviewer TEXT NOT NULL,
+                changes_json TEXT NOT NULL,
+                previous_values_json TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -172,3 +184,70 @@ class LocalRegistry:
             UPDATE files SET status = ?, updated_at = ? WHERE tracking_id = ?
             """, (new_status, now, tracking_id))
             conn.commit()
+
+    def record_review_action(
+        self,
+        tracking_id: str,
+        action: str,
+        reviewer: str,
+        changes: Dict[str, Any],
+        previous_values: Dict[str, Any],
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO review_actions (
+                tracking_id, action, reviewer, changes_json, previous_values_json, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                tracking_id,
+                action,
+                reviewer,
+                json.dumps(changes),
+                json.dumps(previous_values),
+                now
+            ))
+            conn.commit()
+
+    def update_file_review(
+        self,
+        tracking_id: str,
+        when_val: str,
+        what_val: str,
+        where_val: str,
+        proposed_filename: str,
+        status: str,
+        needs_review: bool,
+        review_reasons: List[str],
+        parser_result_json: str,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            UPDATE files SET
+                when_val = ?,
+                what_val = ?,
+                where_val = ?,
+                proposed_filename = ?,
+                status = ?,
+                needs_review = ?,
+                review_reasons = ?,
+                parser_result_json = ?,
+                updated_at = ?
+            WHERE tracking_id = ?
+            """, (
+                when_val,
+                what_val,
+                where_val,
+                proposed_filename,
+                status,
+                1 if needs_review else 0,
+                json.dumps(review_reasons),
+                parser_result_json,
+                now,
+                tracking_id
+            ))
+            conn.commit()
+

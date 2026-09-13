@@ -21,9 +21,17 @@ class RenamerParser:
         categories_ref: Optional[List[Dict[str, Any]]] = None,
         locations_ref: Optional[List[Dict[str, Any]]] = None,
         countries_ref: Optional[Dict[str, str]] = None,
+        vedabase_validator: Optional[Any] = None,
+        location_lookup_provider: Optional[Any] = None,
     ):
         self.categories_ref = categories_ref
-        self.where_resolver = WhereResolver(locations_data=locations_ref, countries_data=countries_ref)
+        self.vedabase_validator = vedabase_validator
+        self.location_lookup_provider = location_lookup_provider
+        self.where_resolver = WhereResolver(
+            locations_data=locations_ref,
+            countries_data=countries_ref,
+            location_lookup_provider=location_lookup_provider
+        )
 
     def parse_file(
         self,
@@ -50,21 +58,28 @@ class RenamerParser:
         # 2. Extract technical flags & metadata
         working_stem, file_metadata = extract_technical_metadata(stem)
 
-        # 3. Collection grammar clues
+        # 3. Collection grammar clues & sequence prefix extraction
         pattern_desc = collection_grammar.describe() if collection_grammar else None
+        if collection_grammar and collection_grammar.has_sequence_prefix and not file_metadata.source_sequence_id:
+            seq_match = re.match(r"^(\d{1,3})\b", working_stem.strip())
+            if seq_match:
+                file_metadata.source_sequence_id = seq_match.group(1)
+                working_stem = working_stem.strip()[seq_match.end():].lstrip(" _-")
 
         # 4. Resolve WHEN
         when_res, remaining_after_when = parse_when(
             working_stem,
             parent_folder=parent_folder,
-            ancestors=ancestor_folders
+            ancestors=ancestor_folders,
+            collection_grammar=collection_grammar,
         )
 
         # 5. Resolve WHAT
         what_res, remaining_after_what, what_conflict = parse_what(
             remaining_after_when,
             parent_folder=parent_folder,
-            categories_ref=self.categories_ref
+            categories_ref=self.categories_ref,
+            vedabase_validator=self.vedabase_validator,
         )
 
         # 6. Resolve WHERE
