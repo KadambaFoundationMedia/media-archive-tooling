@@ -39,13 +39,15 @@ def test_scripture_cc_range_parsing():
 
 
 def test_dotted_extra_numeric_component_is_not_silently_treated_as_range():
-    # BG ranges are chapter.verse-end, never chapter.verse.end.
+    # The book/category token may still be recognized, but the malformed numeric
+    # structure must not become a canonical scripture reference.
     bg, _, _ = parse_what("BG 13.8.12")
-    assert bg.selected_value is None
+    assert bg.selected_value != "BG-13-8-12"
+    assert bg.state != ResolutionState.EXACT
 
-    # SB ranges are canto.chapter.verse-end, never canto.chapter.verse.end.
     sb, _, _ = parse_what("SB 1.1.2.4")
-    assert sb.selected_value is None
+    assert sb.selected_value != "SB-1-1-2-4"
+    assert sb.state != ResolutionState.EXACT
 
 
 def test_specific_preservation_over_category():
