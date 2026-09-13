@@ -48,7 +48,7 @@ def test_vedabase_validation_success_and_caching(vedabase_env):
     assert len(called) == 1
 
 
-def test_bg_range_validation_checks_start_and_end_verses(vedabase_env):
+def test_bg_range_validation_checks_every_inclusive_verse(vedabase_env):
     called = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -64,11 +64,14 @@ def test_bg_range_validation_checks_start_and_end_verses(vedabase_env):
     assert status == "validated"
     assert called == [
         "https://vedabase.io/en/library/bg/13/8/",
+        "https://vedabase.io/en/library/bg/13/9/",
+        "https://vedabase.io/en/library/bg/13/10/",
+        "https://vedabase.io/en/library/bg/13/11/",
         "https://vedabase.io/en/library/bg/13/12/",
     ]
 
 
-def test_sb_and_cc_ranges_validate_endpoints(vedabase_env):
+def test_sb_and_cc_ranges_validate_every_inclusive_verse(vedabase_env):
     called = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -83,8 +86,10 @@ def test_sb_and_cc_ranges_validate_endpoints(vedabase_env):
 
     assert called == [
         "https://vedabase.io/en/library/sb/1/1/2/",
+        "https://vedabase.io/en/library/sb/1/1/3/",
         "https://vedabase.io/en/library/sb/1/1/4/",
         "https://vedabase.io/en/library/cc/adi/9/48/",
+        "https://vedabase.io/en/library/cc/adi/9/49/",
         "https://vedabase.io/en/library/cc/adi/9/50/",
     ]
 
@@ -101,18 +106,32 @@ def test_vedabase_validation_not_found(vedabase_env):
     assert status == "not_found"
 
 
-def test_vedabase_range_not_found_when_either_endpoint_is_missing(vedabase_env):
+def test_vedabase_range_not_found_when_middle_verse_is_missing(vedabase_env):
     def handler(request: httpx.Request) -> httpx.Response:
-        if "/13/8/" in str(request.url):
-            return httpx.Response(200, text="Verse 8")
-        return httpx.Response(404, text="Not Found")
+        if "/13/10/" in str(request.url):
+            return httpx.Response(404, text="Not Found")
+        return httpx.Response(200, text="Verse text")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     validator = VedabaseValidator(cache_db=vedabase_env, client=client)
 
-    is_valid, status = validator.validate_scripture_reference("BG-13-8-99")
+    is_valid, status = validator.validate_scripture_reference("BG-13-8-12")
     assert is_valid is False
     assert status == "not_found"
+
+
+def test_descending_range_is_invalid_format(vedabase_env):
+    called = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called.append(str(request.url))
+        return httpx.Response(200, text="Verse text")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    validator = VedabaseValidator(cache_db=vedabase_env, client=client)
+
+    assert validator.validate_scripture_reference("BG-13-12-8") == (False, "invalid_format")
+    assert called == []
 
 
 def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
@@ -123,7 +142,7 @@ def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal called, first_attempt
         called += 1
-        # First attempt: start endpoint appears missing. Second attempt: both endpoints work.
+        # First request of the first attempt fails; the remaining range pages work.
         if first_attempt:
             first_attempt = False
             return httpx.Response(404, text="Not Found")
@@ -135,7 +154,7 @@ def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
     first_valid, first_status = validator.validate_scripture_reference("BG-13-8-12")
     assert first_valid is False
     assert first_status == "not_found"
-    assert called == 2  # Range validation checks both endpoints in one pass.
+    assert called == 5  # Verses 8, 9, 10, 11, and 12 are all checked.
 
     # Age only the negative entry past the short negative TTL, but nowhere near 24 hours.
     with sqlite3.connect(str(vedabase_env)) as conn:
@@ -148,7 +167,7 @@ def test_vedabase_negative_cache_expires_quickly_and_recovers(vedabase_env):
     recovered_valid, recovered_status = validator.validate_scripture_reference("BG-13-8-12")
     assert recovered_valid is True
     assert recovered_status == "validated"
-    assert called == 4
+    assert called == 10
 
 
 def test_vedabase_network_failure_returns_pending_stale(vedabase_env):
