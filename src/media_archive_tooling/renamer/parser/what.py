@@ -84,7 +84,8 @@ def parse_what(
     if sb_match:
         canto, chapter, v1, v2 = sb_match.groups()
         verse_str = f"{v1}-{v2}" if v2 else v1
-        what_val = f"SB-{canto}-{chapter}-{verse_str}"
+        base_ref = f"SB-{canto}-{chapter}-{verse_str}"
+        what_val = base_ref
         span = sb_match.span()
         suffix_token, suffix_len = _check_scripture_descriptive_suffix(working, span[1], specific_titles)
         if suffix_token:
@@ -99,7 +100,6 @@ def parse_what(
         ev_details = "parsed"
         state = ResolutionState.EXACT
         if vedabase_validator:
-            base_ref = "-".join(what_val.split("-")[:4])
             is_valid, v_status = vedabase_validator.validate_scripture_reference(base_ref)
             ev_details = f"vedabase:{v_status}"
             if not is_valid and v_status == "not_found":
@@ -121,7 +121,8 @@ def parse_what(
     if bg_match:
         chapter, v1, v2 = bg_match.groups()
         verse_str = f"{v1}-{v2}" if v2 else v1
-        what_val = f"BG-{chapter}-{verse_str}"
+        base_ref = f"BG-{chapter}-{verse_str}"
+        what_val = base_ref
         span = bg_match.span()
         suffix_token, suffix_len = _check_scripture_descriptive_suffix(working, span[1], specific_titles)
         if suffix_token:
@@ -136,7 +137,6 @@ def parse_what(
         ev_details = "parsed"
         state = ResolutionState.EXACT
         if vedabase_validator:
-            base_ref = "-".join(what_val.split("-")[:3])
             is_valid, v_status = vedabase_validator.validate_scripture_reference(base_ref)
             ev_details = f"vedabase:{v_status}"
             if not is_valid and v_status == "not_found":
@@ -158,7 +158,8 @@ def parse_what(
     if cc_match:
         section, chapter, verse = cc_match.groups()
         sec_prefix = f"-{section.capitalize()}" if section else ""
-        what_val = f"CC{sec_prefix}-{chapter}-{verse}"
+        base_ref = f"CC{sec_prefix}-{chapter}-{verse}"
+        what_val = base_ref
         span = cc_match.span()
         suffix_token, suffix_len = _check_scripture_descriptive_suffix(working, span[1], specific_titles)
         if suffix_token:
@@ -170,7 +171,6 @@ def parse_what(
         ev_details = "parsed"
         state = ResolutionState.EXACT
         if vedabase_validator:
-            base_ref = "-".join(what_val.split("-")[:4]) if sec_prefix else "-".join(what_val.split("-")[:3])
             is_valid, v_status = vedabase_validator.validate_scripture_reference(base_ref)
             ev_details = f"vedabase:{v_status}"
             if not is_valid and v_status == "not_found":
