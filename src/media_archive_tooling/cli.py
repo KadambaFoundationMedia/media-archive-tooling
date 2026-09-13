@@ -101,12 +101,26 @@ def run_status(args):
         print(f"Proposed: {record['proposed_filename']}")
         print(f"Status: {record['status']}")
         print(f"Needs Review: {bool(record['needs_review'])}")
+        if record["review_reasons"]:
+            print("Review reasons:")
+            for reason in record["review_reasons"]:
+                print(f"  - {reason}")
     else:
         all_files = registry.list_files()
+        review_files = [f for f in all_files if f["needs_review"]]
         print(f"Registry: {reg_path}")
         print(f"Total files: {len(all_files)}")
-        print(f"Needs review: {sum(1 for f in all_files if f['needs_review'])}")
+        print(f"Needs review: {len(review_files)}")
         print(f"Committed: {sum(1 for f in all_files if f['status'] == 'committed')}")
+        if review_files:
+            print("Review items:")
+            for record in review_files:
+                print(f"  - {record['original_filename']}")
+                if record["review_reasons"]:
+                    for reason in record["review_reasons"]:
+                        print(f"      {reason}")
+                else:
+                    print("      Review required (no reason recorded)")
 
 
 def main():
