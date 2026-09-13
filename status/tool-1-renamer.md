@@ -2,6 +2,7 @@
 
 Build plan: `docs/tool-1-renamer-build-plan.md`
 Project architecture: `docs/project-implementation-architecture.md`
+Walkthrough: `docs/tool-1-renamer-walkthrough.md`
 Implementation issue: #1
 Protocol: `docs/implementation-protocol.md`
 
@@ -15,12 +16,13 @@ Last implementation update: 2026-09-13
 ## Review checkpoint
 
 Last planning/review commit: 65bdffc
-Current implementation HEAD: 000326f
+Current implementation HEAD: f9eaf14
 Fundamental-change review pending: no
 
 Relevant commits since last review:
 - 24395bb — feat(renamer): implement Tool 1 Renamer, local registry, review portal, and tests
-- 000326f — docs(status): update Tool 1 implementation status to READY_FOR_REVIEW
+- d46f0fa — docs(status): update Tool 1 implementation status to READY_FOR_REVIEW
+- f9eaf14 — docs: add Tool 1 implementation walkthrough and update status references
 
 ## Milestones
 
