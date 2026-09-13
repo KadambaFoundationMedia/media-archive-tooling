@@ -40,7 +40,7 @@ if [ -z "$UPSTREAM" ]; then
     UPSTREAM="${REMOTE}/${BRANCH}"
   else
     echo "ERROR: Branch '$BRANCH' has no upstream and '${REMOTE}/${BRANCH}' does not exist."
-    echo "Configure the correct implementation branch/upstream before building."
+    echo "Configure the correct branch/upstream before building."
     exit 1
   fi
 fi
@@ -71,22 +71,27 @@ elif [ "$REMOTE_HEAD" = "$MERGE_BASE" ]; then
   exit 1
 else
   echo "ERROR: Local branch and $UPSTREAM have diverged."
-  echo "Do not build from stale/divergent state. Rebase/merge deliberately, resolve any conflicts, push the result, then rerun builder-start.sh."
+  echo "Do not build from stale/divergent state. Rebase/merge deliberately, resolve conflicts, push the result, then rerun builder-start.sh."
   exit 1
 fi
 
-# If implementation happens on a feature branch, it must also contain the
-# latest default-branch planning/status commits. Prefer origin/HEAD, falling
-# back to origin/main for this project.
+# Identify the protected default branch. Prefer origin/HEAD, falling back to
+# origin/main for this project.
 DEFAULT_REF=$(git symbolic-ref --quiet --short "refs/remotes/${REMOTE}/HEAD" 2>/dev/null || true)
 if [ -z "$DEFAULT_REF" ] && git show-ref --verify --quiet "refs/remotes/${REMOTE}/main"; then
   DEFAULT_REF="${REMOTE}/main"
 fi
 
+DEFAULT_BRANCH=""
+if [ -n "$DEFAULT_REF" ]; then
+  DEFAULT_BRANCH=${DEFAULT_REF#${REMOTE}/}
+fi
+
+# Feature branches must contain the latest default-branch planning/spec commits.
 if [ -n "$DEFAULT_REF" ] && [ "$UPSTREAM" != "$DEFAULT_REF" ]; then
   if ! git merge-base --is-ancestor "$DEFAULT_REF" HEAD; then
-    echo "ERROR: Current implementation branch does not contain the latest $DEFAULT_REF planning/status commits."
-    echo "Integrate $DEFAULT_REF into '$BRANCH' before building so review findings cannot be missed."
+    echo "ERROR: Current implementation branch does not contain the latest $DEFAULT_REF planning/specification commits."
+    echo "Integrate $DEFAULT_REF into '$BRANCH' before building so review findings and protocol changes cannot be missed."
     exit 1
   fi
 fi
@@ -107,6 +112,34 @@ fi
 STATE=$(sed -n 's/^Status: `\([^`]*\)`.*/\1/p' "$STATUS" | head -n 1)
 [ -n "$STATE" ] || STATE="UNKNOWN"
 
+# main is protected. For any state that permits implementation changes, a
+# builder launched from main automatically creates/resumes the durable tool
+# branch and restarts there. This keeps BUILD TOOL <n> as the only user command.
+TOOL_BRANCH="tool-${TOOL}-implementation"
+case "$STATE" in
+  NOT_STARTED|IN_PROGRESS|BLOCKED_PARTIAL|CHANGES_REQUESTED)
+    if [ -n "$DEFAULT_BRANCH" ] && [ "$BRANCH" = "$DEFAULT_BRANCH" ]; then
+      printf '%s\n' "Protected default branch '$DEFAULT_BRANCH' detected; implementation must use '$TOOL_BRANCH'."
+
+      if git show-ref --verify --quiet "refs/heads/${TOOL_BRANCH}"; then
+        git checkout "$TOOL_BRANCH"
+      elif git show-ref --verify --quiet "refs/remotes/${REMOTE}/${TOOL_BRANCH}"; then
+        git checkout -b "$TOOL_BRANCH" --track "${REMOTE}/${TOOL_BRANCH}"
+      else
+        if [ -z "$DEFAULT_REF" ]; then
+          echo "ERROR: Cannot identify the default branch to create '$TOOL_BRANCH'."
+          exit 1
+        fi
+        git checkout -b "$TOOL_BRANCH" "$DEFAULT_REF"
+        git push -u "$REMOTE" "$TOOL_BRANCH"
+      fi
+
+      printf '%s\n' "Implementation branch selected. Restarting builder briefing..."
+      exec "$0" "$@"
+    fi
+    ;;
+esac
+
 printf '%s\n' "============================================================"
 printf '%s\n' "MEDIA ARCHIVE BUILDER BRIEFING"
 printf '%s\n' "Repository HEAD: $(git rev-parse --short HEAD)"
@@ -125,19 +158,19 @@ printf '  7. Relevant code and tests\n\n'
 
 case "$STATE" in
   NOT_STARTED)
-    printf '%s\n' "ACTION: Implement Tool ${TOOL} from the finalized build plan."
+    printf '%s\n' "ACTION: Implement Tool ${TOOL} from the finalized build plan on this tool branch."
     ;;
   IN_PROGRESS)
-    printf '%s\n' "ACTION: Resume the current milestone from the status file."
+    printf '%s\n' "ACTION: Resume the current milestone from the status file on this tool branch."
     ;;
   BLOCKED_PARTIAL)
     printf '%s\n' "ACTION: Continue unaffected work. Do not guess blocked policy decisions; maintain Q-### entries in the status file."
     ;;
   CHANGES_REQUESTED)
-    printf '%s\n' "ACTION: Address every active R-### review finding in the status file, add the required regression tests, rerun the required sample evaluation, then update/commit/push the status as READY_FOR_REVIEW."
+    printf '%s\n' "ACTION: Address every active R-### review finding in the status file, add required regression tests, rerun required evaluation, then update/commit/push on this branch."
     ;;
   READY_FOR_REVIEW)
-    printf '%s\n' "ACTION: Stop implementation. Ensure all work is pushed and hand back for planning/review."
+    printf '%s\n' "ACTION: Stop implementation. Ensure all work is pushed, the implementation PR to main exists, and hand back for planning/review."
     ;;
   ACCEPTED)
     printf '%s\n' "ACTION: No implementation work is required unless a new task or revised build plan explicitly requests it."
@@ -147,13 +180,21 @@ case "$STATE" in
     ;;
 esac
 
+printf '\nProtected-main / PR / CI requirements:\n'
+printf '%s\n' "  - Do not implement directly on protected main."
+printf '%s\n' "  - Standard tool branch: ${TOOL_BRANCH}."
+printf '%s\n' "  - Keep/open a PR from the tool branch to main for review."
+printf '%s\n' "  - Required GitHub check before merge: Python 3.12 tests."
+printf '%s\n' "  - A known failed required CI check blocks READY_FOR_REVIEW/merge."
+
 printf '\nNon-negotiable:\n'
 printf '%s\n' "  - Start only from synchronized remote repository state."
 printf '%s\n' "  - Do not edit finalized build plans to fit the implementation."
 printf '%s\n' "  - Record unclear/contradictory requirements as Q-### in the status file."
-printf '%s\n' "  - Update status + real reachable commit HEAD before READY_FOR_REVIEW."
-printf '%s\n' "  - Push changes before handing back for review."
+printf '%s\n' "  - Update status + real reachable branch HEAD before READY_FOR_REVIEW."
+printf '%s\n' "  - Commit and push changes before handing back for review."
+printf '%s\n' "  - Record the implementation PR in the status file."
 
 printf '\nCurrent status file excerpt:\n'
 printf '%s\n' "------------------------------------------------------------"
-sed -n '1,220p' "$STATUS"
+sed -n '1,240p' "$STATUS"
