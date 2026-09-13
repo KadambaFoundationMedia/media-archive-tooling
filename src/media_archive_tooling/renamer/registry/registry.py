@@ -1,0 +1,174 @@
+"""SQLite local operational registry for Tool 1 processing state and audit trail."""
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
+from ..models import ParserResult, RenameProposal
+
+
+class LocalRegistry:
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS files (
+                tracking_id TEXT PRIMARY KEY,
+                original_path TEXT NOT NULL,
+                current_path TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                current_filename TEXT NOT NULL,
+                proposed_filename TEXT,
+                when_val TEXT,
+                who_val TEXT,
+                what_val TEXT,
+                where_val TEXT,
+                status TEXT NOT NULL, -- pending, approved, committed, deferred, error
+                needs_review INTEGER NOT NULL,
+                review_reasons TEXT,
+                parser_result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rename_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking_id TEXT NOT NULL,
+                from_path TEXT NOT NULL,
+                to_path TEXT NOT NULL,
+                from_filename TEXT NOT NULL,
+                to_filename TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
+            conn.commit()
+
+    def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM files WHERE tracking_id = ?", (tracking_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["parser_result"] = json.loads(d["parser_result_json"])
+                d["review_reasons"] = json.loads(d["review_reasons"]) if d["review_reasons"] else []
+                return d
+        return None
+
+    def list_files(self, status: Optional[str] = None, needs_review: Optional[bool] = None) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM files WHERE 1=1"
+        params = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if needs_review is not None:
+            query += " AND needs_review = ?"
+            params.append(1 if needs_review else 0)
+        query += " ORDER BY updated_at DESC"
+
+        results = []
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            for row in cursor.fetchall():
+                d = dict(row)
+                d["parser_result"] = json.loads(d["parser_result_json"])
+                d["review_reasons"] = json.loads(d["review_reasons"]) if d["review_reasons"] else []
+                results.append(d)
+        return results
+
+    def save_proposal(self, proposal: RenameProposal):
+        now = datetime.now(timezone.utc).isoformat()
+        pr = proposal.parser_result
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO files (
+                tracking_id, original_path, current_path, original_filename, current_filename,
+                proposed_filename, when_val, who_val, what_val, where_val, status,
+                needs_review, review_reasons, parser_result_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id) DO UPDATE SET
+                current_path = excluded.current_path,
+                current_filename = excluded.current_filename,
+                proposed_filename = excluded.proposed_filename,
+                when_val = excluded.when_val,
+                what_val = excluded.what_val,
+                where_val = excluded.where_val,
+                status = excluded.status,
+                needs_review = excluded.needs_review,
+                review_reasons = excluded.review_reasons,
+                parser_result_json = excluded.parser_result_json,
+                updated_at = excluded.updated_at
+            """, (
+                proposal.tracking_id,
+                proposal.original_path,
+                str(Path(proposal.original_path)),
+                pr.identity.original_filename,
+                proposal.current_filename,
+                proposal.proposed_filename,
+                pr.when.selected_value,
+                pr.who,
+                pr.what.selected_value,
+                f"{pr.where.place_location or ''}-{pr.where.country_iso2 or ''}".strip("-"),
+                proposal.status,
+                1 if proposal.needs_review else 0,
+                json.dumps(proposal.review_reasons),
+                pr.model_dump_json(),
+                now,
+                now
+            ))
+            conn.commit()
+
+    def record_commit(self, proposal: RenameProposal, new_path: Path):
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            # Update files table
+            cursor.execute("""
+            UPDATE files SET
+                current_path = ?,
+                current_filename = ?,
+                status = 'committed',
+                updated_at = ?
+            WHERE tracking_id = ?
+            """, (str(new_path), new_path.name, now, proposal.tracking_id))
+
+            # Record history
+            cursor.execute("""
+            INSERT INTO rename_history (
+                tracking_id, from_path, to_path, from_filename, to_filename, mode, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                proposal.tracking_id,
+                proposal.original_path,
+                str(new_path),
+                proposal.current_filename,
+                new_path.name,
+                proposal.mode.value,
+                now
+            ))
+            conn.commit()
+
+    def update_status(self, tracking_id: str, new_status: str):
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            UPDATE files SET status = ?, updated_at = ? WHERE tracking_id = ?
+            """, (new_status, now, tracking_id))
+            conn.commit()

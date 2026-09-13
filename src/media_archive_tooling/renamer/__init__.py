@@ -1,0 +1,1 @@
+"""Renamer tool package."""

@@ -1,0 +1,62 @@
+[
+  {
+    "category": "Kirtan",
+    "title_matching_terms": "kirtan, bhajans, bhajan, kirtany, jaya radha madhava, jaya-radha-madhava, jrm, chanting, maha mantra, harinama, kirtana, bhajana",
+    "folder_path": "Kirtan",
+    "color": "#e74c3c"
+  },
+  {
+    "category": "Srimad Bhagavatam",
+    "title_matching_terms": "sb, srimad bhagavatam, srimad-bhagavatam, bhagavatam",
+    "folder_path": "Srimad Bhagavatam",
+    "color": "#f39c12"
+  },
+  {
+    "category": "Bhagavad Gita",
+    "title_matching_terms": "bg, bhagavad gita, bhagavad-gita, gita",
+    "folder_path": "Bhagavad Gita",
+    "color": "#27ae60"
+  },
+  {
+    "category": "Chaitanya Charitamrita",
+    "title_matching_terms": "cc, chaitanya charitamrita, chaitanya-charitamrita, caitanya caritamrta",
+    "folder_path": "Chaitanya Charitamrita",
+    "color": "#2980b9"
+  },
+  {
+    "category": "Sunday Feast",
+    "title_matching_terms": "sunday feast, sundayfeast, sunday-feast, nedelni program",
+    "folder_path": "Sunday Feast",
+    "color": "#8e44ad"
+  },
+  {
+    "category": "Initiation",
+    "title_matching_terms": "initiation, diksa, harinama initiation, brahmana initiation",
+    "folder_path": "Initiation",
+    "color": "#d35400"
+  },
+  {
+    "category": "Vyasa Puja",
+    "title_matching_terms": "vyasa puja, vyasapuja, vyasa-puja, vp",
+    "folder_path": "Vyasa Puja",
+    "color": "#16a085"
+  },
+  {
+    "category": "Festival",
+    "title_matching_terms": "janmastami, janmashtami, gaura purnima, radhastami, ratha yatra, rathayatra, balarama purnima, narasimha caturdasi, festival",
+    "folder_path": "Festival",
+    "color": "#c0392b"
+  },
+  {
+    "category": "Seminar",
+    "title_matching_terms": "seminar, workshop, retreat, summer camp, serbia summer camp",
+    "folder_path": "Seminar",
+    "color": "#34495e"
+  },
+  {
+    "category": "Class",
+    "title_matching_terms": "class, lecture, lekce, prednaska",
+    "folder_path": "Class",
+    "color": "#7f8c8d"
+  }
+]

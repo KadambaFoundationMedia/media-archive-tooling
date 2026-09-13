@@ -1,0 +1,104 @@
+[
+  {
+    "canonical_place": "Vrindavan",
+    "country": "India",
+    "country_iso2": "in",
+    "aliases": ["vrindavan", "vrindavana", "sridham vrindavan"]
+  },
+  {
+    "canonical_place": "Villa-Vrindavan",
+    "country": "Italy",
+    "country_iso2": "it",
+    "aliases": ["villa vrindavan", "villa-vrindavan", "villavrindavan"]
+  },
+  {
+    "canonical_place": "Praha",
+    "country": "Czech Republic",
+    "country_iso2": "cz",
+    "aliases": ["praha", "prague", "prag"]
+  },
+  {
+    "canonical_place": "Pruhonice",
+    "country": "Czech Republic",
+    "country_iso2": "cz",
+    "aliases": ["pruhonice", "průhonice", "pruhon", "průhon"]
+  },
+  {
+    "canonical_place": "Amsterdam",
+    "country": "Netherlands",
+    "country_iso2": "nl",
+    "aliases": ["amsterdam", "ams"]
+  },
+  {
+    "canonical_place": "Radhadesh",
+    "country": "Belgium",
+    "country_iso2": "be",
+    "aliases": ["radhadesh", "rdesh", "r-desh"]
+  },
+  {
+    "canonical_place": "Sydney",
+    "country": "Australia",
+    "country_iso2": "au",
+    "aliases": ["sydney"]
+  },
+  {
+    "canonical_place": "Stockholm",
+    "country": "Sweden",
+    "country_iso2": "se",
+    "aliases": ["stockholm", "sthlm"]
+  },
+  {
+    "canonical_place": "Oslo",
+    "country": "Norway",
+    "country_iso2": "no",
+    "aliases": ["oslo"]
+  },
+  {
+    "canonical_place": "Ljubljana",
+    "country": "Slovenia",
+    "country_iso2": "si",
+    "aliases": ["ljubljana", "ljublana"]
+  },
+  {
+    "canonical_place": "Belgrade",
+    "country": "Serbia",
+    "country_iso2": "rs",
+    "aliases": ["belgrade", "beograd"]
+  },
+  {
+    "canonical_place": "Serbia-summer-camp",
+    "country": "Serbia",
+    "country_iso2": "rs",
+    "aliases": ["serbia summer camp", "serbian summer camp", "serbia-summer-camp", "serbian-summer-camp-july2015"]
+  },
+  {
+    "canonical_place": "Zurich",
+    "country": "Switzerland",
+    "country_iso2": "ch",
+    "aliases": ["zurich", "zürich"]
+  },
+  {
+    "canonical_place": "Malaga",
+    "country": "Spain",
+    "country_iso2": "es",
+    "aliases": ["malaga", "málaga"]
+  },
+  {
+    "canonical_place": "Mayapur",
+    "country": "India",
+    "country_iso2": "in",
+    "aliases": ["mayapur", "sridham mayapur"]
+  },
+  {
+    "canonical_place": "Durban",
+    "country": "South Africa",
+    "country_iso2": "za",
+    "aliases": ["durban"]
+  },
+  {
+    "canonical_place": "London",
+    "country": "United Kingdom",
+    "country_iso2": "gb",
+    "aliases": ["london"]
+  }
+]
