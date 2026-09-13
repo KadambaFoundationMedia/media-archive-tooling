@@ -10,8 +10,8 @@ def build_vedabase_url(ref_key: str) -> Optional[str]:
     """Convert a canonical scripture reference key into a Vedabase library URL.
 
     For range keys this returns the conventional combined range URL. Runtime
-    validation does not rely on that URL existing; it validates the start and end
-    verse pages individually via ``_build_validation_urls``.
+    validation does not rely on that URL existing; it validates every verse in
+    the inclusive range via ``_build_validation_urls``.
     """
     norm = ref_key.strip().upper()
     parts = norm.split("-")
@@ -41,13 +41,24 @@ def build_vedabase_url(ref_key: str) -> Optional[str]:
     return None
 
 
+def _inclusive_range_urls(prefix: str, start: str, end: str) -> Optional[List[str]]:
+    """Build one Vedabase URL per verse in an inclusive same-chapter range."""
+    if not start.isdigit() or not end.isdigit():
+        return None
+    start_num = int(start)
+    end_num = int(end)
+    if start_num < 1 or end_num < start_num:
+        return None
+    return [f"{prefix}/{verse}/" for verse in range(start_num, end_num + 1)]
+
+
 def _build_validation_urls(ref_key: str) -> Optional[List[str]]:
     """Return concrete Vedabase verse pages that prove a reference exists.
 
-    Archive range syntax represents a span, not a separate scripture identifier:
-    ``BG-1-1-3`` means BG 1.1 through 1.3, while ``SB-1-1-2-4`` means SB
-    1.1.2 through 1.1.4. Vedabase may not expose a dedicated page for the
-    combined range, so a range is validated by checking both endpoints.
+    Archive range syntax represents an inclusive span, not only two endpoints:
+    ``BG-13-8-12`` means BG 13.8, 13.9, 13.10, 13.11, and 13.12, while
+    ``SB-1-1-2-4`` means SB 1.1.2, 1.1.3, and 1.1.4. Validation therefore
+    checks every verse page in the represented range.
     """
     norm = ref_key.strip().upper()
     parts = norm.split("-")
@@ -55,31 +66,41 @@ def _build_validation_urls(ref_key: str) -> Optional[List[str]]:
         return None
 
     book = parts[0]
-    urls: List[str] = []
+    urls: Optional[List[str]] = None
 
     if book == "BG":
         if len(parts) == 3:
             chapter, verse = parts[1], parts[2]
-            urls = [f"https://vedabase.io/en/library/bg/{chapter}/{verse}/"]
+            if not chapter.isdigit() or not verse.isdigit():
+                return None
+            urls = [f"https://vedabase.io/en/library/bg/{int(chapter)}/{int(verse)}/"]
         elif len(parts) == 4:
             chapter, start, end = parts[1], parts[2], parts[3]
-            urls = [
-                f"https://vedabase.io/en/library/bg/{chapter}/{start}/",
-                f"https://vedabase.io/en/library/bg/{chapter}/{end}/",
-            ]
+            if not chapter.isdigit():
+                return None
+            urls = _inclusive_range_urls(
+                f"https://vedabase.io/en/library/bg/{int(chapter)}", start, end
+            )
         else:
             return None
 
     elif book == "SB":
         if len(parts) == 4:
             canto, chapter, verse = parts[1], parts[2], parts[3]
-            urls = [f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{verse}/"]
+            if not canto.isdigit() or not chapter.isdigit() or not verse.isdigit():
+                return None
+            urls = [
+                f"https://vedabase.io/en/library/sb/{int(canto)}/{int(chapter)}/{int(verse)}/"
+            ]
         elif len(parts) == 5:
             canto, chapter, start, end = parts[1], parts[2], parts[3], parts[4]
-            urls = [
-                f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{start}/",
-                f"https://vedabase.io/en/library/sb/{canto}/{chapter}/{end}/",
-            ]
+            if not canto.isdigit() or not chapter.isdigit():
+                return None
+            urls = _inclusive_range_urls(
+                f"https://vedabase.io/en/library/sb/{int(canto)}/{int(chapter)}",
+                start,
+                end,
+            )
         else:
             return None
 
@@ -90,13 +111,20 @@ def _build_validation_urls(ref_key: str) -> Optional[List[str]]:
             lila = parts[1].lower()
             if len(parts) == 4:
                 chapter, verse = parts[2], parts[3]
-                urls = [f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{verse}/"]
+                if not chapter.isdigit() or not verse.isdigit():
+                    return None
+                urls = [
+                    f"https://vedabase.io/en/library/cc/{lila}/{int(chapter)}/{int(verse)}/"
+                ]
             elif len(parts) == 5:
                 chapter, start, end = parts[2], parts[3], parts[4]
-                urls = [
-                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{start}/",
-                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{end}/",
-                ]
+                if not chapter.isdigit():
+                    return None
+                urls = _inclusive_range_urls(
+                    f"https://vedabase.io/en/library/cc/{lila}/{int(chapter)}",
+                    start,
+                    end,
+                )
             else:
                 return None
         else:
@@ -104,20 +132,26 @@ def _build_validation_urls(ref_key: str) -> Optional[List[str]]:
             lila = "adi"
             if len(parts) == 3:
                 chapter, verse = parts[1], parts[2]
-                urls = [f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{verse}/"]
+                if not chapter.isdigit() or not verse.isdigit():
+                    return None
+                urls = [
+                    f"https://vedabase.io/en/library/cc/{lila}/{int(chapter)}/{int(verse)}/"
+                ]
             elif len(parts) == 4:
                 chapter, start, end = parts[1], parts[2], parts[3]
-                urls = [
-                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{start}/",
-                    f"https://vedabase.io/en/library/cc/{lila}/{chapter}/{end}/",
-                ]
+                if not chapter.isdigit():
+                    return None
+                urls = _inclusive_range_urls(
+                    f"https://vedabase.io/en/library/cc/{lila}/{int(chapter)}",
+                    start,
+                    end,
+                )
             else:
                 return None
     else:
         return None
 
-    # A one-verse range such as 1-1 does not need a duplicate request.
-    return list(dict.fromkeys(urls))
+    return urls
 
 
 class VedabaseValidator:
