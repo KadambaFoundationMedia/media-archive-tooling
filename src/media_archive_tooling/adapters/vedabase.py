@@ -38,7 +38,16 @@ def build_vedabase_url(ref_key: str) -> Optional[str]:
 
 
 class VedabaseValidator:
-    """Validates scripture references against Vedabase with 24-hour local caching."""
+    """Validates scripture references against Vedabase with local caching.
+
+    Positive validations are cached for 24 hours. Negative 404 results are cached
+    only briefly because CDN/anti-bot/transient routing behavior can occasionally
+    surface a false 404 for a real Vedabase page. A transient negative must not
+    keep a valid scripture reference in the human-review queue for a full day.
+    """
+
+    POSITIVE_TTL_SECS = 86400
+    NEGATIVE_TTL_SECS = 30
 
     def __init__(
         self,
@@ -62,7 +71,6 @@ class VedabaseValidator:
                 cached_at REAL NOT NULL
             )
             """)
-            # Ensure status column exists if migrated from old schema
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(vedabase_cache)")
             columns = [col[1] for col in cursor.fetchall()]
@@ -72,16 +80,14 @@ class VedabaseValidator:
 
     def validate_scripture_reference(self, scripture_ref: str) -> Tuple[bool, str]:
         """Validate if a scripture reference exists in Vedabase.
-        
+
         Returns:
             (is_valid, validation_status)
             where validation_status can be 'validated', 'cached', 'not_found', or 'validation_pending_stale'.
         """
         ref_key = scripture_ref.strip().upper()
         now = time.time()
-        ttl = 86400  # 24 hours in seconds
 
-        # Check local cache
         existing_row = None
         with sqlite3.connect(str(self.cache_db)) as conn:
             cursor = conn.cursor()
@@ -89,6 +95,7 @@ class VedabaseValidator:
             existing_row = cursor.fetchone()
             if existing_row:
                 is_valid, status, cached_at = existing_row
+                ttl = self.POSITIVE_TTL_SECS if bool(is_valid) else self.NEGATIVE_TTL_SECS
                 if (now - cached_at) < ttl:
                     return bool(is_valid), status or "cached"
 
@@ -96,7 +103,6 @@ class VedabaseValidator:
         if not url:
             return False, "invalid_format"
 
-        # Query Vedabase API / web endpoint
         try:
             headers = {"User-Agent": "MediaArchiveTooling/1.0 (archive research)"}
             if self._custom_client:
@@ -112,12 +118,10 @@ class VedabaseValidator:
                 is_valid = False
                 status = "not_found"
             else:
-                # Network or remote server error (e.g. 500, 502, 503)
                 if existing_row:
                     return bool(existing_row[0]), "validation_pending_stale"
                 return False, "validation_pending_stale"
 
-            # Save valid/not_found result to cache
             with sqlite3.connect(str(self.cache_db)) as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO vedabase_cache (ref_key, is_valid, status, cached_at) VALUES (?, ?, ?, ?)",
@@ -128,8 +132,6 @@ class VedabaseValidator:
             return is_valid, status
 
         except Exception:
-            # Network failure / timeout
             if existing_row:
                 return bool(existing_row[0]), "validation_pending_stale"
             return False, "validation_pending_stale"
-
