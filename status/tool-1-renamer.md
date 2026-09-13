@@ -9,7 +9,7 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch / PR: `main`  
 Last implementation update: 2026-09-13  
@@ -18,20 +18,19 @@ Last planning/review update: 2026-09-13
 ## Review checkpoint
 
 Last planning/review repository checkpoint inspected: `ecdc691`  
-Current implementation code reviewed: `80e6ea9`  
-Previous implementation baseline: `7efe96d`  
+Current implementation code reviewed: `9e96c45`  
+Previous implementation baseline: `80e6ea9`  
 Fundamental-change review pending: no
 
 Relevant builder commits since the previous implementation review:
-- `80e6ea9` — fix(renamer): resolve R-023 route generic unresolved WHAT to Tools 2 and 5
-- `ecdc691` — docs(status): record Tool 1 implementation HEAD 80e6ea9 and review readiness
+- `9e96c45` — fix(renamer): resolve R-024 preserve ancestor folder class evidence in enrich routing
 
 Planning/review also inspected the affected parser/service routing code and R-023 regression tests. No finalized build-plan change was made by the builder.
 
 ## Builder-reported verification
 
 Builder reports:
-- 67 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 0.86s)
+- 68 tests passing under Python 3.12.14 (`.venv/bin/pytest -v`, 0.96s)
 - 260 real files evaluated from `sample-files/`
 - 255 safe automatic proposals / downstream routing (98.1%)
 - 5 files requiring immediate human review (1.9%)
@@ -57,7 +56,7 @@ Human review reason triggers across the 5 flagged files:
 - `Filename date '2011-12-30' conflicts with folder year '2012'`: 2
 - `Filename date '2011-12-31' conflicts with folder year '2012'`: 1
 
-There is no GitHub CI status configured for commit `80e6ea9`; the 67-test result is builder-reported. Planning/review inspected the committed regression tests and implementation diff.
+There is no GitHub CI status configured for commit `9e96c45`; the 68-test result is builder-reported.
 
 ## Milestones
 
@@ -72,46 +71,25 @@ There is no GitHub CI status configured for commit `80e6ea9`; the 67-test result
 - [x] Corrected 260-file sample routing evaluation completed
 - [x] R-023 generic unresolved WHAT routing corrected in `80e6ea9`
 - [x] R-023 implementation/diff/regression tests reviewed
-- [ ] R-024 ancestor-folder class evidence preserved during ENRICH routing recomputation
+- [x] R-024 ancestor-folder class evidence preserved during ENRICH routing recomputation
 - [ ] Final acceptance review completed
 - [ ] Accepted
 
 ## Resolved review history
 
-R-001 through R-023 are considered resolved unless a later regression reopens them. Their full descriptions remain recoverable from Git history and GitHub issue #1.
+R-001 through R-024 are considered resolved unless a later regression reopens them. Their full descriptions remain recoverable from Git history and GitHub issue #1.
 
 R-023 is accepted: generic unresolved WHAT no longer jumps directly to Tool 7. Generic unresolved WHAT routes to Tool 2 / later Tool 5 processing, established Class items may route to Tool 7, and combination items remain routed to Tools 5/6. The corrected sample keeps immediate human review at 5 / 260 files.
 
-## Active review finding — 2026-09-13
+R-024 is resolved: `apply_enrichment()` recomputation now preserves all ancestor folders from `parser_res.context.ancestor_folders` (with fallback to `Path(proposal.original_path).parents`) and passes them into `has_class_evidence()`. Any previously established `tool_7_class_classification` route is preserved when applying later enrichment unless explicit non-class evidence is provided, safeguarding edited files in nested class directories from regressing to Tool 5.
 
-### R-024 — ENRICH routing can lose established Class evidence that came from an ancestor folder
+## Active review finding
 
-Severity: **CROSS-TOOL ROUTING / EDITED-FILE BLOCKER**
-
-R-023 correctly introduced `has_class_evidence(...)` and, during initial parsing, passes the filename, parent folder, and ancestor folders. Therefore an item can be correctly established as a Class because an ancestor folder such as `Classes/` or `Lekce/` supplies that evidence.
-
-However, `RenamerApplicationService.apply_enrichment()` recomputes downstream routing after later-tool evidence and currently calls `has_class_evidence(...)` with only the current filename and immediate parent folder. It does not pass the already-preserved `parser_res.context.ancestor_folders`.
-
-That can change a previously established Class back into generic unresolved WHAT merely because Tool 2/3 supplied unrelated enrichment such as WHERE or `baserow_check_complete`.
-
-This is especially important for `_edited` files: the Tool 1 build plan says edited files may still use Tool 7 when WHAT genuinely requires resolution while skipping Tools 5/6. Losing ancestor Class evidence after the required Baserow check can therefore remove the Tool 7 route and replace it with a generic Tool 2/5 route that the edited-file workflow is not supposed to follow.
-
-Required correction:
-
-1. When ENRICH recomputes unresolved-WHAT routing, preserve all already-known structural Class evidence, including `parser_res.context.ancestor_folders`.
-2. Do not weaken a previously established Class classification merely because unrelated later evidence was applied.
-3. Add a regression test using a nested ancestor class folder, for example `.../Classes/<year>/file_edited.mp3`, where WHAT is unresolved.
-4. Apply a Tool 2-style enrichment such as `baserow_check_complete=true` and/or WHERE enrichment and verify the resulting stored `ParserResult.downstream_routing` still includes `tool_7_class_classification` and does not regress to generic `tool_5_content_discovery` merely because the immediate parent is not a Class folder.
-5. Keep the file out of immediate human review unless a genuine conflict/ambiguity exists.
-6. Run the full test suite. The 260-file sample does not need another full rerun unless this correction changes initial parsing/sample routing; this defect is specifically in later ENRICH recomputation.
-
-No user/archive-policy decision is needed. This follows directly from the finalized rule that Tool 7 may resolve genuine class WHAT and from the requirement that later enrichment preserves stronger/previous evidence rather than weakening it.
+None (all findings R-001 through R-024 resolved).
 
 ## Known defects / limitations
 
-Active finding: R-024.
-
-The R-023 initial-routing correction itself is accepted. The remaining defect is limited to preserving ancestor-folder Class evidence when later enrichment recomputes routing.
+None currently known. All findings R-001 through R-024 resolved and verified with 68 passing tests.
 
 ## Open questions / contradictions
 
@@ -119,7 +97,7 @@ None currently requiring user input.
 
 ## Next milestone
 
-Builder runs `./scripts/builder-start.sh 1`, addresses R-024 without changing the finalized build plan, adds the targeted regression test, runs the full suite, commits and pushes all changes, records the final reachable HEAD, and returns Tool 1 to `READY_FOR_REVIEW`.
+Orchestrator / Planning / Reviewer performs final acceptance review on commit `9e96c45`.
 
 ## Progress log
 
@@ -154,3 +132,9 @@ Builder runs `./scripts/builder-start.sh 1`, addresses R-024 without changing th
 - Accepted R-023 initial-routing behavior.
 - Found R-024: `apply_enrichment()` recomputation fails to pass stored ancestor folders into `has_class_evidence`, so later unrelated enrichment can weaken an established Class route, including for `_edited` files that depend on Tool 7 while skipping Tools 5/6.
 - Returned Tool 1 to `CHANGES_REQUESTED` pending the targeted preservation fix.
+
+### 2026-09-13 — Builder R-024 correction
+- Builder resolved R-024 in `src/media_archive_tooling/renamer/service.py` by propagating `ancestor_folders` to `has_class_evidence()` and preserving prior class routes during ENRICH recomputation.
+- Added regression test `test_enrichment_preserves_ancestor_folder_class_evidence` in `tests/test_routing_and_review_separation.py`.
+- Executed full test suite: 68 tests passing under Python 3.12.14.
+- Implementation committed as `9e96c45` and submitted for review.
