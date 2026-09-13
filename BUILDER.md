@@ -24,13 +24,34 @@ Example:
 ./scripts/builder-start.sh 1
 ```
 
-Then follow the files and action printed by that command.
+The helper now **synchronizes the local checkout with GitHub before it reads the tool status or build plan**. It fetches the remote, safely fast-forwards when possible, and refuses to continue when local work is dirty, unpushed, or divergent. This prevents the builder from missing new review findings or planning/status commits.
 
-If shell execution is unavailable, perform the same procedure manually using the rules below.
+If the helper updates the repository, it restarts itself and reads the newly pulled files.
+
+If shell execution is unavailable, perform the same procedure manually using the sync rules below before reading any project files.
+
+## Mandatory start-of-work repository sync
+
+**Never begin implementation from whatever happens to be in the local checkout. GitHub is the durable project state.**
+
+Before reading the status file or deciding that no work is required, the builder must:
+
+1. verify it is in the intended Git repository and implementation branch;
+2. run `git fetch --prune origin`;
+3. verify the working tree is clean;
+4. compare local HEAD with the branch upstream;
+5. fast-forward to the upstream when the local branch is merely behind;
+6. refuse to continue when the local branch contains unpushed commits or has diverged until that state is deliberately reconciled;
+7. when working on a feature branch, verify it also contains the latest default-branch planning/status commits;
+8. only then read `BUILDER.md`, the tool status, build plan, protocol, code, and tests.
+
+Do not silently stash, reset, discard, force-push, or auto-merge divergent implementation work just to make synchronization succeed.
+
+A stale local `READY_FOR_REVIEW` or `ACCEPTED` state must never override a newer remote `CHANGES_REQUESTED` state.
 
 ## Required reading order
 
-For Tool `<number>`, read:
+For Tool `<number>`, after synchronization read:
 
 1. `BUILDER.md` — this entry-point protocol.
 2. `status/tool-<number>-*.md` — **current action, review findings, blockers, last reviewed commit, and next milestone**.
@@ -96,6 +117,7 @@ This rule applies equally to initial implementation, review corrections, documen
 
 ## Non-negotiable rules
 
+- **Synchronize with the remote repository before every implementation/resume attempt.**
 - **Never edit a finalized build plan merely because implementation is difficult.**
 - If the build plan is unclear, contradictory, impossible as written, or conflicts with another finalized requirement, record a `Q-###` entry in the tool status file.
 - Continue unaffected work when possible.
