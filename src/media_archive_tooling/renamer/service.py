@@ -135,8 +135,43 @@ class RenamerApplicationService:
             diag_notes.append(f"WHEN resolution is provisional ({parser_res.when.selected_value})")
 
         if parser_res.what.state == ResolutionState.UNRESOLVED:
-            parent_folder = Path(proposal.original_path).parent.name if proposal.original_path else ""
-            if has_class_evidence(parser_res.what, proposal.current_filename, parent_folder):
+            parent_folder = (
+                parser_res.context.parent_folder
+                if (parser_res.context and parser_res.context.parent_folder)
+                else (Path(proposal.original_path).parent.name if proposal.original_path else "")
+            )
+            ancestor_folders = (
+                parser_res.context.ancestor_folders
+                if (parser_res.context and parser_res.context.ancestor_folders)
+                else (
+                    [p.name for p in Path(proposal.original_path).parents if p.name and p != Path(proposal.original_path).parent]
+                    if proposal.original_path
+                    else []
+                )
+            )
+            prior_class_routed = (
+                "tool_7_class_classification" in parser_res.downstream_routing
+                and (not evidence.what_category or evidence.what_category in ("Class", "Lecture"))
+            )
+            is_class = (
+                prior_class_routed
+                or has_class_evidence(
+                    parser_res.what,
+                    proposal.current_filename,
+                    parent_folder,
+                    ancestor_folders,
+                )
+                or (
+                    parser_res.identity
+                    and has_class_evidence(
+                        parser_res.what,
+                        parser_res.identity.original_filename,
+                        parent_folder,
+                        ancestor_folders,
+                    )
+                )
+            )
+            if is_class:
                 diag_notes.append("Class WHAT is unresolved")
                 routing.append("tool_7_class_classification")
             else:

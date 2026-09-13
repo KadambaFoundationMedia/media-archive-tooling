@@ -204,3 +204,53 @@ def test_logger_evaluation_categories(tmp_path):
         )
     )
     assert logger._categorize_proposal(prop_review) == "human_review_required"
+
+
+def test_enrichment_preserves_ancestor_folder_class_evidence(parser_and_planner, tmp_path):
+    """Verify that later enrichment preserves ancestor-folder Class evidence and Tool 7 routing for edited files (R-024)."""
+    parser, planner = parser_and_planner
+    from media_archive_tooling.renamer.service import RenamerApplicationService
+    from media_archive_tooling.renamer.registry.registry import LocalRegistry
+    from media_archive_tooling.renamer.models import EnrichmentEvidence
+    import json
+
+    # 1. Parse an edited file inside a nested folder structure where an ancestor is 'Classes'
+    test_path = Path("/archive/Classes/2012/2012-05-13_Sydney_edited.mp3")
+    res_initial = parser.parse_file(test_path)
+    prop_initial = planner.plan_rename(res_initial)
+
+    # Initial state assertions
+    assert prop_initial.needs_review is False
+    assert res_initial.what.state == ResolutionState.UNRESOLVED
+    assert res_initial.file_metadata.edited is True
+    assert "tool_7_class_classification" in res_initial.downstream_routing
+    assert "tool_5_content_discovery" not in res_initial.downstream_routing
+    assert any("Class WHAT is unresolved" in n for n in res_initial.diagnostic_notes)
+
+    # Save initial proposal into registry
+    registry = LocalRegistry(db_path=tmp_path / "registry_r024.db")
+    registry.save_proposal(prop_initial)
+
+    # 2. Apply Tool 2-style enrichment: baserow_check_complete=True and where_val="Sydney-au"
+    service = RenamerApplicationService(registry=registry, planner=planner)
+    enriched_record = service.apply_enrichment(
+        EnrichmentEvidence(
+            tracking_id=prop_initial.tracking_id,
+            baserow_check_complete=True,
+            where_val="Sydney-au",
+            source_tool="tool_2_media_database_review",
+            details="Baserow check verified and location enriched"
+        )
+    )
+
+    # 3. Verify file remains safe without human review
+    assert bool(enriched_record["needs_review"]) is False
+    assert enriched_record["status"] == "enriched"
+
+    # 4. Verify stored ParserResult preserves tool_7_class_classification and does NOT regress to tool_5_content_discovery
+    stored_pr = json.loads(enriched_record["parser_result_json"])
+    assert "tool_7_class_classification" in stored_pr["downstream_routing"]
+    assert "tool_5_content_discovery" not in stored_pr["downstream_routing"]
+    assert "tool_2_media_database_review" not in stored_pr["downstream_routing"]
+    assert any("Class WHAT is unresolved" in n for n in stored_pr["diagnostic_notes"])
+

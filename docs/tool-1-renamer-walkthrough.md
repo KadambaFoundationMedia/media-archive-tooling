@@ -71,11 +71,17 @@ Tool 1 (Renamer) has been implemented, verified, and updated in accordance with 
 - **Clarified Tool Roles**: Tool 2 and Tool 3 are accurately documented as Baserow database review tools (Media database and Travel Schedule), distinct from audio content discovery (Tool 5).
 - **Regression Suite**: Added tests proving that generic unresolved WHAT routes to Tools 2 and 5 without implying Tool 7, while established classes with unresolved class WHAT correctly route to Tool 7.
 
+### R-024: Ancestor-Folder Class Evidence Preservation in ENRICH Routing
+- **Ancestor Folder Propagation**: Updated `RenamerApplicationService.apply_enrichment()` to retrieve and pass `ancestor_folders` from `parser_res.context.ancestor_folders` (with fallback to `Path(proposal.original_path).parents`) into `has_class_evidence()`.
+- **Prior Class Routing Preservation**: Ensures previously established `tool_7_class_classification` routes are preserved and not overwritten with generic `tool_2_media_database_review` and `tool_5_content_discovery` routes upon receiving unrelated later enrichment (e.g., Baserow check completion or WHERE enrichment).
+- **Edited File Workflow**: Safeguards the Tool 7 route for `_edited` files originating in ancestor class folders (e.g. `.../Classes/2012/file_edited.mp3`), keeping them out of unnecessary Tool 5 content discovery.
+- **Regression Suite**: Added `test_enrichment_preserves_ancestor_folder_class_evidence` verifying that an edited file in a nested class folder structure maintains `tool_7_class_classification` and `needs_review=False` after receiving Baserow check and location enrichment.
+
 ---
 
 ## 2. Verification & Test Results
 
-### Automated Regression Suite (67 Tests)
+### Automated Regression Suite (68 Tests)
 Executed full test suite under Python 3.12.14 via `.venv/bin/pytest -v`:
 
 ```text
@@ -86,7 +92,7 @@ tests/test_enrichment_and_finalization.py (2 tests)
 tests/test_golden_cases.py (8 tests)
 tests/test_location_adapter.py (5 tests)
 tests/test_portal.py (3 tests)
-tests/test_routing_and_review_separation.py (4 tests)
+tests/test_routing_and_review_separation.py (5 tests)
 tests/test_service.py (2 tests)
 tests/test_technical.py (3 tests)
 tests/test_validator_and_safety.py (8 tests)
@@ -95,7 +101,7 @@ tests/test_what.py (4 tests)
 tests/test_when.py (5 tests)
 tests/test_where.py (4 tests)
 
-======================== 67 passed, 2 warnings in 0.84s ========================
+======================== 68 passed, 2 warnings in 0.96s ========================
 ```
 
 ### Sample Archive Evaluation (`sample-files/`)
