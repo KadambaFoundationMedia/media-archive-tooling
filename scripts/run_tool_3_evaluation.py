@@ -53,7 +53,13 @@ def run_evaluation():
     t2_service = MediaDatabaseReviewService(registry=eval_reg, provider=provider)
     t2_results = t2_service.review_batch(force_refresh=False, auto_enrich=True)
     t2_results_by_id = {r.tracking_id: r for r in t2_results}
-    print(f"Evaluated {len(t2_results)} files through Tool 2")
+    t2_counts = {}
+    for r in t2_results:
+        dec = r.decision.value
+        t2_counts[dec] = t2_counts.get(dec, 0) + 1
+    print(f"Evaluated {len(t2_results)} files through Tool 2:")
+    for dec, c in sorted(t2_counts.items()):
+        print(f"  {dec}: {c}")
 
     print("\n=== Step 3: Tool 3 Travel Schedule Review ===")
     ref_store = TravelReferenceStore(Path(".renamer/reference/travel_schedule.json"), provider=provider)
@@ -176,6 +182,7 @@ def run_evaluation():
     summary_data = {
         "total_reviewed": len(t3_results),
         "downstream_from_t2": downstream_from_t2,
+        "tool2_counts": t2_counts,
         "counts": counts,
         "when_enrichments": when_enrichments,
         "where_enrichments": where_enrichments,

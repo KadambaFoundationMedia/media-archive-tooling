@@ -212,19 +212,20 @@ def run_travel_review(args):
     provider = BaserowSnapshotProvider(
         api_url=config.baserow_api_url,
         api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
         travel_schedule_table_id=config.baserow_travel_schedule_table_id,
     )
     store = TravelReferenceStore(reference_path=ref_path, provider=provider)
     service = TravelScheduleReviewService(registry=registry, reference_store=store)
 
     auto_enrich = getattr(args, "auto_enrich", True)
-    force_bootstrap = getattr(args, "force_bootstrap", False)
 
     if getattr(args, "tracking_id", None):
-        result = service.review_file(args.tracking_id, auto_enrich=auto_enrich, force_bootstrap=force_bootstrap)
+        result = service.review_file(args.tracking_id, auto_enrich=auto_enrich)
         results = [result]
     else:
-        results = service.review_batch(auto_enrich=auto_enrich, force_bootstrap=force_bootstrap)
+        results = service.review_batch(auto_enrich=auto_enrich)
 
     if getattr(args, "json", False):
         import json
@@ -271,6 +272,8 @@ def run_travel_reference(args):
     provider = BaserowSnapshotProvider(
         api_url=config.baserow_api_url,
         api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
         travel_schedule_table_id=config.baserow_travel_schedule_table_id,
     )
     store = TravelReferenceStore(reference_path=ref_path, provider=provider)
@@ -278,7 +281,24 @@ def run_travel_reference(args):
     action = args.action
 
     if action == "init":
-        manifest = store.ensure_reference(force_bootstrap=True)
+        existing = store.load_reference()
+        if existing:
+            if getattr(args, "json", False):
+                print(json.dumps({
+                    "status": "already_exists",
+                    "path": str(store.reference_path),
+                    "canonical_sha256": existing.canonical_sha256,
+                    "row_count": existing.row_count,
+                    "message": "Verified reference already exists; refusing to overwrite. Use 'verify' to inspect remote differences."
+                }, indent=2))
+            else:
+                print(f"Verified travel schedule reference already exists at: {store.reference_path}")
+                print(f"Source Table ID: {existing.source_table_id}")
+                print(f"Rows: {existing.row_count} | Canonical SHA-256: {existing.canonical_sha256}")
+                print("Refusing to silently overwrite verified reference. Use 'media-archive travel-reference verify' to check remote state.")
+            return
+
+        manifest = store.ensure_reference()
         if getattr(args, "json", False):
             print(json.dumps({
                 "status": "initialized",
@@ -350,7 +370,6 @@ def main():
     travel_review_parser.add_argument("tracking_id", nargs="?", help="Optional tracking ID to review")
     travel_review_parser.add_argument("--registry-path", help="Custom SQLite registry path")
     travel_review_parser.add_argument("--reference-path", help="Custom travel schedule reference JSON path")
-    travel_review_parser.add_argument("--force-bootstrap", action="store_true", default=False, help="Force reload reference from Baserow")
     travel_review_parser.add_argument("--no-enrich", dest="auto_enrich", action="store_false", default=True, help="Do not automatically apply provisional enrichment to Renamer proposals")
     travel_review_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
     travel_review_parser.set_defaults(func=run_travel_review)

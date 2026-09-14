@@ -142,13 +142,32 @@ class TravelReferenceStore:
             raise RuntimeError(f"Failed to reload and verify newly written reference at {self.reference_path}")
         return loaded
 
-    def ensure_reference(self, force_bootstrap: bool = False) -> TravelScheduleManifest:
-        """Return a verified reference, bootstrapping from provider if missing, corrupt, or forced."""
-        if not force_bootstrap:
+    def ensure_reference(self) -> TravelScheduleManifest:
+        """Return a verified reference, bootstrapping from provider only if missing or corrupt.
+
+        Never replaces an existing verified reference.
+        """
+        manifest = self.load_reference()
+        if manifest is not None:
+            return manifest
+
+        return self.bootstrap_from_provider()
+
+    def accept_remote_reference(self, expected_remote_sha: Optional[str] = None) -> TravelScheduleManifest:
+        """Explicit administrative replacement: verify remote table and deliberately accept new reference."""
+        verification = self.verify_remote_reference()
+        if verification["matches"]:
+            logger.info("Remote reference matches local reference; no update needed")
             manifest = self.load_reference()
             if manifest is not None:
                 return manifest
 
+        if expected_remote_sha and verification["remote_sha256"] != expected_remote_sha:
+            raise ValueError(
+                f"Remote SHA256 {verification['remote_sha256']} does not match expected {expected_remote_sha}"
+            )
+
+        logger.info(f"Deliberately accepting unexpected remote reference change: {verification['remote_sha256']}")
         return self.bootstrap_from_provider()
 
     def verify_remote_reference(self) -> Dict[str, Any]:

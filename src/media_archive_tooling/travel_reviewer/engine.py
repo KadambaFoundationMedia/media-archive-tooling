@@ -75,6 +75,7 @@ class TravelScheduleIndex:
         self.place_to_row_ids: Dict[str, List[int]] = {}
         self.alias_to_canonical: Dict[str, str] = {}
         self.invalid_rows: List[NormalizedTravelRow] = []
+        self.long_ranges: List[Tuple[date, date, int]] = []
 
         self._load_location_aliases()
         self._build_index()
@@ -108,30 +109,42 @@ class TravelScheduleIndex:
             self.rows_by_id[row.id] = row
 
             d_start = parse_iso_date(row.start_date)
-            d_end = parse_iso_date(row.end_date) if row.end_date else d_start
-
-            if d_start and d_end and d_end < d_start:
-                # End before start is invalid schedule data
+            if not d_start:
+                # Missing or unparseable start date
                 self.invalid_rows.append(row)
                 continue
 
+            if row.end_date and row.end_date.strip():
+                d_end = parse_iso_date(row.end_date)
+                if d_end is None:
+                    # Present but malformed end date is invalid schedule data
+                    self.invalid_rows.append(row)
+                    continue
+                if d_end < d_start:
+                    # End before start is invalid schedule data
+                    self.invalid_rows.append(row)
+                    continue
+            else:
+                d_end = d_start
+
             # Index dates
-            if d_start:
-                effective_end = d_end or d_start
-                # Cap span to 366 days to avoid runaway index
-                span_days = (effective_end - d_start).days
-                if 0 <= span_days <= 366:
-                    curr = d_start
-                    while curr <= effective_end:
-                        ds = curr.isoformat()
-                        self.date_to_row_ids.setdefault(ds, []).append(row.id)
-                        ms = f"{curr.year:04d}-{curr.month:02d}"
-                        if row.id not in self.month_to_row_ids.setdefault(ms, []):
-                            self.month_to_row_ids[ms].append(row.id)
-                        ys = f"{curr.year:04d}"
-                        if row.id not in self.year_to_row_ids.setdefault(ys, []):
-                            self.year_to_row_ids[ys].append(row.id)
-                        curr += timedelta(days=1)
+            effective_end = d_end
+            span_days = (effective_end - d_start).days
+            if 0 <= span_days <= 366:
+                curr = d_start
+                while curr <= effective_end:
+                    ds = curr.isoformat()
+                    self.date_to_row_ids.setdefault(ds, []).append(row.id)
+                    ms = f"{curr.year:04d}-{curr.month:02d}"
+                    if row.id not in self.month_to_row_ids.setdefault(ms, []):
+                        self.month_to_row_ids[ms].append(row.id)
+                    ys = f"{curr.year:04d}"
+                    if row.id not in self.year_to_row_ids.setdefault(ys, []):
+                        self.year_to_row_ids[ys].append(row.id)
+                    curr += timedelta(days=1)
+            else:
+                # Valid long explicit range (> 366 days)
+                self.long_ranges.append((d_start, effective_end, row.id))
 
             # Index place
             if row.place:
@@ -140,17 +153,44 @@ class TravelScheduleIndex:
 
     def get_rows_by_date(self, d_str: str) -> List[NormalizedTravelRow]:
         """Return all rows whose interval contains d_str (YYYY-MM-DD)."""
-        r_ids = self.date_to_row_ids.get(d_str, [])
+        r_ids = list(self.date_to_row_ids.get(d_str, []))
+        q_date = parse_iso_date(d_str)
+        if q_date:
+            for s, e, rid in self.long_ranges:
+                if s <= q_date <= e and rid not in r_ids:
+                    r_ids.append(rid)
         return [self.rows_by_id[rid] for rid in r_ids if rid in self.rows_by_id]
 
     def get_rows_by_month(self, ym_str: str) -> List[NormalizedTravelRow]:
         """Return all rows whose interval overlaps ym_str (YYYY-MM)."""
-        r_ids = self.month_to_row_ids.get(ym_str, [])
+        r_ids = list(self.month_to_row_ids.get(ym_str, []))
+        try:
+            parts = ym_str.split("-")
+            y, m = int(parts[0]), int(parts[1])
+            m_start = date(y, m, 1)
+            if m == 12:
+                m_end = date(y, 12, 31)
+            else:
+                m_end = date(y, m + 1, 1) - timedelta(days=1)
+            for s, e, rid in self.long_ranges:
+                if not (e < m_start or s > m_end) and rid not in r_ids:
+                    r_ids.append(rid)
+        except Exception:
+            pass
         return [self.rows_by_id[rid] for rid in r_ids if rid in self.rows_by_id]
 
     def get_rows_by_year(self, y_str: str) -> List[NormalizedTravelRow]:
         """Return all rows whose interval overlaps y_str (YYYY)."""
-        r_ids = self.year_to_row_ids.get(y_str, [])
+        r_ids = list(self.year_to_row_ids.get(y_str, []))
+        try:
+            y = int(y_str)
+            y_start = date(y, 1, 1)
+            y_end = date(y, 12, 31)
+            for s, e, rid in self.long_ranges:
+                if not (e < y_start or s > y_end) and rid not in r_ids:
+                    r_ids.append(rid)
+        except Exception:
+            pass
         return [self.rows_by_id[rid] for rid in r_ids if rid in self.rows_by_id]
 
     def get_rows_by_place(self, place: str) -> List[NormalizedTravelRow]:
@@ -160,16 +200,20 @@ class TravelScheduleIndex:
         return [self.rows_by_id[rid] for rid in r_ids if rid in self.rows_by_id]
 
 
-def group_candidates_semantically(rows: List[NormalizedTravelRow]) -> List[TravelCandidate]:
-    """Group rows that represent the exact same semantic visit interval and place.
+def group_candidates_semantically(
+    rows: List[NormalizedTravelRow],
+    index: Optional[TravelScheduleIndex] = None,
+) -> List[TravelCandidate]:
+    """Group rows that represent the exact same semantic visit interval and canonical place.
 
     Preserves every source row ID and original text in provenance.
     """
     grouped: Dict[Tuple[str, str, str, Optional[str]], List[NormalizedTravelRow]] = {}
     for r in rows:
-        norm_p = _norm_place_token(r.place)
+        eff_end = r.end_date if (r.end_date and r.end_date.strip()) else r.start_date
+        canon_p = index.canonical_place(r.place) if index else _norm_place_token(r.place)
         iso = r.country_iso2.lower() if r.country_iso2 else None
-        key = (r.start_date, r.end_date, norm_p, iso)
+        key = (r.start_date, eff_end, canon_p, iso)
         grouped.setdefault(key, []).append(r)
 
     candidates = []
@@ -182,7 +226,7 @@ def group_candidates_semantically(rows: List[NormalizedTravelRow]) -> List[Trave
         cand = TravelCandidate(
             schedule_row_ids=row_ids,
             start_date=first.start_date,
-            end_date=first.end_date or first.start_date,
+            end_date=key[1],
             place=first.place,
             country=first.country,
             country_iso2=first.country_iso2,
@@ -232,15 +276,35 @@ class TravelScheduleEngine:
             res.selected_media_row_id = t2_res.selected_media_row_id
         else:
             res.tool2_context_state = "UNAVAILABLE"
+            res.diagnostic_notes.append("Media context unavailable; proceeding as schedule-only provisional review")
 
-        # Check for high-authority contradiction between local and confirmed Media row
+        # Extract confirmed Tool 2 Media context
         is_confirmed_media = (
             t2_res is not None
             and t2_res.decision == ReviewDecision.EXISTING_MEDIA_MATCH
             and t2_res.selected_media_row_id is not None
         )
-        if is_confirmed_media:
-            # Check if local contradicts confirmed Media row
+        confirmed_media_when: Optional[str] = None
+        confirmed_media_where: Optional[str] = None
+        confirmed_media_country_iso: Optional[str] = None
+
+        if is_confirmed_media and t2_res:
+            if t2_res.renamer_enrichment and t2_res.renamer_enrichment.confirmed:
+                confirmed_media_when = t2_res.renamer_enrichment.when_val
+                confirmed_media_where = t2_res.renamer_enrichment.where_val
+            cand = next((c for c in t2_res.candidates if c.media_row_id == t2_res.selected_media_row_id), None)
+            if cand:
+                if not confirmed_media_when and cand.normalized_row.get("date"):
+                    confirmed_media_when = str(cand.normalized_row.get("date")).strip()
+                if not confirmed_media_where and cand.normalized_row.get("place"):
+                    p = str(cand.normalized_row.get("place")).strip()
+                    c = str(cand.normalized_row.get("country") or "").strip()
+                    confirmed_media_where = f"{p}-{c}".strip("-") if c else p
+                if cand.normalized_row.get("country"):
+                    c_iso = _norm_country(str(cand.normalized_row.get("country")))
+                    if c_iso:
+                        confirmed_media_country_iso = c_iso.lower()
+
             if t2_res.conflicts:
                 res.conflicts.extend(t2_res.conflicts)
                 res.diagnostic_notes.append("Preserving high-authority conflict between local and confirmed Media row")
@@ -260,6 +324,51 @@ class TravelScheduleEngine:
         has_place = bool(local_place and local_place.strip())
         has_country_only = bool(local_iso and not has_place)
 
+        # Incorporate confirmed Media authority for missing local dimensions
+        # 1. Authoritative date from confirmed Media when local lacks full date
+        if not has_full_date and confirmed_media_when:
+            cm_y, cm_m, cm_d = parse_partial_when(confirmed_media_when)
+            if cm_y and cm_m and cm_d:
+                auth_date = f"{cm_y:04d}-{cm_m:02d}-{cm_d:02d}"
+                eff_place = local_place or (confirmed_media_where.split("-")[0] if confirmed_media_where else None)
+                eff_iso = local_iso or confirmed_media_country_iso
+                if eff_place:
+                    eval_res = self._evaluate_case_a(
+                        parser_result=parser_result,
+                        res=res,
+                        exact_date=auth_date,
+                        place=eff_place,
+                        country_iso=eff_iso,
+                        is_confirmed_media=is_confirmed_media,
+                        t2_res=t2_res,
+                    )
+                    return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
+                else:
+                    eval_res = self._evaluate_case_c(
+                        parser_result=parser_result,
+                        res=res,
+                        exact_date=auth_date,
+                        country_iso=eff_iso,
+                        is_confirmed_media=is_confirmed_media,
+                        t2_res=t2_res,
+                    )
+                    return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
+
+        # 2. Authoritative place from confirmed Media when local lacks place but has full date
+        if has_full_date and not has_place and confirmed_media_where:
+            eff_place = confirmed_media_where.split("-")[0]
+            eff_iso = local_iso or confirmed_media_country_iso
+            eval_res = self._evaluate_case_a(
+                parser_result=parser_result,
+                res=res,
+                exact_date=f"{y:04d}-{m:02d}-{d:02d}",
+                place=eff_place,
+                country_iso=eff_iso,
+                is_confirmed_media=is_confirmed_media,
+                t2_res=t2_res,
+            )
+            return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
+
         # Case D: neither date nor location usable
         if not has_any_date and not has_place and not has_country_only:
             res.decision = TravelReviewDecision.INSUFFICIENT_EVIDENCE
@@ -269,7 +378,7 @@ class TravelScheduleEngine:
 
         # Case A: Both WHEN and WHERE known
         if has_full_date and has_place:
-            return self._evaluate_case_a(
+            eval_res = self._evaluate_case_a(
                 parser_result=parser_result,
                 res=res,
                 exact_date=f"{y:04d}-{m:02d}-{d:02d}",
@@ -278,10 +387,11 @@ class TravelScheduleEngine:
                 is_confirmed_media=is_confirmed_media,
                 t2_res=t2_res,
             )
+            return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
 
         # Case B: Location known, date missing or partial
         if has_place and (not has_any_date or has_partial_date):
-            return self._evaluate_case_b(
+            eval_res = self._evaluate_case_b(
                 parser_result=parser_result,
                 res=res,
                 place=local_place,
@@ -291,10 +401,11 @@ class TravelScheduleEngine:
                 is_confirmed_media=is_confirmed_media,
                 t2_res=t2_res,
             )
+            return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
 
         # Case C: Date known, location missing or partial
         if has_full_date and (not has_place):
-            return self._evaluate_case_c(
+            eval_res = self._evaluate_case_c(
                 parser_result=parser_result,
                 res=res,
                 exact_date=f"{y:04d}-{m:02d}-{d:02d}",
@@ -302,6 +413,7 @@ class TravelScheduleEngine:
                 is_confirmed_media=is_confirmed_media,
                 t2_res=t2_res,
             )
+            return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
 
         # Sub-case: Partial date with no place, or country only
         if has_partial_date and not has_place:
@@ -312,6 +424,35 @@ class TravelScheduleEngine:
 
         # Fallback
         res.decision = TravelReviewDecision.INSUFFICIENT_EVIDENCE
+        return res
+
+    def _apply_media_authority_guard(
+        self,
+        res: TravelReviewResult,
+        confirmed_media_when: Optional[str],
+        confirmed_media_where: Optional[str],
+    ) -> TravelReviewResult:
+        """Ensure confirmed Tool 2 Media values are never contradicted, downgraded, or overwritten."""
+        if not res.provisional_enrichment:
+            return res
+
+        if confirmed_media_when and res.provisional_enrichment.when_val:
+            if res.provisional_enrichment.when_val != confirmed_media_when:
+                res.provisional_enrichment.when_val = None
+                res.diagnostic_notes.append("Suppressed provisional WHEN enrichment: contradicts confirmed Media date")
+
+        if confirmed_media_where and res.provisional_enrichment.where_val:
+            cand_p = res.provisional_enrichment.where_val.split("-")[0]
+            cm_p = confirmed_media_where.split("-")[0]
+            if self.index.canonical_place(cand_p) != self.index.canonical_place(cm_p):
+                res.provisional_enrichment.where_val = None
+                res.diagnostic_notes.append("Suppressed provisional WHERE enrichment: contradicts confirmed Media location")
+
+        if not res.provisional_enrichment.when_val and not res.provisional_enrichment.where_val:
+            res.provisional_enrichment = None
+            if res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT:
+                res.decision = TravelReviewDecision.SCHEDULE_CONFLICT if res.conflicts else TravelReviewDecision.CORROBORATED
+
         return res
 
     def _evaluate_case_a(
@@ -331,7 +472,7 @@ class TravelScheduleEngine:
             res.diagnostic_notes.append(f"No schedule entry found for date {exact_date}")
             return res
 
-        candidates = group_candidates_semantically(matching_rows)
+        candidates = group_candidates_semantically(matching_rows, index=self.index)
         res.candidates = candidates
 
         norm_local_place = self.index.canonical_place(place)
@@ -465,7 +606,7 @@ class TravelScheduleEngine:
             return res
 
         # Group semantically
-        candidates = group_candidates_semantically(matching_rows)
+        candidates = group_candidates_semantically(matching_rows, index=self.index)
         res.candidates = candidates
 
         # Check distinct visit intervals
@@ -583,7 +724,7 @@ class TravelScheduleEngine:
             res.diagnostic_notes.append(f"No schedule entry found for date {exact_date}")
             return res
 
-        candidates = group_candidates_semantically(matching_rows)
+        candidates = group_candidates_semantically(matching_rows, index=self.index)
         res.candidates = candidates
 
         # Check for country contradiction if country is known locally

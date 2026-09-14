@@ -39,6 +39,7 @@ from media_archive_tooling.review_portal.app import app, configure_review_contex
 from media_archive_tooling.travel_reviewer.engine import (
     TravelScheduleEngine,
     TravelScheduleIndex,
+    _norm_place_token,
     group_candidates_semantically,
     parse_iso_date,
 )
@@ -164,7 +165,7 @@ def test_01_complete_static_reference_bootstrap_with_pagination(tmp_path):
     ref_file = tmp_path / "reference" / "travel_schedule.json"
     store = TravelReferenceStore(reference_path=ref_file, provider=fake_provider)
 
-    manifest = store.ensure_reference(force_bootstrap=True)
+    manifest = store.ensure_reference()
     assert fake_provider.fetch_count == 1
     assert manifest.complete is True
     assert manifest.row_count == 150
@@ -182,11 +183,11 @@ def test_02_verified_local_reference_reused_with_zero_network_calls(tmp_path):
     store = TravelReferenceStore(reference_path=ref_file, provider=fake_provider)
 
     # Initial bootstrap
-    store.ensure_reference(force_bootstrap=True)
+    store.ensure_reference()
     assert fake_provider.fetch_count == 1
 
     # Second call should load from disk with zero network calls
-    manifest2 = store.ensure_reference(force_bootstrap=False)
+    manifest2 = store.ensure_reference()
     assert fake_provider.fetch_count == 1
     assert manifest2.row_count == 1
 
@@ -207,7 +208,7 @@ def test_04_corrupted_local_reference_rejected(tmp_path):
     ref_file = tmp_path / "travel_schedule.json"
     raw_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
     store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=raw_rows))
-    store.ensure_reference(force_bootstrap=True)
+    store.ensure_reference()
 
     # Tamper with file
     with open(ref_file, "r", encoding="utf-8") as f:
@@ -231,7 +232,7 @@ def test_05_corrupt_or_missing_reference_rebootstrapped(tmp_path):
     assert store.load_reference() is None
 
     # ensure_reference re-bootstraps
-    manifest = store.ensure_reference(force_bootstrap=False)
+    manifest = store.ensure_reference()
     assert manifest is not None
     assert manifest.row_count == 1
     assert provider.fetch_count == 1
@@ -259,7 +260,7 @@ def test_07_explicit_remote_verify_unexpected_change(tmp_path):
     initial_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
     provider = FakeBaserowProvider(rows=initial_rows)
     store = TravelReferenceStore(reference_path=ref_file, provider=provider)
-    manifest = store.ensure_reference(force_bootstrap=True)
+    manifest = store.ensure_reference()
     orig_sha = manifest.canonical_sha256
 
     # Remote table now has different rows
@@ -1005,7 +1006,7 @@ def test_38_cli_batch_works_offline_with_verified_reference(tmp_path, monkeypatc
     # Bootstrap reference file first
     rows = [make_raw_schedule_row(140, "2019-09-10", place="Berlin", country="Germany")]
     store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
-    store.ensure_reference(force_bootstrap=True)
+    store.ensure_reference()
 
     # Execute CLI travel-review offline
     test_args = [
@@ -1075,3 +1076,223 @@ def test_40_batch_isolates_one_file_errors_and_continues(tmp_path):
     assert results[0].decision == TravelReviewDecision.REFERENCE_UNAVAILABLE
     assert "Batch processing error" in results[0].diagnostic_notes[0]
     assert results[1].decision == TravelReviewDecision.CORROBORATED
+
+
+# --- Review Findings Regression Tests (R-001 through R-006) ---
+
+def test_r001_local_date_missing_confirmed_media_date_no_contradictory_when_enrichment(tmp_path):
+    """R-001: local date missing + confirmed Media date A + unique schedule date B -> no enrichment to B."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    # Schedule has Leipzig only on 2015-05-10 (date B)
+    rows = [make_raw_schedule_row(10, "2015-05-10", place="Leipzig", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Local file has NO date, but place Leipzig
+    p = create_sample_parser_result(
+        tracking_id="r001_date",
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Leipzig",
+    )
+    register_file(reg, p)
+
+    # Tool 2 has confirmed Media match with date A = 2012-01-07
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id="r001_date",
+        database_state="LIVE_CURRENT",
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=999,
+        renamer_enrichment=RenamerEnrichment(
+            confirmed=True,
+            media_row_id=999,
+            when_val="2012-01-07",
+            where_val="Leipzig-de",
+        ),
+    )
+
+    res = service.review_file("r001_date", tool2_context=t2_res, auto_enrich=True)
+
+    # Must NOT enrich to date B (2015-05-10)
+    if res.provisional_enrichment:
+        assert res.provisional_enrichment.when_val != "2015-05-10"
+        assert res.provisional_enrichment.when_val is None
+
+    # Registry proposal date must remain unchanged / not set to 2015-05-10
+    prop = reg.get_file("r001_date")
+    assert "2015-05-10" not in prop["proposed_filename"]
+
+
+def test_r001_local_place_missing_confirmed_media_where_no_contradictory_where_enrichment(tmp_path):
+    """R-001: local place missing + confirmed Media WHERE A + unique schedule WHERE B -> no enrichment to B."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    # Schedule on 2012-01-07 says speaker is in Radhadesh (Belgium) -> location B
+    rows = [make_raw_schedule_row(11, "2012-01-07", place="Radhadesh", country="Belgium")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Local file has date 2012-01-07, but NO place
+    p = create_sample_parser_result(
+        tracking_id="r001_place",
+        when_val="2012-01-07",
+        place=None,
+    )
+    register_file(reg, p)
+
+    # Tool 2 has confirmed Media match with WHERE A = "Leipzig-de"
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id="r001_place",
+        database_state="LIVE_CURRENT",
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=888,
+        renamer_enrichment=RenamerEnrichment(
+            confirmed=True,
+            media_row_id=888,
+            when_val="2012-01-07",
+            where_val="Leipzig-de",
+        ),
+    )
+
+    res = service.review_file("r001_place", tool2_context=t2_res, auto_enrich=True)
+
+    # Must detect schedule conflict between planned Radhadesh and confirmed Media Leipzig
+    assert res.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert res.provisional_enrichment is None
+
+    # Registry proposal must NOT have Radhadesh
+    prop = reg.get_file("r001_place")
+    assert "Radhadesh" not in prop["proposed_filename"]
+
+
+def test_r003_verified_reference_not_overwritten_by_init_when_remote_checksum_differs(tmp_path, monkeypatch):
+    """R-003: verified reference is not overwritten by routine review or init when remote checksum differs."""
+    ref_file = tmp_path / "travel_schedule.json"
+    initial_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
+    provider1 = FakeBaserowProvider(rows=initial_rows)
+    store1 = TravelReferenceStore(reference_path=ref_file, provider=provider1)
+    manifest = store1.ensure_reference()
+    original_sha = manifest.canonical_sha256
+
+    # Remote table now has different rows / checksum
+    different_rows = [make_raw_schedule_row(2, "2020-01-01", place="Prague", country="Czech Republic")]
+    provider2 = FakeBaserowProvider(rows=different_rows)
+    store2 = TravelReferenceStore(reference_path=ref_file, provider=provider2)
+
+    # ensure_reference returns existing verified local reference without re-fetching
+    reloaded = store2.ensure_reference()
+    assert reloaded.canonical_sha256 == original_sha
+    assert provider2.fetch_count == 0
+
+    # CLI travel-reference init refuses to overwrite existing verified reference
+    test_args = [
+        "media-archive",
+        "travel-reference",
+        "init",
+        "--reference-path", str(ref_file),
+    ]
+    monkeypatch.setattr("sys.argv", test_args)
+    cli_main()
+
+    # Local file content and checksum remain unchanged
+    after_manifest = store2.load_reference()
+    assert after_manifest.canonical_sha256 == original_sha
+    assert after_manifest.row_count == 1
+    assert after_manifest.normalized_rows[0].place == "Berlin"
+
+
+def test_r004_valid_start_with_malformed_nonempty_end_date_cannot_authorize_enrichment():
+    """R-004: valid start with malformed non-empty end date is rejected as invalid data and cannot authorize enrichment."""
+    # end_date is non-empty but unparseable
+    row = normalize_to_travel_row(make_raw_schedule_row(20, "2019-09-10", end_date="invalid-end-date", place="Berlin"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-14T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    # Must be recorded in invalid_rows and excluded from date lookups
+    assert len(engine.index.invalid_rows) == 1
+    assert engine.index.get_rows_by_date("2019-09-10") == []
+
+    p = create_sample_parser_result(when_val="2019-09-10", place=None)
+    res = engine.evaluate(p)
+    # Must NOT authorize provisional enrichment
+    assert res.decision != TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.decision == TravelReviewDecision.NO_SCHEDULE_SUPPORT
+
+
+def test_r005_alias_equivalent_places_grouped_with_all_row_ids_and_text_preserved():
+    """R-005: alias-equivalent places group to single candidate preserving all row IDs and schedule text."""
+    # Row 1: place="Radhadesh", Row 2: place="Chateau de Petite Somme" (alias of Radhadesh)
+    row1 = normalize_to_travel_row(make_raw_schedule_row(101, "2020-05-01", place="Radhadesh", text="Morning class"))
+    row2 = normalize_to_travel_row(make_raw_schedule_row(102, "2020-05-01", place="Chateau de Petite Somme", text="Evening kirtan"))
+
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-14T00:00:00Z",
+        complete=True,
+        row_count=2,
+        canonical_sha256=compute_canonical_sha256([row1, row2]),
+        normalized_rows=[row1, row2],
+    )
+    engine = TravelScheduleEngine(manifest)
+    # Ensure alias mapping includes Chateau de Petite Somme -> Radhadesh
+    engine.index.alias_to_canonical[_norm_place_token("Chateau de Petite Somme")] = "radhadesh"
+    engine.index.alias_to_canonical[_norm_place_token("Radhadesh")] = "radhadesh"
+
+    candidates = group_candidates_semantically([row1, row2], index=engine.index)
+    assert len(candidates) == 1
+    cand = candidates[0]
+    assert cand.schedule_row_ids == [101, 102]
+    assert "Morning class" in cand.schedule_text
+    assert "Evening kirtan" in cand.schedule_text
+
+
+def test_r005_missing_end_vs_explicit_single_day_grouped_with_both_row_ids():
+    """R-005: missing end date and explicit single day (end == start) group together."""
+    row1 = normalize_to_travel_row(make_raw_schedule_row(201, "2020-05-01", end_date="", place="Berlin"))
+    row2 = normalize_to_travel_row(make_raw_schedule_row(202, "2020-05-01", end_date="2020-05-01", place="Berlin"))
+
+    candidates = group_candidates_semantically([row1, row2])
+    assert len(candidates) == 1
+    assert candidates[0].schedule_row_ids == [201, 202]
+    assert candidates[0].end_date == "2020-05-01"
+
+
+def test_r006_valid_explicit_range_longer_than_366_days_indexed_and_found():
+    """R-006: valid explicit range longer than 366 days is contained in date lookups."""
+    # Span from 2018-01-01 to 2019-03-01 is 424 days
+    row = normalize_to_travel_row(make_raw_schedule_row(301, "2018-01-01", end_date="2019-03-01", place="Mayapur", country="India"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-14T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    # Check date inside long range
+    rows = engine.index.get_rows_by_date("2018-06-15")
+    assert len(rows) == 1
+    assert rows[0].id == 301
+
+    # Check month inside long range
+    m_rows = engine.index.get_rows_by_month("2018-06")
+    assert len(m_rows) == 1
+    assert m_rows[0].id == 301
+
+    # Check evaluate Case A on date inside range
+    p = create_sample_parser_result(when_val="2018-06-15", place="Mayapur", country="India", country_iso2="in")
+    res = engine.evaluate(p)
+    assert res.decision == TravelReviewDecision.CORROBORATED

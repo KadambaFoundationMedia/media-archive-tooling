@@ -33,6 +33,7 @@ class TravelScheduleReviewService:
         registry: Optional[LocalRegistry] = None,
         reference_store: Optional[TravelReferenceStore] = None,
         renamer_service: Optional[RenamerApplicationService] = None,
+        media_db_service: Optional[Any] = None,
         config: Optional[AppConfig] = None,
     ):
         self.config = config or load_config()
@@ -44,6 +45,8 @@ class TravelScheduleReviewService:
             provider = BaserowSnapshotProvider(
                 api_url=self.config.baserow_api_url,
                 api_token=self.config.baserow_api_token,
+                media_table_id=self.config.baserow_media_table_id,
+                category_table_id=self.config.baserow_category_table_id,
                 travel_schedule_table_id=self.config.baserow_travel_schedule_table_id,
             )
             self.reference_store = TravelReferenceStore(
@@ -53,21 +56,34 @@ class TravelScheduleReviewService:
         self.renamer_service = renamer_service or RenamerApplicationService(
             registry=self.registry,
         )
+        self.media_db_service = media_db_service
+        if not self.media_db_service and hasattr(self.reference_store, "provider") and self.reference_store.provider:
+            p = self.reference_store.provider
+            if getattr(p, "media_table_id", None):
+                try:
+                    from ..media_db_reviewer.service import MediaDatabaseReviewService
+                    self.media_db_service = MediaDatabaseReviewService(
+                        registry=self.registry,
+                        provider=p,
+                    )
+                except Exception:
+                    self.media_db_service = None
+
         self._engine: Optional[TravelScheduleEngine] = None
         self._cached_checksum: Optional[str] = None
 
-    def ensure_reference(self, force_bootstrap: bool = False) -> TravelScheduleManifest:
+    def ensure_reference(self) -> TravelScheduleManifest:
         """Ensure verified local travel schedule reference exists and return it."""
-        return self.reference_store.ensure_reference(force_bootstrap=force_bootstrap)
+        return self.reference_store.ensure_reference()
 
     def verify_reference(self) -> Dict[str, Any]:
         """Admin check: compare current remote Baserow table with local reference."""
         return self.reference_store.verify_remote_reference()
 
-    def get_engine(self, force_bootstrap: bool = False) -> Optional[TravelScheduleEngine]:
+    def get_engine(self) -> Optional[TravelScheduleEngine]:
         """Get or create cached TravelScheduleEngine backed by verified reference."""
         try:
-            manifest = self.ensure_reference(force_bootstrap=force_bootstrap)
+            manifest = self.ensure_reference()
             if self._engine is None or self._cached_checksum != manifest.canonical_sha256:
                 self._engine = TravelScheduleEngine(manifest)
                 self._cached_checksum = manifest.canonical_sha256
@@ -81,7 +97,6 @@ class TravelScheduleReviewService:
         target: Union[str, ParserResult],
         tool2_context: Optional[Any] = None,
         auto_enrich: bool = True,
-        force_bootstrap: bool = False,
     ) -> TravelReviewResult:
         """Review a single media file against travel schedule reference.
 
@@ -89,7 +104,6 @@ class TravelScheduleReviewService:
             target: tracking_id string or ParserResult instance.
             tool2_context: MediaDatabaseReviewResult or dict if available from Tool 2.
             auto_enrich: whether to automatically apply provisional enrichment to Tool 1 Renamer.
-            force_bootstrap: whether to force re-download of reference from Baserow.
         """
         tracking_id = target.identity.tracking_id if isinstance(target, ParserResult) else target
         parser_res = target if isinstance(target, ParserResult) else None
@@ -100,8 +114,19 @@ class TravelScheduleReviewService:
                 raise ValueError(f"Tracking ID '{tracking_id}' not found in registry")
             parser_res = ParserResult.model_validate(record["parser_result"])
 
+        # If tool2_context is not explicitly passed, attempt to obtain current live Media context
+        if tool2_context is None and self.media_db_service:
+            try:
+                tool2_context = self.media_db_service.review_file(
+                    tracking_id=tracking_id,
+                    auto_enrich=False,
+                )
+            except Exception as e:
+                logger.debug(f"Could not obtain current Tool 2 Media context for {tracking_id}: {e}")
+                tool2_context = None
+
         # Attempt to get engine
-        engine = self.get_engine(force_bootstrap=force_bootstrap)
+        engine = self.get_engine()
         if not engine:
             res = TravelReviewResult(
                 tracking_id=tracking_id,
@@ -146,7 +171,6 @@ class TravelScheduleReviewService:
         self,
         tracking_ids: Optional[List[str]] = None,
         auto_enrich: bool = True,
-        force_bootstrap: bool = False,
     ) -> List[TravelReviewResult]:
         """Review multiple files in batch, isolating individual failures."""
         if tracking_ids is None:
@@ -159,7 +183,6 @@ class TravelScheduleReviewService:
                 r = self.review_file(
                     target=tid,
                     auto_enrich=auto_enrich,
-                    force_bootstrap=force_bootstrap,
                 )
                 results.append(r)
             except Exception as e:
