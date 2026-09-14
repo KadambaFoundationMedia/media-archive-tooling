@@ -9,9 +9,11 @@ from ..renamer.registry.registry import LocalRegistry
 from .baserow_provider import BaserowSnapshotProvider, BaserowUnavailableError
 from .engine import (
     MediaDatabaseReconciliationEngine,
+    compose_what_val,
     _compare_dates,
     _compare_places,
     _compare_what,
+    _norm_country,
 )
 from .models import (
     BaserowSnapshot,
@@ -46,7 +48,12 @@ class MediaDatabaseReviewService:
         self.provider = provider
         self.engine = engine or MediaDatabaseReconciliationEngine()
 
-    def review_file(self, tracking_id: str, force_refresh: bool = False) -> MediaDatabaseReviewResult:
+    def review_file(
+        self,
+        tracking_id: str,
+        force_refresh: bool = False,
+        auto_enrich: bool = True,
+    ) -> MediaDatabaseReviewResult:
         """Execute Media database review on one registered file."""
         record = self.registry.get_file(tracking_id)
         if not record:
@@ -68,12 +75,20 @@ class MediaDatabaseReviewService:
             review_required=result.review_required,
         )
 
+        # Automatically hand safe completed Tool 2 evidence to Renamer Enrich (R-013)
+        if auto_enrich and (result.renamer_enrichment.confirmed or result.baserow_check_complete):
+            try:
+                self.apply_enrichment_to_renamer(tracking_id)
+            except Exception as e:
+                logger.error(f"Error applying enrichment to renamer for '{tracking_id}': {e}")
+
         return result
 
     def review_batch(
         self,
         tracking_ids: Optional[List[str]] = None,
         force_refresh: bool = False,
+        auto_enrich: bool = True,
     ) -> List[MediaDatabaseReviewResult]:
         """Execute review across multiple files. Batch continues even if individual items fail."""
         if tracking_ids is None:
@@ -101,6 +116,12 @@ class MediaDatabaseReviewService:
                     selected_media_row_id=res.selected_media_row_id,
                     review_required=res.review_required,
                 )
+                # Automatically hand safe completed Tool 2 evidence to Renamer Enrich (R-013)
+                if auto_enrich and (res.renamer_enrichment.confirmed or res.baserow_check_complete):
+                    try:
+                        self.apply_enrichment_to_renamer(tid)
+                    except Exception as e:
+                        logger.error(f"Error applying enrichment to renamer for '{tid}': {e}")
                 results.append(res)
             except Exception as e:
                 logger.error(f"Error reviewing tracking ID '{tid}': {e}")
@@ -114,6 +135,7 @@ class MediaDatabaseReviewService:
         media_row_id: Optional[int] = None,
         notes: str = "",
         reviewer: str = "human",
+        auto_enrich: bool = True,
     ) -> MediaDatabaseReviewResult:
         """Apply a human confirmation decision from review portal or CLI."""
         stored = self.registry.get_media_db_review(tracking_id)
@@ -202,17 +224,13 @@ class MediaDatabaseReviewService:
             result.live_read_complete = True
 
             title_full = live_row.get("title") or ""
-            what_val = None
-            if title_full and local_what:
-                what_val = f"{local_what}-{title_full}"
-            elif title_full:
-                what_val = title_full
-            elif local_what:
-                what_val = local_what
+            what_val = compose_what_val(local_what, title_full)
 
             where_val = None
             if live_row.get("place"):
                 where_val = f"{live_row['place']}-{live_row.get('country') or ''}".strip("-")
+            elif local_place:
+                where_val = f"{local_place}-{local_country or ''}".strip("-")
 
             result.renamer_enrichment = RenamerEnrichment(
                 confirmed=True,
@@ -350,6 +368,13 @@ class MediaDatabaseReviewService:
             previous_values=previous_values,
         )
 
+        # Automatically hand safe completed Tool 2 evidence to Renamer Enrich (R-013)
+        if auto_enrich and (result.renamer_enrichment.confirmed or result.baserow_check_complete):
+            try:
+                self.apply_enrichment_to_renamer(tracking_id)
+            except Exception as e:
+                logger.error(f"Error applying enrichment to renamer for '{tracking_id}': {e}")
+
         return result
 
     def apply_enrichment_to_renamer(
@@ -400,6 +425,7 @@ class MediaDatabaseReviewService:
         media_row_id: Optional[int] = None,
         notes: str = "",
         reviewer: str = "human",
+        auto_enrich: bool = True,
     ) -> MediaDatabaseReviewResult:
         """Convenience method to confirm association with existing media row."""
         return self.apply_human_decision(
@@ -408,6 +434,7 @@ class MediaDatabaseReviewService:
             media_row_id=media_row_id,
             notes=notes,
             reviewer=reviewer,
+            auto_enrich=auto_enrich,
         )
 
     def confirm_new(
@@ -415,6 +442,7 @@ class MediaDatabaseReviewService:
         tracking_id: str,
         notes: str = "",
         reviewer: str = "human",
+        auto_enrich: bool = True,
     ) -> MediaDatabaseReviewResult:
         """Convenience method to confirm item as new media candidate."""
         return self.apply_human_decision(
@@ -422,5 +450,6 @@ class MediaDatabaseReviewService:
             action="confirm_new",
             notes=notes,
             reviewer=reviewer,
+            auto_enrich=auto_enrich,
         )
 

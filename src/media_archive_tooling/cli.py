@@ -143,12 +143,13 @@ def run_media_db_review(args):
     service = MediaDatabaseReviewService(registry=registry, provider=provider)
 
     force_refresh = getattr(args, "refresh_snapshot", False)
+    auto_enrich = getattr(args, "auto_enrich", True)
 
     if getattr(args, "tracking_id", None):
-        result = service.review_file(args.tracking_id, force_refresh=force_refresh)
+        result = service.review_file(args.tracking_id, force_refresh=force_refresh, auto_enrich=auto_enrich)
         results = [result]
     else:
-        results = service.review_batch(force_refresh=force_refresh)
+        results = service.review_batch(force_refresh=force_refresh, auto_enrich=auto_enrich)
 
     if getattr(args, "json", False):
         import json
@@ -169,8 +170,19 @@ def run_media_db_review(args):
                 print(f"  Conflicts: {', '.join(r.conflicts)}")
             if r.renamer_enrichment.confirmed:
                 print(f"  Confirmed Title: {r.renamer_enrichment.title_full}")
+            file_rec = registry.get_file(r.tracking_id)
+            if file_rec and (r.renamer_enrichment.confirmed or r.baserow_check_complete):
+                print(f"  Proposed Filename: {file_rec.get('proposed_filename')}")
     else:
         print(f"Sample evaluation across {len(results)} files completed.")
+        confirmed_matches = [r for r in results if r.decision.value == 'EXISTING_MEDIA_MATCH']
+        if confirmed_matches:
+            print("\n--- Confirmed Existing Matches ---")
+            for cm in confirmed_matches:
+                file_rec = registry.get_file(cm.tracking_id)
+                print(f"[{cm.tracking_id}] Row ID {cm.selected_media_row_id}: {cm.renamer_enrichment.title_full}")
+                if file_rec:
+                    print(f"  Proposed Filename: {file_rec.get('proposed_filename')}")
 
     print("\n--- Evaluation Summary ---")
     print(f"total files: {len(results)}")
@@ -197,6 +209,7 @@ def main():
     media_db_parser.add_argument("--registry-path", help="Custom SQLite registry path")
     media_db_parser.add_argument("--snapshot-path", help="Custom Baserow snapshot JSON path")
     media_db_parser.add_argument("--refresh-snapshot", action="store_true", default=False, help="Force refresh live snapshot from Baserow")
+    media_db_parser.add_argument("--no-enrich", dest="auto_enrich", action="store_false", default=True, help="Do not automatically apply confirmed enrichment to Renamer proposals")
     media_db_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
     media_db_parser.set_defaults(func=run_media_db_review)
 

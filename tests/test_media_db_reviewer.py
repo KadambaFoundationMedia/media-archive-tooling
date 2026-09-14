@@ -2177,4 +2177,311 @@ def test_55_missing_media_table_id_yields_database_unavailable(tmp_path):
     assert "live database search is unavailable" in str(exc_info.value)
 
 
+# ---------------------------------------------------------------------------
+# Test 56: Confirmed match automatically enriches Renamer proposal (R-013)
+# ---------------------------------------------------------------------------
+def test_56_confirmed_match_automatically_enriches_renamer_proposal(tmp_path):
+    """Tool 1 initial proposal -> Tool 2 live confirmed existing row -> automatic Renamer proposal contains title and baserow_check_complete=True."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    # Tool 1 creates initial proposal
+    p = make_parser_result(
+        tracking_id="enr01",
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
+        country="de",
+    )
+    initial_proposal = RenameProposal(
+        tracking_id="enr01",
+        original_path="sample-files/audio/2014-08-04_BG-01-18_Leipzig.mp3",
+        current_filename="2014-08-04_BG-01-18_Leipzig.mp3",
+        proposed_filename="2014-08-04_KKS_BG-01-18_Leipzig-de_ID-enr01.mp3",
+        proposed_path="sample-files/audio/2014-08-04_KKS_BG-01-18_Leipzig-de_ID-enr01.mp3",
+        mode=RenameMode.INITIAL,
+        parser_result=p,
+    )
+    registry.save_proposal(initial_proposal)
+
+    # Baserow has matching row with confirmed title
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 501,
+                "Date": "2014-08-04",
+                "What": "BG-01-18",
+                "Place": "Leipzig",
+                "Country": "Germany",
+                "Title": "Conquering the Mind",
+            }
+        ],
+    )
+    provider = MagicMock()
+    provider.load_snapshot.return_value = snapshot
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    result = service.review_file("enr01")
+
+    assert result.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    assert result.selected_media_row_id == 501
+    assert result.renamer_enrichment.confirmed is True
+    assert result.renamer_enrichment.title_full == "Conquering the Mind"
+
+    # Check updated Tool 1 registry record
+    rec = registry.get_file("enr01")
+    assert rec is not None
+    assert rec["status"] == "enriched"
+    assert rec["proposed_filename"] == "2014-08-04_KKS_BG-01-18-Conquering-the-Mind_Leipzig-de_ID-enr01.mp3"
+    assert rec["what_val"] == "BG-01-18-Conquering-the-Mind"
+    assert rec["parser_result"]["file_metadata"]["baserow_check_complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# Test 57: Unconfirmed states do not alter Tool 1 proposal (R-013)
+# ---------------------------------------------------------------------------
+def test_57_unconfirmed_states_do_not_alter_tool_1_proposal(tmp_path):
+    """Probable, multiple, conflicting, insufficient, and unavailable states do NOT copy candidate metadata into proposed filename."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    cases = [
+        ("prob01", "2014-08-04", "BG-01-18", None, [{"id": 601, "Date": "2014-08-04", "What": "BG-01-18", "Title": "Probable Candidate"}], ReviewDecision.PROBABLE_EXISTING_MEDIA),
+        ("mult01", "2014-08-04", "BG-01-18", "Leipzig", [
+            {"id": 602, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Country": "Germany", "Title": "Candidate One"},
+            {"id": 603, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Country": "Germany", "Title": "Candidate Two"},
+        ], ReviewDecision.MULTIPLE_CANDIDATES),
+        ("conf01", "2014-08-04", "BG-01-18", "Leipzig", [{"id": 604, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Moscow", "Country": "Russia", "Title": "Conflict Candidate"}], ReviewDecision.CONFLICT_WITH_EXISTING),
+        ("insuff01", "2014-08-DD", "Lecture", None, [], ReviewDecision.INSUFFICIENT_EVIDENCE),
+    ]
+
+    for tid, dt, wt, pl, rows, expected_dec in cases:
+        p = make_parser_result(tracking_id=tid, date_val=dt, what_val=wt, place=pl)
+        initial_name = f"initial_{tid}.mp3"
+        registry.save_proposal(RenameProposal(
+            tracking_id=tid, original_path=f"p/{initial_name}", current_filename=initial_name,
+            proposed_filename=initial_name, proposed_path=f"p/{initial_name}", mode=RenameMode.INITIAL, parser_result=p,
+        ))
+
+        snapshot = BaserowSnapshot(
+            snapshot_at="2026-09-14T10:00:00Z",
+            state="LIVE_CURRENT",
+            complete=True,
+            media_rows=rows,
+        )
+        provider = MagicMock()
+        provider.load_snapshot.return_value = snapshot
+
+        service = MediaDatabaseReviewService(registry=registry, provider=provider)
+        res = service.review_file(tid)
+
+        assert res.decision == expected_dec
+        assert res.renamer_enrichment.confirmed is False
+
+        # Proposal in registry must NOT be enriched or modified with candidate titles
+        rec = registry.get_file(tid)
+        assert rec["proposed_filename"] == initial_name
+        assert rec["status"] == "pending"
+        for row in rows:
+            if "Title" in row and row["Title"]:
+                assert row["Title"] not in rec["proposed_filename"]
+                assert row["Title"] not in (rec["what_val"] or "")
+
+
+# ---------------------------------------------------------------------------
+# Test 58: Completed live no-match marks Baserow check complete without invented metadata (R-013)
+# ---------------------------------------------------------------------------
+def test_58_completed_live_no_match_marks_baserow_check_complete_without_invented_metadata(tmp_path):
+    """Completed live no-match marks baserow_check_complete=True and clears _edited suffix without inventing title/location."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    # Initial proposal with edited=True, producing an _edited suffix
+    p = make_parser_result(
+        tracking_id="nomatch01",
+        date_val="2015-02-15",
+        what_val="BG-01-18",
+        place="Leipzig",
+        country="de",
+    )
+    p.file_metadata.edited = True
+    initial_prop = RenameProposal(
+        tracking_id="nomatch01",
+        original_path="audio/file.mp3",
+        current_filename="file.mp3",
+        proposed_filename="2015-02-15_KKS_BG-01-18_Leipzig-de_edited_ID-nomatch01.mp3",
+        proposed_path="audio/2015-02-15_KKS_BG-01-18_Leipzig-de_edited_ID-nomatch01.mp3",
+        mode=RenameMode.INITIAL,
+        parser_result=p,
+    )
+    registry.save_proposal(initial_prop)
+
+    # Empty complete live snapshot
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[],
+    )
+    provider = MagicMock()
+    provider.load_snapshot.return_value = snapshot
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    result = service.review_file("nomatch01")
+
+    assert result.decision == ReviewDecision.NEW_MEDIA_CANDIDATE
+    assert result.baserow_check_complete is True
+    assert result.renamer_enrichment.confirmed is False
+
+    # Check updated Tool 1 registry record
+    rec = registry.get_file("nomatch01")
+    assert rec["status"] == "enriched"
+    # Baserow check complete clears _edited suffix per Tool 1 lifecycle
+    assert rec["proposed_filename"] == "2015-02-15_KKS_BG-01-18_Leipzig-de_ID-nomatch01.mp3"
+    assert "_edited" not in rec["proposed_filename"]
+    # No invented title
+    assert rec["what_val"] == "BG-01-18"
+    assert rec["parser_result"]["file_metadata"]["baserow_check_complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# Test 59: Supported CLI/batch path exercises the bridge (R-013)
+# ---------------------------------------------------------------------------
+def test_59_cli_and_batch_review_exercises_enrichment_bridge(tmp_path):
+    """The supported CLI run_media_db_review command and batch review automatically trigger the enrichment bridge."""
+    from media_archive_tooling.cli import run_media_db_review
+    import argparse
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    # Create 2 proposals: 1 confirmed match, 1 new media candidate
+    p1 = make_parser_result(tracking_id="cli01", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig", country="de")
+    registry.save_proposal(RenameProposal(
+        tracking_id="cli01", original_path="p1", current_filename="f1",
+        proposed_filename="2014-08-04_KKS_BG-01-18_Leipzig-de_ID-cli01.mp3", proposed_path="p1",
+        mode=RenameMode.INITIAL, parser_result=p1,
+    ))
+
+    p2 = make_parser_result(tracking_id="cli02", date_val="2015-02-15", what_val="SB-01-01-01", place="Vrindavan", country="in")
+    registry.save_proposal(RenameProposal(
+        tracking_id="cli02", original_path="p2", current_filename="f2",
+        proposed_filename="2015-02-15_KKS_SB-01-01-01_Vrindavan-in_ID-cli02.mp3", proposed_path="p2",
+        mode=RenameMode.INITIAL, parser_result=p2,
+    ))
+
+    # Mock Baserow provider in CLI execution
+    rows = [
+        {"id": 701, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Country": "Germany", "Title": "CLI Bridge Enriched Title"}
+    ]
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=rows,
+    )
+
+    with patch("media_archive_tooling.media_db_reviewer.baserow_provider.BaserowSnapshotProvider.load_snapshot", return_value=snapshot):
+        args = argparse.Namespace(
+            registry_path=str(reg_db),
+            snapshot_path=None,
+            refresh_snapshot=False,
+            auto_enrich=True,
+            tracking_id=None,
+            json=False,
+        )
+        run_media_db_review(args)
+
+    rec1 = registry.get_file("cli01")
+    assert rec1["status"] == "enriched"
+    assert "CLI-Bridge-Enriched-Title" in rec1["proposed_filename"]
+    assert rec1["parser_result"]["file_metadata"]["baserow_check_complete"] is True
+
+    rec2 = registry.get_file("cli02")
+    assert rec2["status"] == "enriched"
+    assert rec2["parser_result"]["file_metadata"]["baserow_check_complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# Test 60: Rerunning review is idempotent and does not duplicate title (R-013)
+# ---------------------------------------------------------------------------
+def test_60_rerunning_review_is_idempotent_and_does_not_duplicate_title(tmp_path):
+    """Rerunning review/enrichment multiple times is idempotent and never duplicates title or scripture text."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    # 1. Standard scripture + title case
+    p = make_parser_result(tracking_id="idem01", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig", country="de")
+    registry.save_proposal(RenameProposal(
+        tracking_id="idem01", original_path="p", current_filename="f",
+        proposed_filename="2014-08-04_KKS_BG-01-18_Leipzig-de_ID-idem01.mp3", proposed_path="p",
+        mode=RenameMode.INITIAL, parser_result=p,
+    ))
+
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[{"id": 801, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Country": "Germany", "Title": "The Great Armies"}],
+    )
+    provider = MagicMock()
+    provider.load_snapshot.return_value = snapshot
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+
+    # Run 1
+    service.review_file("idem01")
+    rec1 = registry.get_file("idem01")
+    expected_filename = "2014-08-04_KKS_BG-01-18-The-Great-Armies_Leipzig-de_ID-idem01.mp3"
+    assert rec1["proposed_filename"] == expected_filename
+    assert rec1["what_val"] == "BG-01-18-The-Great-Armies"
+
+    # Run 2
+    service.review_file("idem01")
+    rec2 = registry.get_file("idem01")
+    assert rec2["proposed_filename"] == expected_filename
+    assert rec2["what_val"] == "BG-01-18-The-Great-Armies"
+    assert "The-Great-Armies-The-Great-Armies" not in rec2["proposed_filename"]
+
+    # Run 3
+    service.review_file("idem01")
+    rec3 = registry.get_file("idem01")
+    assert rec3["proposed_filename"] == expected_filename
+    assert rec3["what_val"] == "BG-01-18-The-Great-Armies"
+
+    # 2. Long title subject to 128-char budget compaction
+    long_title = "Observations of All Great Kings and Warriors Gathered on the Holy Field of Kuruksetra Before the Great War"
+    p_long = make_parser_result(tracking_id="idem02", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig-very-long-location-name", country="de")
+    registry.save_proposal(RenameProposal(
+        tracking_id="idem02", original_path="p2", current_filename="f2",
+        proposed_filename="2014-08-04_KKS_BG-01-18_Leipzig-very-long-location-name-de_ID-idem02.mp3", proposed_path="p2",
+        mode=RenameMode.INITIAL, parser_result=p_long,
+    ))
+    snapshot_long = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[{"id": 802, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig-very-long-location-name", "Country": "Germany", "Title": long_title}],
+    )
+    provider_long = MagicMock()
+    provider_long.load_snapshot.return_value = snapshot_long
+    service_long = MediaDatabaseReviewService(registry=registry, provider=provider_long)
+
+    # Run 1 with long title
+    service_long.review_file("idem02")
+    rec_long_1 = registry.get_file("idem02")
+    fname_long_1 = rec_long_1["proposed_filename"]
+    assert len(fname_long_1) <= 128
+
+    # Run 2 with long title
+    service_long.review_file("idem02")
+    rec_long_2 = registry.get_file("idem02")
+    assert rec_long_2["proposed_filename"] == fname_long_1
+    assert len(rec_long_2["proposed_filename"]) <= 128
+
+
+
 

@@ -148,6 +148,63 @@ def parse_scripture_reference(val: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def compose_what_val(local_what: Optional[str], title_full: Optional[str]) -> Optional[str]:
+    """Combine local WHAT evidence and database title into an enriched WHAT token idempotently."""
+    if not title_full or not str(title_full).strip():
+        return local_what
+    if not local_what or not str(local_what).strip():
+        return str(title_full).strip()
+
+    clean_title = str(title_full).strip()
+    clean_local = str(local_what).strip()
+
+    norm_title = _norm_token(clean_title)
+    norm_local = _norm_token(clean_local)
+
+    if not norm_title:
+        return clean_local
+    if not norm_local:
+        return clean_title
+
+    # 1. Exact or near match: already identical
+    if norm_local == norm_title:
+        return clean_local
+
+    # 2. If the full title is already contained in local_what (e.g. from previous enrichment pass)
+    if norm_title in norm_local:
+        return clean_local
+
+    # 3. Check if local_what already contains the title or a compacted version of it alongside scripture
+    for regex in (SB_REGEX, BG_REGEX, CC_REGEX):
+        m = regex.search(clean_local)
+        if m:
+            prefix = clean_local[:m.end()].rstrip(" -_")
+            remainder = clean_local[m.end():].lstrip(" -_")
+            norm_rem = _norm_token(remainder)
+            if norm_rem and len(norm_rem) >= 4:
+                if norm_title.startswith(norm_rem) or norm_rem.startswith(norm_title) or norm_rem in norm_title:
+                    return clean_local
+            # If local_what is just the scripture prefix, check if title also has the scripture prefix
+            m_title = regex.search(clean_title)
+            if m_title:
+                rem_title = clean_title[m_title.end():].lstrip(" -_.:")
+                if rem_title:
+                    return f"{prefix}-{rem_title}"
+            break
+
+    # 4. If local_what is generic or not specific (e.g. "Lecture", "Class"), title_full supersedes it
+    if not is_specific_what(clean_local):
+        return clean_title
+
+    # 5. If local_what is already contained in title_full
+    if norm_local in norm_title:
+        return clean_title
+
+    # 6. Standard combination: preserve local_what and append title_full
+    return f"{clean_local}-{clean_title}"
+
+
+
 def _compare_dates(local_date: Optional[str], db_date: Optional[str]) -> Tuple[FieldComparisonState, Optional[str]]:
     """Compare local recording date with Baserow date supporting partial precision."""
     if not local_date and not db_date:
@@ -716,13 +773,7 @@ class MediaDatabaseReconciliationEngine:
             # Prepare confirmed Renamer enrichment
             db_row = matched_cand.normalized_row
             title_full = db_row.get("title") or ""
-            what_val = None
-            if title_full and local_what:
-                what_val = f"{local_what}-{title_full}"
-            elif title_full:
-                what_val = title_full
-            elif local_what:
-                what_val = local_what
+            what_val = compose_what_val(local_what, title_full)
 
             where_val = None
             if db_row.get("place"):
