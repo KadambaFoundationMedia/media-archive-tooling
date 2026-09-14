@@ -1,0 +1,1 @@
+Builder Git sandbox coordination policy is defined in docs/builder-git-sandbox-policy.md. This marker exists only to make the coordination change visible on PR #19; remove in a later cleanup if desired.
