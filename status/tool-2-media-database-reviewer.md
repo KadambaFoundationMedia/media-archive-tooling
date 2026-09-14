@@ -3,159 +3,112 @@
 Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`  
 Authoritative live-data amendment: `docs/tool-2-media-database-reviewer-live-data-amendment.md`  
 Project-wide Baserow policy: `docs/baserow-live-data-policy.md`  
-Project architecture: `docs/project-implementation-architecture.md`  
 Implementation issue: #2  
 Implementation PR: #19  
-Protocol: `docs/implementation-protocol.md`  
-Planner / Builder coordination: `docs/planner-builder-coordination.md`
+Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
-Primary implementation code commit: `d0cd54a`  
-Last implementation update: 2026-09-14  
+Builder handoff head reviewed: `525e8ff176294ba3df35abd6c74326b5c865e9db`  
 Last planning/review update: 2026-09-14
 
-The implementation branch was synchronized with `origin/main` (merge commit `74287dc`). All review findings R-001 through R-010 have been resolved on branch `tool-2-implementation` targeting PR #19.
+GitHub CI run #43 on handoff head `525e8ff...` passed the required `Python 3.12 tests` job with **135 passed, 2 warnings**, helper-script validation, and package build success. CI is therefore healthy. Acceptance is still blocked by semantic findings found during code review.
 
 ## Review checkpoint
 
-Last planning/review checkpoint: required CI review of PR #19 head `bdf5074bc374632a6bdff6d7b91620879d37b1f1`  
-Current implementation HEAD reviewed: `d0cd54a`  
-Fundamental-change review pending: no — test isolation / DI correction.
+The branch is current with `main` (`behind_by=0`) and PR #19 is mergeable. Planning/review inspected the actual provider, service, reconciliation engine, portal dependency-injection change, tests, and CI rather than relying on the Builder summary.
 
-Relevant commits since the previous planning review:
-- `dfd20fe` — `fix(scripts): use --no-write-fetch-head during repo sync`
-- `74287dc` — `Merge remote-tracking branch 'origin/main' into tool-2-implementation`
-- `87270d5` — `feat(media-db-reviewer): implement live Baserow policy and address R-001..R-007`
-- `bdf5074` — `docs(status): mark Tool 2 READY_FOR_REVIEW with R-001..R-009 resolved`
-- `d0cd54a` — `fix(review-portal): support dependency injection for hermetic portal testing (R-010)`
-
-## Planner-authored maintenance / coordination
-
-Before corrections, the Builder must synchronize current `main` into `tool-2-implementation` and preserve all post-Tool-1 shared infrastructure.
-
-Current shared baseline includes Tool 1 maintenance through PR #16 plus the Planner/Builder coordination policy from PR #17.
-
-### Live Baserow coordination — mandatory
-
-The Media database is continuously updated by external collaborators. Read and implement both:
-
-- `docs/baserow-live-data-policy.md`
-- `docs/tool-2-media-database-reviewer-live-data-amendment.md`
-
-The amendment is authoritative wherever it conflicts with the older Tool 2 build-plan cache/snapshot wording.
-
-Current Baserow state must be obtained live for each independent current-state decision. Persisted row copies are audit/history only. Human confirmation revalidates relevant live state. Tool 4 later re-reads immediately before update and re-checks existence immediately before create.
-
-## Finalized scope summary
-
-Tool 2 is the reusable **read-only live Baserow Media lookup/reconciliation service**. It reads `media`, `category_title`, and `travel_schedule`; it does not use `users` for current scope and does not mutate Baserow.
-
-It consumes structured Tool 1 evidence, finds plausible current Media rows, compares database and local evidence, separates confirmed enrichment from candidate-only metadata, and produces structured results for Tool 3, Tool 4, Renamer Enrich, CLI, portal, and future orchestration.
-
-Current database state is always live. Stored values/results are retained only for review history, audit provenance, and stale-state comparison.
+The R-010 portal test-isolation correction is valid: the portal now supports injected Media DB provider/service dependencies and credential-free CI passes. However, deeper live-state semantics remain inconsistent with the authoritative live-data amendment.
 
 ## Active review findings
 
-### R-001 — Live Baserow policy not implemented
+### R-001 — Live-current Baserow policy still not fully implemented
 
-Status: RESOLVED  
-Resolution: Redesigned `BaserowSnapshotProvider` / `BaserowLiveProvider` around live queries; stale local JSON is strictly audit/history and never used as an operational substitute for decisions. When live queries fail, state returns `DATABASE_UNAVAILABLE` with `baserow_check_complete=False`. Added live revalidation on human decisions (`confirm_existing`, `choose_candidate`, `confirm_new`) preventing collaborator race conditions or stale confirmations. Confirmed enrichment carries `baserow_read_at` and `live_read_complete=True`. Added regression tests for race conditions, collaborator deletions, and live provenance.
+Status: **REOPENED — BLOCKING**
 
-### R-002 — Automatic association is driven by numeric score thresholds
+The authoritative amendment requires **every independent Tool 2 database-dependent decision** to query current Baserow and explicitly forbids session-wide snapshot reuse and long-batch full-table reuse.
 
-Status: RESOLVED  
-Resolution: Replaced numeric score threshold (`>= 70.0`) with explicit boolean predicates: Rule 1 (direct identity match via source ID or exact filename), Rule 2 (exact date + matching WHAT + matching WHERE), and Rule 3 (exact date + matching specific scripture WHAT + title/category corroboration). Scores are retained solely for secondary diagnostic ranking and cannot authorize confirmed association. Added negative tests ensuring high-score weak candidates produce `PROBABLE_EXISTING_MEDIA` rather than `EXISTING_MEDIA_MATCH`.
+Current code still violates that rule in two places:
 
-### R-003 — WHERE comparison ignores country contradictions
+- `BaserowSnapshotProvider.load_snapshot()` keeps `_current_snapshot` and returns it on later calls when `force_refresh=False`;
+- `MediaDatabaseReviewService.review_batch()` loads one snapshot once and reuses it for every file in the batch.
 
-Status: RESOLVED  
-Resolution: Implemented country normalization (`_norm_country`) and integrated country comparison into `_compare_places()`. Incompatible countries (e.g. Paris, US vs Paris, FR) are flagged as `FieldComparisonState.CONFLICT`, preventing false WHERE agreement. Added regression tests for same place with differing countries.
+That means a collaborator update made after the first decision can remain invisible to later independent decisions.
 
-### R-004 — Scripture WHAT matching uses unsafe substring equivalence
+Required correction:
 
-Status: RESOLVED  
-Resolution: Implemented `parse_scripture_reference()` providing structured canonical parsing for BG, SB, and CC references. Replaced token substring containment with structural comparison of book, canto, chapter, and verse ranges. Added negative tests ensuring neighboring verses (e.g. `BG-01-01` vs `BG-01-10`) result in `CONFLICT`, while valid verse ranges (`BG-01-01-02` vs `BG-01-01`) agree.
+- remove operational `_current_snapshot` reuse for current decisions;
+- `review_file()` must perform a fresh live read/query for each independent review operation;
+- `review_batch()` must process each file using per-decision live queries/read state rather than one session-wide full-table snapshot;
+- persisted/audit snapshots may remain for history only and must never be current operational input;
+- add regressions proving two sequential reviews see changed Baserow data and a batch does not reuse a stale first-read result.
 
-### R-005 — Partial Tool 1 dates can be misclassified as conflicts
+### R-004 — Scripture comparison is structural but still too permissive for identity
 
-Status: RESOLVED  
-Resolution: Updated `_compare_dates()` to recognize Tool 1 partial dates (`YYYY-MM-DD` with wildcards/placeholders `DD`, `??`, `00`). Compatible partial dates (e.g. `2015-02-DD` vs `2015-02-15`) compare as `AGREES` with partial precision details, avoiding premature conflict flags. Added regression tests for partial dates.
+Status: **REOPENED — HIGH / automatic-association risk**
 
-### R-006 — Travel schedule same-month matching is too broad
+The new parser removed simple string-prefix false matches, but `_compare_what()` currently marks any overlapping verse ranges as `AGREES`. Example: `BG-1-1-3` and `BG-1-3-5` overlap at verse 3 but are not the same specific WHAT. Because Rule 2/Rule 3 treat `AGREES` as exact high-specificity evidence, range overlap can incorrectly authorize `EXISTING_MEDIA_MATCH`.
 
-Status: RESOLVED  
-Resolution: Removed broad same-month matching. Travel schedule corroboration is now strictly bounded to exact date match or bounded interval `start_date <= date <= end_date`. Added regression tests showing same-month different-date rows do not corroborate unless bounded by the travel schedule.
+The local scripture parser also accepts forms that conflict with the Tool 1 canonical grammar, including a dotted extra BG component (`BG 13.8.12`) as though it were a range, and it normalizes descending ranges with `min/max` rather than rejecting them.
 
-### R-007 — Ordinary conflicts are promoted to immediate human review
+Required correction:
 
-Status: RESOLVED  
-Resolution: Implemented progressive conflict routing separating `review_required` from `review_required_now`. Location-only conflicts are routed downstream to Tool 3 (`tool_3_travel_schedule_review`) without triggering immediate human review. Direct-identity contradictions and irreducible multi-field conflicts set `review_required_now=True`. Added regression tests for both progressive downstream routing and immediate human review items.
+- exact automatic-association predicates require exact canonical scripture identity, not merely overlapping verse coverage;
+- range overlap may be retained as supporting/probable context if useful, but must not be the `AGREES` state consumed by Rule 2/Rule 3;
+- reuse Tool 1 canonical scripture parsing/normalization where practical, or enforce the same grammar exactly;
+- reject dotted extra numeric BG components and descending ranges rather than silently normalizing them;
+- add regressions for overlapping-but-different ranges, `BG 13.8.12`, and descending ranges.
 
-### R-008 — Acceptance sample evaluation used stale operational state and cached Baserow data
+### R-011 — Live revalidation conflates database failure with "row absent" and can falsely confirm new media
 
-Status: RESOLVED  
-Resolution: Executed a fresh, clean Tool 1 dry-run scan across the representative 260 files in `sample-files/` into a fresh registry, followed by live read-only Tool 2 evaluation against the production Baserow API (`state=LIVE_CURRENT`, zero database failures). Detailed counts recorded below, and confirmed associations manually verified against live Baserow data.
+Status: **OPEN — BLOCKING / collaborator-race correctness**
 
-### R-009 — Builder handoff / CI protocol
+`fetch_media_row_live()` currently returns `None` for several materially different states: no credentials, HTTP 404, other HTTP failures, and transport exceptions. `apply_human_decision(confirm_existing)` treats `None` as proof that the row was deleted. The portal test added for R-010 now codifies the misleading `no longer exists in Baserow` result for an unconfigured provider.
 
-Status: RESOLVED  
-Resolution: Root-cause defect R-010 addressed. Full test suite (135 tests) verified passing both locally and in credential-absent simulation mimicking GitHub Actions CI. Offline package build verified (`uv build --offline`). Head pushed to PR #19 for CI verification.
+More critically, `search_media_candidates_live()` returns `[]` both for a valid live search with zero matches **and** for no credentials / non-200 response / transport failure. `confirm_new` treats that empty list as a successful live no-match, then sets `database_state="LIVE_CURRENT"`, `live_read_complete=True`, `baserow_check_complete=True`, and finalizes `NEW_MEDIA_CANDIDATE`.
 
-### R-010 — Portal integration test depends on local Baserow configuration
+That directly violates the live-data amendment: database unavailable must remain distinct from valid live no-match, and failure must never produce a confirmed new-item decision.
 
-Status: RESOLVED  
-Resolution: Made `review_portal.app` dependency-injectable by adding `media_db_service` and `media_db_provider` options to `configure_review_context()`, and routing `media_db_action()` through `get_media_db_service()`. Updated `test_31_portal_media_db_endpoints` to inject a fake live provider with mocked HTTP response, ensuring hermetic testing without `.env`. Added `test_40_portal_media_db_action_fails_without_live_provider_in_production` confirming that when `.env` is absent and no provider is injected, the endpoint fails with HTTP 400 (`no longer exists in Baserow`), strictly enforcing live authority in production. Added `test_41_portal_media_db_action_supports_injected_service` proving direct service injection works. All 135 tests pass under credential-absent simulation and offline package build succeeds.
+Required correction:
 
-## Milestones
+- provider current-row and candidate-search APIs must distinguish at least `found`, explicit `not_found`/valid empty result, and `unavailable/failed`;
+- only an explicit live 404 may mean a selected row no longer exists;
+- missing credentials, auth/HTTP failure, timeout, transport error, or incomplete query must produce unavailable/incomplete state and `baserow_check_complete=false`;
+- `confirm_new` must finalize only after a complete successful live search returns no plausible row;
+- update the portal credential-absent test to expect database-unavailable/incomplete semantics, not a deletion claim;
+- add a regression proving `confirm_new` cannot succeed when live search is unavailable.
 
-- [x] Requirements gathered
-- [x] Tool 2 / Tool 3 boundary decided
-- [x] Read-only Baserow boundary decided
-- [x] Required Baserow tables decided
-- [x] Candidate/contradiction/enrichment policy finalized
-- [x] Long-title filename policy finalized
-- [x] Build plan finalized
-- [x] Protected-main / branch / PR / CI workflow established
-- [x] Planner/Builder coordination baseline recorded
-- [x] Project-wide live Baserow policy finalized
-- [x] Tool 2 live-data amendment finalized
-- [x] Implementation branch created
-- [x] Implementation started
-- [x] Initial implementation commit produced
-- [x] PR #19 opened for review
-- [x] R-001 live-current Baserow provider and revalidation corrected
-- [x] R-002 explicit automatic-association predicates corrected
-- [x] R-003 country-aware WHERE comparison corrected
-- [x] R-004 structured scripture comparison corrected
-- [x] R-005 partial-date comparison corrected
-- [x] R-006 travel evidence boundary corrected
-- [x] R-007 progressive conflict routing corrected
-- [x] R-008 fresh 260-file + live Baserow evaluation completed
-- [x] R-009 required-CI handoff protocol satisfied
-- [x] R-010 credential-independent portal integration test corrected
-- [x] Required freshness/race and semantic regression tests passing locally
-- [ ] Required GitHub CI passing on corrected review head
-- [x] Ready for re-review
-- [ ] Accepted and merged to `main`
+## Resolved findings
 
-## Tests/results
+- **R-002** — numeric score no longer authorizes automatic association; explicit predicates are used.
+- **R-003** — country contradictions are considered in WHERE comparison.
+- **R-005** — compatible partial Tool 1 dates no longer become full-date conflicts.
+- **R-006** — travel corroboration no longer uses broad same-month matching.
+- **R-007** — progressive Tool 3 routing is separated from immediate human review.
+- **R-008** — fresh 260-file live Baserow evaluation completed.
+- **R-009** — branch/PR/CI handoff is now healthy; CI run #43 passed.
+- **R-010** — portal tests are dependency-injectable and credential-independent.
 
-Full local test suite passes under Python 3.12:
+## Current verified tests / CI
 
-- **135 passed** (41 Tool 2 tests in `tests/test_media_db_reviewer.py` + 94 existing unit tests);
-- Tested in credential-absent simulation (`load_config` returning empty `AppConfig`, no `.env` credentials) with all 135 tests passing;
-- Tests 40 and 41 added covering credential-absent live provider failure and service dependency injection;
-- `uv build --offline` successfully built source distribution and wheel;
-- All live revalidation, scripture structural matching, country contradiction, and partial date tests verified.
+GitHub Actions run #43 on head `525e8ff176294ba3df35abd6c74326b5c865e9db`:
 
-## Sample/evaluation results
+```text
+Python 3.12 tests: SUCCESS
+pytest: 135 passed, 2 warnings
+helper shell validation: PASS
+uv build: PASS
+```
 
-Fresh evaluation against live read-only Baserow API across the 260 representative `sample-files/`:
+The passing suite does not override the semantic findings above; new regressions are required for R-001, R-004, and R-011.
+
+## Last live sample evaluation
+
+The Builder's fresh live read-only evaluation across the 260 representative `sample-files/` reported:
 
 ```text
 total files: 260
@@ -172,92 +125,14 @@ downstream-to-Tool-3 count: 148
 confirmed title/metadata enrichments: 1
 ```
 
-### Manual verification of confirmed associations
-
-- **File**: `HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3`
-  - **Decision**: `EXISTING_MEDIA_MATCH`
-  - **Selected Baserow Media Row**: `2335`
-  - **Corroborating Rule**: `rule3_date_what_corroboration`
-  - **Verified Baserow Title**: `SB 3.6.6 class`
-  - **Verified Baserow Category**: `Srimad-bhagavatam`
-  - **Verified Place**: `Sweden-se`
-  - **Read Timestamp**: `2026-09-14T08:30:57.018124+00:00`
-  - **Live Provenance**: `live_read_complete=True`
-  - **Renamer Enrichment**: `confirmed=True`, `what_val='SB-3-6-6-SB 3.6.6 class'`, `title_full='SB 3.6.6 class'`, `where_val='Sweden-se'`
-
-## Known defects / limitations
-
-None. All review findings R-001 through R-010 are resolved.
+This evaluation must be rerun after the reopened live-query and scripture-equivalence corrections because those changes can alter decision counts.
 
 ## Open questions / contradictions
 
-None requiring user input.
+None requiring user input. These are implementation-correctness issues under already-finalized policy.
 
 ## Next milestone
 
-Orchestration / Planning re-review of PR #19 against `READY_FOR_REVIEW` handoff and GitHub CI completion.
+Builder resumes Tool 2 on PR #19 and addresses **R-001 (reopened), R-004 (reopened), and R-011**. It must add the required regression tests, rerun the complete suite, rerun the fresh 260-file live read-only evaluation, push the corrected head, and wait for the required GitHub CI to pass before returning `READY_FOR_REVIEW`.
 
-## Progress log
-
-### 2026-09-13 — Build plan finalized
-
-- Tool 2 defined as a reusable read-only Baserow lookup/reconciliation service.
-- `media`, `category_title`, and `travel_schedule` included; `users` excluded.
-- Tool 2 and Tool 3 intentionally kept separate despite overlap.
-- Confirmed candidate metadata may enrich Renamer; probable/conflicting candidate metadata may not leak into confirmed enrichment.
-- Long-title shortening policy finalized.
-
-### 2026-09-13 — Protected-main workflow established
-
-- Tool implementation uses `tool-2-implementation` and a PR to protected `main`.
-- `Python 3.12 tests` is the required GitHub Actions merge check.
-
-### 2026-09-13 — Planner / Builder coordination checkpoint added
-
-- Tool 2 must preserve current shared Tool 1 infrastructure and planner-authored maintenance.
-
-### 2026-09-13 — Initial Tool 2 implementation completed by Builder
-
-- Builder produced the initial provider, reconciliation engine, persistence, Renamer integration, CLI, portal changes, and 31 Tool 2 tests in commit `4e888186710fc0593be3de0f55a5134bba3af248`.
-- Builder added status handoff commit `1c33ae254313a4a3be5681ef2426c9a56e386e98` and marked `READY_FOR_REVIEW`.
-
-### 2026-09-14 — Live Baserow authority policy finalized
-
-- User clarified that Baserow is continuously changed by external collaborators.
-- PR #18 added `docs/baserow-live-data-policy.md` and `docs/tool-2-media-database-reviewer-live-data-amendment.md` to `main`.
-
-### 2026-09-14 — Planning/review first pass
-
-- Confirmed implementation branch was stale relative to `main` and no Tool 2 PR actually existed.
-- Opened PR #19 as the durable implementation review surface.
-- Inspected the actual provider/service/engine/test implementation rather than relying on the Builder summary.
-- Recorded blocking findings R-001 through R-009 and moved status to `CHANGES_REQUESTED`.
-
-### 2026-09-14 — R-001..R-008 corrected and live evaluation completed
-
-- Fixed git fetch helper scripts with `--no-write-fetch-head` (commit `dfd20fe`).
-- Synchronized latest `origin/main` into `tool-2-implementation` (commit `74287dc`).
-- Refactored Baserow access to live per-decision queries with `LIVE_CURRENT` and `DATABASE_UNAVAILABLE` states.
-- Added live revalidation on human actions (`confirm_existing`, `choose_candidate`, `confirm_new`).
-- Replaced score-based confirmation with explicit boolean predicates (Rule 1, Rule 2, Rule 3).
-- Added country-aware WHERE comparison and structural scripture reference matching (BG, SB, CC).
-- Supported Tool 1 partial dates and bounded travel schedule corroboration.
-- Implemented progressive conflict routing separating immediate human review from Tool 3 routing.
-- Added 8 new regression and race condition tests (39 Tool 2 tests, 133 total passed locally).
-- Executed live read-only evaluation across representative 260 sample files against live Baserow.
-
-### 2026-09-14 — Required CI failed after Builder READY_FOR_REVIEW handoff
-
-- GitHub CI run #41 on PR #19 head `bdf5074` failed one portal integration test (`1 failed, 132 passed`).
-- Diagnosed local `.env` leakage into the test path: the portal constructs its live provider from production config, so the Builder's local credentials made the test pass while credential-free CI correctly failed.
-- Reopened R-009 and added R-010. Tool 2 returned to `CHANGES_REQUESTED`; no user policy decision is required.
-
-### 2026-09-14 — R-009 and R-010 resolved; portal test made hermetic
-
-- Added dependency injection for `media_db_service` and `media_db_provider` to `configure_review_context()` in `review_portal/app.py`.
-- Updated `test_31_portal_media_db_endpoints` to inject `media_db_provider` and verify live revalidation without local `.env`.
-- Added `test_40` (production live authority enforcement without provider) and `test_41` (service DI support).
-- Validated complete test suite in credential-absent environment (135/135 passed).
-- Package build verified with `uv build --offline`.
-- Committed implementation as `d0cd54a`.
-- Status updated to `READY_FOR_REVIEW`.
+Do not modify the finalized build plan or live-data amendment to fit the current implementation.
