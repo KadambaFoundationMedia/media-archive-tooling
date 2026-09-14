@@ -53,7 +53,24 @@ The project uses a **local, reusable Python 3.12 application/package** with two 
 
 Project-wide architecture: `docs/project-implementation-architecture.md`
 
+Planner / Builder coordination: `docs/planner-builder-coordination.md`
+
 The implementation uses `uv` for Python environment/dependency management. Tool logic remains callable programmatically for the future orchestrator; CLI and review UI both call the same Python application services. The initial review portal uses FastAPI with server-rendered Jinja2 + HTMX so no Xcode/Swift or Node/React toolchain is required for v1. A packaged desktop shell can be evaluated later without moving archive logic out of Python.
+
+## Baserow live-data authority
+
+The Baserow Media database is continuously updated by external collaborators. Any tool that needs to know the **current** database state must perform a live Baserow read for that decision; persisted row copies are audit/history only and must not be used as an authoritative operational cache.
+
+Project-wide policy: `docs/baserow-live-data-policy.md`
+
+Important consequences include:
+
+- database/network failure is not treated as a valid no-match;
+- cached rows cannot produce a current confirmed Media association or enrichment;
+- Tool 2 revalidates live state when a human confirms a candidate/new-item decision;
+- Tool 3 uses live `travel_schedule` evidence when consulting Baserow;
+- Tool 4 re-reads immediately before update and re-checks existence immediately before create so collaborator changes are not silently overwritten or duplicated;
+- stored Baserow values remain useful for audit provenance, but not as a substitute for a fresh current read.
 
 ## Continuous integration
 
@@ -113,7 +130,7 @@ The review helper uses a **separate per-target review registry** under `.renamer
 
 The dashboard shows original filename, proposed filename, source path, WHEN/WHAT/WHERE and review status. Technical tracking IDs remain part of Tool 1's underlying in-process identity and filename semantics, but the dashboard intentionally hides the ID column and `_ID-xxxxxxxx` token from the **displayed** proposed filename because they are not useful for human review. The dashboard also includes dark mode, sticky table headers and batch row selection.
 
-Selected human-review rows can be **approved** or **deferred** in batches. Batch approval only clears the human-review blocker/status for the selected proposals; it does **not** rename files. Batch editing of metadata and batch filesystem commit are intentionally not offered because those actions require item-specific review or the Renamer's explicit commit safety path.
+Selected rows can be processed with batch **Approve**, **Defer**, **Commit**, and **Approve + commit** actions. Approval accepts the current proposal without changing files; commit performs the filesystem rename through the shared safe commit service and requires explicit confirmation plus resolved review blockers.
 
 To review another directory instead of `sample-files/`:
 
@@ -125,12 +142,18 @@ Press `Ctrl-C` in the terminal to stop the local review portal when finished.
 
 ### Tool 2 — Media Database Reviewer
 
-Status: **FINALIZED BUILD PLAN / NOT_STARTED**
+Status: **FINALIZED BUILD PLAN + LIVE-DATA AMENDMENT / NOT_STARTED**
 
 Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
+
+Authoritative live-data amendment: `docs/tool-2-media-database-reviewer-live-data-amendment.md`
+
+Project-wide Baserow policy: `docs/baserow-live-data-policy.md`
 
 Implementation status: `status/tool-2-media-database-reviewer.md`
 
 Implementation tracking/discussion: GitHub issue #2
 
 Planned implementation branch: `tool-2-implementation`
+
+Tool 2 remains read-only, but every current Media/category/schedule decision is live. Stored Baserow rows/results are retained for audit and review history only. The original plan's stale-cache/session-snapshot fallback wording is superseded by the live-data amendment before implementation begins.
