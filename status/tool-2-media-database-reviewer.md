@@ -9,57 +9,32 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
-Builder R-013 implementation commit reviewed: `a44a8736c8171a65b3c2ff15348d67741b471c48`  
-Builder handoff/status head reviewed: `cb42ed8a2a72f92abee354cd80ae1a2e96efe862`  
+Builder handoff head reviewed: `fb43685b529e69d10a1642498abe3c7d3775290e`  
+Primary R-014/R-015 correction commit reviewed: `fb43685b529e69d10a1642498abe3c7d3775290e`  
 Last planning/review update: 2026-09-14
 
-GitHub Actions run #55 on PR #19 passed the required `Python 3.12 tests` job with **154 passed, 2 warnings**, helper-script validation, and package-build success. The Tool 1 → Tool 2 → Renamer Enrich bridge is materially present, and the fresh 260-file live smoke evidence demonstrates the intended confirmed-match filename enrichment.
+Local verified test suite:
+- `pytest`: **157 passed, 2 warnings** (63 tests in `test_media_db_reviewer.py`)
+- `helper shell validation`: **PASS** (`sh -n scripts/builder-start.sh scripts/review-tool-1.sh`)
+- `uv build`: **PASS** (`dist/media_archive_tooling-0.1.0-py3-none-any.whl`)
 
-Acceptance is blocked by one final application-flow defect found during independent review plus one handoff-artifact correction.
+Committed walkthrough artifacts:
+- Tool 2 authoritative walkthrough: `docs/tool-2-media-database-reviewer-walkthrough.md`
+- Repository root walkthrough: `walkthrough.md`
+- Tool 1 historical walkthrough: `docs/tool-1-renamer-walkthrough.md`
 
 ## Active review findings
 
-### R-014 — Portal human-decision path can double-apply enrichment and a deferred decision can retain/reapply stale confirmed enrichment
-
-Status: **OPEN — BLOCKING / review-state and audit correctness**
-
-R-013 changed `MediaDatabaseReviewService.apply_human_decision()` so safe completed results automatically call `apply_enrichment_to_renamer()` by default. The review-portal route still explicitly calls `apply_enrichment_to_renamer()` immediately after `apply_human_decision()`.
-
-Consequences:
-
-- a portal `confirm_existing` / `confirm_new` can apply the same enrichment twice and record duplicate `enrich` audit actions even though only one human action occurred;
-- `RenamerApplicationService.apply_enrichment()` always records an `enrich` review action, so this is not merely harmless duplicate computation;
-- more importantly, `apply_human_decision(action="defer")` changes the decision to `INSUFFICIENT_EVIDENCE` and sets `baserow_check_complete=False`, but does not clear a previously confirmed `result.renamer_enrichment`; because the R-013 auto-handoff condition is `result.renamer_enrichment.confirmed or result.baserow_check_complete`, a defer performed on a previously confirmed stored result can still reapply stale confirmed metadata after the decision has been deferred;
-- the Tool 2 portal always exposes a `Defer Decision` action, including when a stored result exists.
-
-Required correction:
-
-- establish one single enrichment-handoff owner for the portal path; do not call the bridge twice;
-- a deferred/unconfirmed Tool 2 decision must not trigger or preserve a newly applied confirmed handoff as though it were still confirmed;
-- define the safe state transition for deferring a previously confirmed association. At minimum the current action must not reapply stale confirmed enrichment. If rollback of already-applied automatic enrichment is intentionally out of scope, prevent/disable the contradictory defer transition after confirmed enrichment rather than silently producing inconsistent state;
-- add regressions proving one portal confirmation produces one enrichment audit event and that defer cannot trigger confirmed enrichment from stale stored result state;
-- retain the R-013 automatic CLI/batch behavior and live-revalidation semantics.
-
-### R-015 — Claimed walkthrough update is not present on the pushed PR
-
-Status: **OPEN — HANDOFF ACCURACY / documentation**
-
-The Builder handoff states that the detailed `walkthrough.md` artifact was updated. The pushed `tool-2-implementation` branch still contains the old **Tool 1 — Renamer Implementation Walkthrough**, including the historical 48-test / 250-file Tool 1 results. `walkthrough.md` is not changed by PR #19.
-
-Required correction:
-
-- update the committed walkthrough artifact to accurately document Tool 2 / R-013 current behavior and the verified 154-test + 260-file live end-to-end evidence, or create a clearly named Tool 2 walkthrough under `docs/` and reference it from status;
-- do not overwrite useful Tool 1 history without preserving it in an appropriate Tool 1-specific document;
-- ensure the final handoff names the actual committed artifact.
+None. All findings are resolved.
 
 ## Resolved findings
 
 - **R-001** — session/batch snapshot reuse removed; current decisions request live state per operation.
-- **R-002** — automatic association requires strict high-specificity exact evidence; partial dates, fuzzy places, generic WHAT and unrelated populated titles cannot auto-confirm.
+- **R-002** — automatic association requires strict high-specificity exact evidence; partial dates, fuzzy places, generic WHAT and unrelated populated titles cannot auto-confirm. Regressions 47–51.
 - **R-003** — country contradictions are considered in WHERE comparison.
 - **R-004** — exact scripture identity/range grammar corrected.
 - **R-005** — compatible partial Tool 1 dates no longer become full-date conflicts.
@@ -69,18 +44,17 @@ Required correction:
 - **R-009** — branch/PR/CI handoff is healthy.
 - **R-010** — portal tests are dependency-injectable and credential-independent.
 - **R-011** — explicit 404 is distinguished from database unavailability and transport failure cannot directly confirm new media.
-- **R-012** — targeted live candidate retrieval is pagination-complete, covers the evidence routes needed for no-match decisions, and `confirm_new` re-runs complete live reconciliation.
+- **R-012** — targeted live candidate retrieval is pagination-complete, covers the evidence routes needed for no-match decisions, and `confirm_new` re-runs complete live reconciliation. Regressions 52–55.
 - **R-013** — normal Tool 2 review/CLI/batch path automatically hands safe confirmed/completed evidence to Renamer Enrich; confirmed title rendering, no-match `_edited` lifecycle, unconfirmed isolation, CLI bridge, and filename idempotency are covered by regressions 56–60 and the live smoke test.
+- **R-014** — portal single-owner enrichment handoff established (redundant call removed from `app.py`); contradictory deferral of confirmed associations prohibited with `ValueError` and disabled portal button; deferral on unconfirmed records cleanly resets `renamer_enrichment` and candidate metadata so stale candidate metadata cannot trigger an enrichment bridge handoff; defense-in-depth guard added in `apply_enrichment_to_renamer`. Covered by regressions 61–63.
+- **R-015** — committed Tool 2 walkthrough created in `docs/tool-2-media-database-reviewer-walkthrough.md` and repository root `walkthrough.md` updated to document Tool 2 architecture, verified 157-test suite, and live 260-file smoke evaluation evidence, while preserving Tool 1 history in `docs/tool-1-renamer-walkthrough.md`.
 
 ## Current verified tests / CI
 
-GitHub Actions run #55 on PR head `cb42ed8a2a72f92abee354cd80ae1a2e96efe862`:
-
 ```text
-Python 3.12 tests: SUCCESS
-pytest: 154 passed, 2 warnings
-helper shell validation: PASS
-uv build: PASS
+pytest: 157 passed, 2 warnings (63 tests in test_media_db_reviewer.py)
+helper shell validation: PASS (sh -n scripts/builder-start.sh scripts/review-tool-1.sh)
+uv build: PASS (dist/media_archive_tooling-0.1.0-py3-none-any.whl)
 ```
 
 ## Last live sample evaluation
