@@ -1,3 +1,4 @@
+import inspect
 from datetime import datetime, timezone
 import json
 import logging
@@ -5,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from ..renamer.models import EnrichmentEvidence, ParserResult
 from ..renamer.registry.registry import LocalRegistry
-from .baserow_provider import BaserowSnapshotProvider
+from .baserow_provider import BaserowSnapshotProvider, BaserowUnavailableError
 from .engine import (
     MediaDatabaseReconciliationEngine,
     _compare_dates,
@@ -21,6 +22,14 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _load_snapshot_for_parser_res(provider: Any, parser_res: ParserResult) -> Any:
+    """Helper to query per-decision live state if provider supports parser_result parameter."""
+    try:
+        return provider.load_snapshot(parser_result=parser_res)
+    except TypeError:
+        return provider.load_snapshot()
 
 
 class MediaDatabaseReviewService:
@@ -43,7 +52,7 @@ class MediaDatabaseReviewService:
             raise ValueError(f"Tracking ID '{tracking_id}' not found in registry")
 
         parser_res = ParserResult.model_validate(record["parser_result"])
-        snapshot = self.provider.load_snapshot(force_refresh=force_refresh)
+        snapshot = _load_snapshot_for_parser_res(self.provider, parser_res)
 
         result = self.engine.reconcile(parser_res, snapshot)
 
@@ -72,9 +81,6 @@ class MediaDatabaseReviewService:
         else:
             target_ids = tracking_ids
 
-        # Ensure snapshot loaded once for the whole batch
-        snapshot = self.provider.load_snapshot(force_refresh=force_refresh)
-
         results: List[MediaDatabaseReviewResult] = []
         for tid in target_ids:
             try:
@@ -82,6 +88,8 @@ class MediaDatabaseReviewService:
                 if not record:
                     continue
                 parser_res = ParserResult.model_validate(record["parser_result"])
+                # Per-decision live query - no batch-wide snapshot reuse (R-001)
+                snapshot = _load_snapshot_for_parser_res(self.provider, parser_res)
                 res = self.engine.reconcile(parser_res, snapshot)
                 self.registry.save_media_db_review(
                     tracking_id=tid,
@@ -135,23 +143,24 @@ class MediaDatabaseReviewService:
                     if isinstance(res_row, dict):
                         live_row = res_row
                     elif res_row is None:
-                        # Explicitly not found in live Baserow -> row was deleted
+                        # Explicitly not found (HTTP 404) in live Baserow -> row was deleted
                         raise RuntimeError(f"Media row ID {chosen_id} no longer exists in Baserow")
+                except BaserowUnavailableError as e:
+                    raise RuntimeError(f"Cannot confirm Media row {chosen_id}: live database is unavailable: {e}") from e
                 except RuntimeError:
                     raise
                 except Exception as e:
-                    raise RuntimeError(f"Live Baserow revalidation failed: {e}") from e
+                    raise RuntimeError(f"Cannot confirm Media row {chosen_id}: live database revalidation failed: {e}") from e
 
             if not isinstance(live_row, dict) and hasattr(self.provider, "load_snapshot"):
-                try:
-                    snapshot = self.provider.load_snapshot()
-                    for r in getattr(snapshot, "media_rows", []):
-                        if r.get("id") == chosen_id:
-                            from .baserow_provider import normalize_media_row
-                            live_row = normalize_media_row(r)
-                            break
-                except Exception:
-                    pass
+                snapshot = self.provider.load_snapshot()
+                if getattr(snapshot, "state", None) in ("UNAVAILABLE", "DATABASE_UNAVAILABLE"):
+                    raise RuntimeError(f"Cannot confirm Media row {chosen_id}: live database is unavailable")
+                for r in getattr(snapshot, "media_rows", []):
+                    if isinstance(r, dict) and r.get("id") == chosen_id:
+                        from .baserow_provider import normalize_media_row
+                        live_row = normalize_media_row(r)
+                        break
 
             if not live_row:
                 raise RuntimeError(f"Media row ID {chosen_id} no longer exists in Baserow")
@@ -232,26 +241,34 @@ class MediaDatabaseReviewService:
                     local_date = local_date or (p.when.selected_value if p.when else None)
                     local_what = local_what or (p.what.selected_value if p.what else None)
 
-            if hasattr(self.provider, "search_media_candidates_live"):
+            if not hasattr(self.provider, "search_media_candidates_live"):
+                if hasattr(self.provider, "load_snapshot"):
+                    snapshot = self.provider.load_snapshot()
+                    if getattr(snapshot, "state", None) in ("UNAVAILABLE", "DATABASE_UNAVAILABLE"):
+                        raise RuntimeError("Cannot confirm new media candidate: live database search is unavailable")
+                else:
+                    raise RuntimeError("Cannot confirm new media candidate: provider does not support live candidate search")
+            else:
                 try:
                     fresh_candidates = self.provider.search_media_candidates_live(query_text=local_what or local_date or "")
-                    if isinstance(fresh_candidates, list):
-                        for cand in fresh_candidates:
-                            if isinstance(cand, dict):
-                                c_date = cand.get("date") or cand.get("Date")
-                                c_what = cand.get("what") or cand.get("What")
-                                c_title = cand.get("title") or cand.get("Title")
-                                if (local_date and c_date == local_date) and (
-                                    (local_what and c_what == local_what)
-                                    or (local_what and c_title and local_what in c_title)
-                                ):
-                                    raise RuntimeError(
-                                        f"Cannot confirm new media candidate: live search discovered matching row {cand.get('id')}"
-                                    )
-                except RuntimeError:
-                    raise
+                except BaserowUnavailableError as e:
+                    raise RuntimeError(f"Cannot confirm new media candidate: live database search is unavailable: {e}") from e
                 except Exception as e:
-                    logger.warning(f"Error checking live candidates on confirm_new: {e}")
+                    raise RuntimeError(f"Cannot confirm new media candidate: live database search failed: {e}") from e
+
+                if isinstance(fresh_candidates, list):
+                    for cand in fresh_candidates:
+                        if isinstance(cand, dict):
+                            c_date = cand.get("date") or cand.get("Date")
+                            c_what = cand.get("what") or cand.get("What")
+                            c_title = cand.get("title") or cand.get("Title")
+                            if (local_date and c_date == local_date) and (
+                                (local_what and c_what == local_what)
+                                or (local_what and c_title and local_what in c_title)
+                            ):
+                                raise RuntimeError(
+                                    f"Cannot confirm new media candidate: live search discovered matching row {cand.get('id')}"
+                                )
 
             now_str = datetime.now(timezone.utc).isoformat()
             result.decision = ReviewDecision.NEW_MEDIA_CANDIDATE

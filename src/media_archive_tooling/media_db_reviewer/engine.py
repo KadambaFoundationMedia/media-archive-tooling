@@ -7,6 +7,7 @@ from rapidfuzz import fuzz
 
 from ..common.ascii_latin import to_ascii_latin
 from ..renamer.models import ParserResult, ResolutionState
+from ..renamer.parser.what import SB_REGEX, BG_REGEX, CC_REGEX
 from .models import (
     BaserowSnapshot,
     FieldComparison,
@@ -65,37 +66,47 @@ def _norm_country(country: Optional[str]) -> Optional[str]:
 def parse_scripture_reference(val: Optional[str]) -> Optional[Dict[str, Any]]:
     """Parse canonical scripture reference (BG, SB, CC, etc.) into structured components.
 
+    Enforces Tool 1 canonical grammar:
+    - BG: chapter.verse or chapter.verse-end (e.g. BG 1.1 or BG 1.1-3, BG-01-18)
+    - SB: canto.chapter.verse or canto.chapter.verse-end (e.g. SB 1.1.2 or SB 1.1.2-4, SB-01-01-02)
+    - CC: lila.chapter.verse or lila.chapter.verse-end (e.g. CC Adi 1.1 or CC Adi 1.1-3)
+
+    Rejects dotted extra numeric components (e.g. BG 13.8.12) and descending ranges (e.g. BG 1.12-8).
     Returns dict with book, canto, chapter, v_start, v_end, or None if not recognized.
     """
     if not val:
         return None
     clean = val.strip()
 
-    # BG: BG-01-01, BG 1.1, BG-1-1-2
-    bg_m = re.match(r"^(?:BG|Bhagavad[\s\-_]*Gita)[\s\-_]+(\d+)[\s\-_.:]+(\d+)(?:[\s\-_.:]+(\d+))?", clean, re.IGNORECASE)
-    if bg_m:
-        ch = int(bg_m.group(1))
-        v1 = int(bg_m.group(2))
-        v2 = int(bg_m.group(3)) if bg_m.group(3) else v1
-        return {"book": "BG", "canto": None, "chapter": ch, "v_start": min(v1, v2), "v_end": max(v1, v2)}
-
     # SB: SB-01-01-01, SB 1.1.1, SB-01-01-01-02
-    sb_m = re.match(r"^(?:SB|Srimad[\s\-_]*Bhagavatam)[\s\-_]+(\d+)[\s\-_.:]+(\d+)[\s\-_.:]+(\d+)(?:[\s\-_.:]+(\d+))?", clean, re.IGNORECASE)
+    sb_m = SB_REGEX.search(clean)
     if sb_m:
-        ca = int(sb_m.group(1))
-        ch = int(sb_m.group(2))
-        v1 = int(sb_m.group(3))
-        v2 = int(sb_m.group(4)) if sb_m.group(4) else v1
-        return {"book": "SB", "canto": ca, "chapter": ch, "v_start": min(v1, v2), "v_end": max(v1, v2)}
+        canto, chapter, v1, v2 = sb_m.groups()
+        iv1 = int(v1)
+        iv2 = int(v2) if v2 else iv1
+        if v2 and int(v2) < int(v1):
+            return None  # Descending range is invalid
+        return {"book": "SB", "canto": int(canto), "chapter": int(chapter), "v_start": iv1, "v_end": iv2}
+
+    # BG: BG-01-01, BG 1.1, BG-1-1-2
+    bg_m = BG_REGEX.search(clean)
+    if bg_m:
+        chapter, v1, v2 = bg_m.groups()
+        iv1 = int(v1)
+        iv2 = int(v2) if v2 else iv1
+        if v2 and int(v2) < int(v1):
+            return None  # Descending range is invalid
+        return {"book": "BG", "canto": None, "chapter": int(chapter), "v_start": iv1, "v_end": iv2}
 
     # CC: CC-Adi-01-01, CC-01-01-01
-    cc_m = re.match(r"^(?:CC|Caitanya[\s\-_]*Caritamrta)[\s\-_]+([A-Za-z]+|\d+)[\s\-_.:]+(\d+)[\s\-_.:]+(\d+)(?:[\s\-_.:]+(\d+))?", clean, re.IGNORECASE)
+    cc_m = CC_REGEX.search(clean)
     if cc_m:
-        part = cc_m.group(1).capitalize()
-        ch = int(cc_m.group(2))
-        v1 = int(cc_m.group(3))
-        v2 = int(cc_m.group(4)) if cc_m.group(4) else v1
-        return {"book": "CC", "canto": part, "chapter": ch, "v_start": min(v1, v2), "v_end": max(v1, v2)}
+        lila, chapter, v1, v2 = cc_m.groups()
+        iv1 = int(v1)
+        iv2 = int(v2) if v2 else iv1
+        if v2 and int(v2) < int(v1):
+            return None  # Descending range is invalid
+        return {"book": "CC", "canto": lila.capitalize() if lila else None, "chapter": int(chapter), "v_start": iv1, "v_end": iv2}
 
     return None
 
@@ -215,12 +226,14 @@ def _compare_what(
 
         lv1, lv2 = local_scrip["v_start"], local_scrip["v_end"]
         dv1, dv2 = db_scrip["v_start"], db_scrip["v_end"]
+        if lv1 == dv1 and lv2 == dv2:
+            return FieldComparisonState.AGREES, None
         if max(lv1, dv1) <= min(lv2, dv2):
-            if lv1 == dv1 and lv2 == dv2:
-                return FieldComparisonState.AGREES, None
-            return FieldComparisonState.AGREES, f"Scripture verse range overlap: {lv1}-{lv2} and {dv1}-{dv2}"
-        else:
-            return FieldComparisonState.CONFLICT, f"Scripture verse conflict: '{local_what}' vs '{db_what or db_title}'"
+            return (
+                FieldComparisonState.CONFLICT,
+                f"Scripture range mismatch: partial verse overlap ({lv1}-{lv2} vs {dv1}-{dv2}) does not establish exact identity",
+            )
+        return FieldComparisonState.CONFLICT, f"Scripture verse conflict: '{local_what}' vs '{db_what or db_title}'"
 
     if local_scrip and not db_scrip:
         if db_what:
@@ -362,6 +375,9 @@ class MediaDatabaseReconciliationEngine:
                     reasons.append(f"WHAT match '{local_what}'")
                     score += 35.0
                     what_match = True
+                elif what_detail and "partial verse overlap" in what_detail:
+                    reasons.append(what_detail)
+                    score += 15.0
 
             # D. Location match
             loc_match = False

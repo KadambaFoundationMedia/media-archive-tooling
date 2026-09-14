@@ -148,6 +148,11 @@ def normalize_travel_schedule_row(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+class BaserowUnavailableError(RuntimeError):
+    """Raised when Baserow is unreachable, unconfigured, or returns an HTTP/transport error."""
+    pass
+
+
 class BaserowSnapshotProvider:
     """Read-only live query provider managing live fetching, schema normalization, and audit persistence."""
 
@@ -168,32 +173,32 @@ class BaserowSnapshotProvider:
         self.travel_schedule_table_id = travel_schedule_table_id
         self.snapshot_path = snapshot_path or Path(".renamer/baserow_snapshot.json")
         self._injected_snapshot = initial_snapshot
-        self._current_snapshot: Optional[BaserowSnapshot] = None
 
-    def load_snapshot(self, force_refresh: bool = False) -> BaserowSnapshot:
+    def load_snapshot(
+        self,
+        force_refresh: bool = False,
+        parser_result: Optional[Any] = None,
+    ) -> BaserowSnapshot:
         """Obtain current Baserow state for decision-making.
 
         In accordance with the Live Baserow Policy, decisions must be made from
         successful live queries. Stale cached data is never used as an operational substitute.
+        No snapshot is cached across independent decisions.
         """
         if self._injected_snapshot is not None:
             return self._injected_snapshot
 
-        if not force_refresh and self._current_snapshot is not None:
-            return self._current_snapshot
-
         # Query live Baserow if credentials exist
         if self.api_token and (self.media_table_id or self.category_table_id):
             try:
-                live_snapshot = self._fetch_live_snapshot()
+                live_snapshot = self._fetch_live_snapshot(parser_result=parser_result)
                 self._save_audit_snapshot(live_snapshot)
-                self._current_snapshot = live_snapshot
                 return live_snapshot
             except Exception as e:
                 logger.warning(f"Live Baserow query failed: {e}. Live authority disallows stale cache fallback.")
 
         # Live query unavailable or no token: return DATABASE_UNAVAILABLE
-        unavailable_snapshot = BaserowSnapshot(
+        return BaserowSnapshot(
             snapshot_at=datetime.now(timezone.utc).isoformat(),
             state="DATABASE_UNAVAILABLE",
             complete=False,
@@ -201,8 +206,6 @@ class BaserowSnapshotProvider:
             category_title_rows=[],
             travel_schedule_rows=[],
         )
-        self._current_snapshot = unavailable_snapshot
-        return unavailable_snapshot
 
     def fetch_media_row_live(self, row_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a single Media row directly from live Baserow for revalidation."""
@@ -213,7 +216,7 @@ class BaserowSnapshotProvider:
             return None
 
         if not (self.api_token and self.media_table_id):
-            return None
+            raise BaserowUnavailableError("Baserow credentials not configured; live database is unavailable")
 
         headers = {"Authorization": f"Token {self.api_token}"}
         url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/{row_id}/?user_field_names=true"
@@ -225,11 +228,11 @@ class BaserowSnapshotProvider:
                 elif resp.status_code == 404:
                     return None
                 else:
-                    logger.warning(f"Baserow row {row_id} fetch failed: HTTP {resp.status_code}")
-                    return None
+                    raise BaserowUnavailableError(f"Baserow row {row_id} fetch failed: HTTP {resp.status_code}")
+        except BaserowUnavailableError:
+            raise
         except Exception as e:
-            logger.warning(f"Error fetching live Baserow row {row_id}: {e}")
-            return None
+            raise BaserowUnavailableError(f"Error fetching live Baserow row {row_id}: {e}") from e
 
     def search_media_candidates_live(self, query_text: Optional[str] = None) -> List[Dict[str, Any]]:
         """Perform a targeted live search for media candidates."""
@@ -250,7 +253,7 @@ class BaserowSnapshotProvider:
             return results
 
         if not (self.api_token and self.media_table_id):
-            return []
+            raise BaserowUnavailableError("Baserow credentials not configured; live database search is unavailable")
 
         headers = {"Authorization": f"Token {self.api_token}"}
         url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100"
@@ -263,10 +266,66 @@ class BaserowSnapshotProvider:
                 resp = client.get(url, headers=headers)
                 if resp.status_code == 200:
                     return [normalize_media_row(r) for r in resp.json().get("results", [])]
-                return []
+                raise BaserowUnavailableError(f"Baserow candidate search failed: HTTP {resp.status_code}")
+        except BaserowUnavailableError:
+            raise
         except Exception as e:
-            logger.warning(f"Error querying live candidates: {e}")
+            raise BaserowUnavailableError(f"Error querying live candidates: {e}") from e
+
+    def _fetch_targeted_media_rows(
+        self,
+        client: httpx.Client,
+        parser_result: Optional[Any],
+    ) -> List[Dict[str, Any]]:
+        """Query live Baserow Media table targeted to incoming evidence instead of full table download."""
+        if not self.media_table_id:
             return []
+        if not parser_result:
+            return self._fetch_table_rows(client, self.media_table_id)
+
+        queries: List[str] = []
+        # 1. Source ID
+        sid = getattr(getattr(parser_result, "file_metadata", None), "source_sequence_id", None)
+        if sid:
+            queries.append(str(sid))
+
+        # 2. Date
+        dt = getattr(getattr(parser_result, "when", None), "selected_value", None)
+        if dt and str(dt) != "UNRESOLVED":
+            clean_dt = str(dt).replace("/", "-").strip()
+            if not clean_dt.endswith("DD"):
+                queries.append(clean_dt)
+
+        # 3. WHAT
+        what = getattr(getattr(parser_result, "what", None), "selected_value", None)
+        if what and str(what) != "UNRESOLVED":
+            queries.append(str(what))
+
+        # 4. Filename
+        orig_fn = getattr(getattr(parser_result, "identity", None), "original_filename", None)
+        if orig_fn:
+            base_fn = Path(orig_fn).stem
+            if base_fn and len(base_fn) >= 4:
+                queries.append(base_fn)
+
+        headers = {"Authorization": f"Token {self.api_token}"}
+        row_dict: Dict[int, Dict[str, Any]] = {}
+        import urllib.parse
+
+        for q in queries:
+            if not q or len(str(q).strip()) < 3:
+                continue
+            url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100&search={urllib.parse.quote(str(q).strip())}"
+            resp = client.get(url, headers=headers)
+            if resp.status_code == 200:
+                for r in resp.json().get("results", []):
+                    rid = r.get("id")
+                    if rid and rid not in row_dict:
+                        row_dict[rid] = r
+            else:
+                raise RuntimeError(f"Baserow targeted query for '{q}' failed: HTTP {resp.status_code}")
+
+        return list(row_dict.values())
 
     def _fetch_table_rows(self, client: httpx.Client, table_id: str) -> List[Dict[str, Any]]:
         """Paginate through all rows in a Baserow table."""
@@ -284,8 +343,8 @@ class BaserowSnapshotProvider:
 
         return rows
 
-    def _fetch_live_snapshot(self) -> BaserowSnapshot:
-        """Fetch complete live tables from Baserow API."""
+    def _fetch_live_snapshot(self, parser_result: Optional[Any] = None) -> BaserowSnapshot:
+        """Fetch live tables from Baserow API, targeted to parser_result if provided."""
         now_str = datetime.now(timezone.utc).isoformat()
         media_rows: List[Dict[str, Any]] = []
         cat_rows: List[Dict[str, Any]] = []
@@ -293,7 +352,10 @@ class BaserowSnapshotProvider:
 
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             if self.media_table_id:
-                media_rows = self._fetch_table_rows(client, self.media_table_id)
+                if parser_result is not None:
+                    media_rows = self._fetch_targeted_media_rows(client, parser_result)
+                else:
+                    media_rows = self._fetch_table_rows(client, self.media_table_id)
             if self.category_table_id:
                 cat_rows = self._fetch_table_rows(client, self.category_table_id)
             if self.travel_schedule_table_id:

@@ -1363,7 +1363,7 @@ def test_35_structural_scripture_reference_matching():
     what_comp = res1.candidates[0].field_comparisons.get("what")
     assert what_comp.state == FieldComparisonState.CONFLICT
 
-    # Multi-verse range test: BG-01-01-02 vs BG-01-01
+    # Multi-verse range test: BG-01-01-02 vs BG-01-01 (partial overlap does NOT establish identity)
     p2 = make_parser_result(date_val="2014-08-04", what_val="BG-01-01-02", place="Leipzig")
     c2 = {
         "id": 32,
@@ -1380,7 +1380,9 @@ def test_35_structural_scripture_reference_matching():
     )
     res2 = engine.reconcile(p2, snap2)
     cand2 = res2.candidates[0]
-    assert cand2.field_comparisons["what"].state == FieldComparisonState.AGREES
+    assert cand2.field_comparisons["what"].state == FieldComparisonState.CONFLICT
+    assert "partial verse overlap" in (cand2.field_comparisons["what"].details or "")
+    assert res2.decision != ReviewDecision.EXISTING_MEDIA_MATCH
 
 
 # ---------------------------------------------------------------------------
@@ -1582,7 +1584,7 @@ def test_40_portal_media_db_action_fails_without_live_provider_in_production(tmp
             },
         )
         assert resp.status_code == 400
-        assert "no longer exists in Baserow" in resp.json().get("detail", "")
+        assert "live database is unavailable" in resp.json().get("detail", "")
 
 
 # ---------------------------------------------------------------------------
@@ -1636,5 +1638,234 @@ def test_41_portal_media_db_action_supports_injected_service(tmp_path):
         reviewer="review_portal",
     )
     mock_service.apply_enrichment_to_renamer.assert_called_once_with("servinj01")
+
+
+# ---------------------------------------------------------------------------
+# Test 42: Sequential reviews see live Baserow updates (R-001)
+# ---------------------------------------------------------------------------
+def test_42_sequential_reviews_see_live_baserow_updates(tmp_path):
+    """Proves two sequential reviews query live Baserow afresh without cached snapshot reuse."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    parser_res = make_parser_result(
+        tracking_id="seq01",
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
+    )
+    registry.save_proposal(RenameProposal(
+        tracking_id="seq01",
+        original_path="p1",
+        current_filename="f1",
+        proposed_filename="f1",
+        proposed_path="p1",
+        mode=RenameMode.INITIAL,
+        parser_result=parser_res,
+    ))
+
+    # Dynamic provider simulating collaborator update between decisions
+    snap1 = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[],
+    )
+    snap2 = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:05:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 901,
+                "Date": "2014-08-04",
+                "What": "BG-01-18",
+                "Place": "Leipzig",
+                "Title": "Live Added Title",
+            }
+        ],
+    )
+
+    call_count = 0
+
+    def dynamic_load_snapshot(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return snap1 if call_count == 1 else snap2
+
+    provider = MagicMock()
+    provider.load_snapshot.side_effect = dynamic_load_snapshot
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+
+    # First review: sees empty table
+    r1 = service.review_file("seq01")
+    assert r1.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert r1.selected_media_row_id is None
+
+    # Second review: sees collaborator update immediately
+    r2 = service.review_file("seq01")
+    assert r2.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    assert r2.selected_media_row_id == 901
+    assert r2.renamer_enrichment.title_full == "Live Added Title"
+    assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 43: Batch review uses per-decision live query (R-001)
+# ---------------------------------------------------------------------------
+def test_43_batch_review_uses_per_decision_live_query(tmp_path):
+    """Proves batch review performs per-decision queries and does not reuse a batch-wide snapshot."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p1 = make_parser_result(tracking_id="b01", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig")
+    p2 = make_parser_result(tracking_id="b02", date_val="2015-05-10", what_val="SB-01-01-01", place="London")
+    registry.save_proposal(RenameProposal(
+        tracking_id="b01", original_path="p1", current_filename="f1", proposed_filename="f1", proposed_path="p1", mode=RenameMode.INITIAL, parser_result=p1
+    ))
+    registry.save_proposal(RenameProposal(
+        tracking_id="b02", original_path="p2", current_filename="f2", proposed_filename="f2", proposed_path="p2", mode=RenameMode.INITIAL, parser_result=p2
+    ))
+
+    queries_received = []
+
+    def mock_load_snapshot(parser_result=None, force_refresh=False):
+        queries_received.append(parser_result)
+        tid = getattr(getattr(parser_result, "identity", None), "tracking_id", "")
+        if tid == "b01":
+            return BaserowSnapshot(
+                snapshot_at="2026-09-14T10:00:00Z",
+                state="LIVE_CURRENT",
+                complete=True,
+                media_rows=[{"id": 101, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Title": "Title 101"}],
+            )
+        else:
+            return BaserowSnapshot(
+                snapshot_at="2026-09-14T10:01:00Z",
+                state="LIVE_CURRENT",
+                complete=True,
+                media_rows=[{"id": 202, "Date": "2015-05-10", "What": "SB-01-01-01", "Place": "London", "Title": "Title 202"}],
+            )
+
+    provider = MagicMock()
+    provider.load_snapshot.side_effect = mock_load_snapshot
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    results = service.review_batch(["b01", "b02"])
+
+    assert len(results) == 2
+    assert len(queries_received) == 2
+    assert results[0].selected_media_row_id == 101
+    assert results[1].selected_media_row_id == 202
+
+
+# ---------------------------------------------------------------------------
+# Test 44: Scripture overlapping ranges conflict and grammar enforced (R-004)
+# ---------------------------------------------------------------------------
+def test_44_scripture_overlapping_ranges_conflict_and_grammar_enforced():
+    """Proves scripture parser rejects malformed/descending ranges and range overlap conflicts."""
+    from media_archive_tooling.media_db_reviewer.engine import parse_scripture_reference, _compare_what
+
+    # 1. Grammar enforcement: malformed extra components and descending ranges rejected
+    assert parse_scripture_reference("BG 13.8.12") is None
+    assert parse_scripture_reference("BG 1.12-8") is None
+    assert parse_scripture_reference("SB 1.2.10-5") is None
+    assert parse_scripture_reference("CC Adi 1.15-10") is None
+
+    # Valid scripture parsing
+    bg1 = parse_scripture_reference("BG 1.1-3")
+    bg2 = parse_scripture_reference("BG 1.3-5")
+    assert bg1 == {"book": "BG", "canto": None, "chapter": 1, "v_start": 1, "v_end": 3}
+    assert bg2 == {"book": "BG", "canto": None, "chapter": 1, "v_start": 3, "v_end": 5}
+
+    # 2. Overlapping ranges without exact identity must CONFLICT
+    state, detail = _compare_what("BG 1.1-3", None, "BG 1.3-5", "BG 1.3-5", None)
+    assert state == FieldComparisonState.CONFLICT
+    assert "partial verse overlap" in (detail or "")
+
+    sb_st, sb_det = _compare_what("SB 1.1.1-3", None, "SB 1.1.2-4", "SB 1.1.2-4", None)
+    assert sb_st == FieldComparisonState.CONFLICT
+    assert "partial verse overlap" in (sb_det or "")
+
+    # Exact identity AGREES
+    eq_st, eq_det = _compare_what("BG 1.1-3", None, "BG 1.1-3", "BG 1.1-3", None)
+    assert eq_st == FieldComparisonState.AGREES
+    assert eq_det is None
+
+    # 3. Engine reconciliation: overlapping range must not auto-confirm
+    engine = MediaDatabaseReconciliationEngine()
+    p = make_parser_result(date_val="2014-08-04", what_val="BG-01-01-03", place="Leipzig")
+    cand = {"id": 88, "Date": "2014-08-04", "What": "BG 1.3-5", "Place": "Leipzig", "Title": "Lecture"}
+    snap = BaserowSnapshot(snapshot_at="2026-09-14T00:00:00Z", state="LIVE_CURRENT", complete=True, media_rows=[cand])
+    res = engine.reconcile(p, snap)
+    assert res.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert res.candidates[0].field_comparisons["what"].state == FieldComparisonState.CONFLICT
+
+
+# ---------------------------------------------------------------------------
+# Test 45: confirm_new fails when live search is unavailable (R-011)
+# ---------------------------------------------------------------------------
+def test_45_confirm_new_fails_when_live_search_unavailable(tmp_path):
+    """Proves confirm_new raises RuntimeError and cannot finalize when live search is unavailable."""
+    from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider, BaserowUnavailableError
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p = make_parser_result(tracking_id="newunavail01", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig")
+    registry.save_proposal(RenameProposal(
+        tracking_id="newunavail01", original_path="p", current_filename="f", proposed_filename="f", proposed_path="p", mode=RenameMode.INITIAL, parser_result=p
+    ))
+
+    # Provider with no credentials
+    provider = BaserowSnapshotProvider(api_token=None, media_table_id=None)
+
+    # Directly check provider method
+    with pytest.raises(BaserowUnavailableError):
+        provider.search_media_candidates_live("BG-01-18")
+
+    # Service confirm_new must fail and refuse to confirm
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    with pytest.raises(RuntimeError) as exc_info:
+        service.apply_human_decision("newunavail01", action="confirm_new", reviewer="human_editor")
+
+    assert "live database search is unavailable" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Test 46: Explicit 404 vs database unavailable distinction (R-011)
+# ---------------------------------------------------------------------------
+def test_46_explicit_404_vs_database_unavailable_distinction(tmp_path):
+    """Proves explicit 404 reports row absence while transport/HTTP 500 reports database unavailable."""
+    from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p = make_parser_result(tracking_id="dist01", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig")
+    registry.save_proposal(RenameProposal(
+        tracking_id="dist01", original_path="p", current_filename="f", proposed_filename="f", proposed_path="p", mode=RenameMode.INITIAL, parser_result=p
+    ))
+
+    provider = BaserowSnapshotProvider(api_token="valid_token", media_table_id="123")
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+
+    # Case 1: Explicit 404 -> Row no longer exists
+    mock_resp_404 = MagicMock()
+    mock_resp_404.status_code = 404
+    with patch("httpx.Client.get", return_value=mock_resp_404):
+        assert provider.fetch_media_row_live(999) is None
+        with pytest.raises(RuntimeError) as exc404:
+            service.apply_human_decision("dist01", action="confirm_existing", media_row_id=999)
+        assert "no longer exists in Baserow" in str(exc404.value)
+
+    # Case 2: HTTP 500 error -> Live database is unavailable
+    mock_resp_500 = MagicMock()
+    mock_resp_500.status_code = 500
+    with patch("httpx.Client.get", return_value=mock_resp_500):
+        with pytest.raises(RuntimeError) as exc500:
+            service.apply_human_decision("dist01", action="confirm_existing", media_row_id=999)
+        assert "live database is unavailable" in str(exc500.value)
 
 
