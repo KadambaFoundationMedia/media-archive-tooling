@@ -9,27 +9,38 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `ACCEPTED`
 
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
-Builder handoff head reviewed: `fb43685b529e69d10a1642498abe3c7d3775290e`  
-Primary R-014/R-015 correction commit reviewed: `fb43685b529e69d10a1642498abe3c7d3775290e`  
-Last planning/review update: 2026-09-14
+Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`  
+Builder handoff/status head independently reviewed: `305b2e1d22ccbf04625b4b0b4d50db1500bc0e2e`  
+Planning acceptance recorded: 2026-09-14
 
-Local verified test suite:
-- `pytest`: **157 passed, 2 warnings** (63 tests in `test_media_db_reviewer.py`)
-- `helper shell validation`: **PASS** (`sh -n scripts/builder-start.sh scripts/review-tool-1.sh`)
-- `uv build`: **PASS** (`dist/media_archive_tooling-0.1.0-py3-none-any.whl`)
+GitHub Actions run #57 on the reviewed PR head passed the required `Python 3.12 tests` job with **157 passed, 2 warnings**, helper-script validation, and package-build success.
 
 Committed walkthrough artifacts:
 - Tool 2 authoritative walkthrough: `docs/tool-2-media-database-reviewer-walkthrough.md`
 - Repository root walkthrough: `walkthrough.md`
 - Tool 1 historical walkthrough: `docs/tool-1-renamer-walkthrough.md`
 
-## Active review findings
+## Acceptance decision
 
-None. All findings are resolved.
+Tool 2 is accepted after independent review of the actual PR branch, correction commits, regression tests, live-data semantics, Tool 1 integration behavior, fresh 260-file live/dry-run evidence, and required GitHub CI.
+
+Acceptance specifically verifies that:
+
+- current Baserow state is consulted live for operational decisions; persisted rows remain audit/history only;
+- automatic association requires explicit high-specificity evidence rather than a numeric score threshold;
+- database failure cannot become a valid no-match/new-media decision;
+- current-row human confirmation and new-media confirmation are live-revalidated;
+- confirmed Tool 2 metadata automatically flows into Tool 1 Renamer Enrich through the supported service/CLI path;
+- probable, multiple, conflicting, insufficient, and unavailable candidate metadata does not leak into filenames;
+- completed live no-match may mark `baserow_check_complete=True` without inventing metadata;
+- the Tool 1 ↔ Tool 2 enrichment path is idempotent;
+- the review portal has a single enrichment-handoff owner and does not duplicate enrichment audit actions;
+- contradictory defer-after-confirmed transitions are rejected, while unconfirmed defer state is cleared safely;
+- Tool 2 remains read-only to Baserow; Tool 4 remains the writer.
 
 ## Resolved findings
 
@@ -46,20 +57,23 @@ None. All findings are resolved.
 - **R-011** — explicit 404 is distinguished from database unavailability and transport failure cannot directly confirm new media.
 - **R-012** — targeted live candidate retrieval is pagination-complete, covers the evidence routes needed for no-match decisions, and `confirm_new` re-runs complete live reconciliation. Regressions 52–55.
 - **R-013** — normal Tool 2 review/CLI/batch path automatically hands safe confirmed/completed evidence to Renamer Enrich; confirmed title rendering, no-match `_edited` lifecycle, unconfirmed isolation, CLI bridge, and filename idempotency are covered by regressions 56–60 and the live smoke test.
-- **R-014** — portal single-owner enrichment handoff established (redundant call removed from `app.py`); contradictory deferral of confirmed associations prohibited with `ValueError` and disabled portal button; deferral on unconfirmed records cleanly resets `renamer_enrichment` and candidate metadata so stale candidate metadata cannot trigger an enrichment bridge handoff; defense-in-depth guard added in `apply_enrichment_to_renamer`. Covered by regressions 61–63.
-- **R-015** — committed Tool 2 walkthrough created in `docs/tool-2-media-database-reviewer-walkthrough.md` and repository root `walkthrough.md` updated to document Tool 2 architecture, verified 157-test suite, and live 260-file smoke evaluation evidence, while preserving Tool 1 history in `docs/tool-1-renamer-walkthrough.md`.
+- **R-014** — portal single-owner enrichment handoff established; contradictory deferral of confirmed associations is prohibited; deferral on unconfirmed records resets `renamer_enrichment`/selection state; defense-in-depth prevents deferred or unavailable records from being enriched. Regressions 61–63.
+- **R-015** — committed Tool 2 walkthrough added and root walkthrough updated while preserving Tool 1 history.
 
-## Current verified tests / CI
+## Final verified tests / CI
+
+GitHub Actions run #57:
 
 ```text
-pytest: 157 passed, 2 warnings (63 tests in test_media_db_reviewer.py)
-helper shell validation: PASS (sh -n scripts/builder-start.sh scripts/review-tool-1.sh)
-uv build: PASS (dist/media_archive_tooling-0.1.0-py3-none-any.whl)
+Python 3.12 tests: SUCCESS
+pytest: 157 passed, 2 warnings
+helper shell validation: PASS
+uv build: PASS
 ```
 
-## Last live sample evaluation
+## Final live sample evaluation
 
-Fresh live read-only evaluation across all 260 representative `sample-files/` against live Baserow database:
+Fresh live read-only evaluation across all 260 representative `sample-files/` against live Baserow:
 
 ```text
 total files: 260
@@ -76,7 +90,7 @@ downstream-to-Tool-3 count: 133
 confirmed title/metadata enrichments: 1
 ```
 
-### Confirmed Match End-to-End Enrichment Evidence
+### Confirmed Tool 1 → Tool 2 → Renamer Enrich evidence
 
 - Tracking ID: `f7903be1`
 - Current filename: `HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3`
@@ -89,10 +103,8 @@ confirmed title/metadata enrichments: 1
 
 ## Open questions / contradictions
 
-None requiring user input. R-014 and R-015 are implementation/handoff corrections.
+None.
 
 ## Next milestone
 
-Builder addresses R-014 and R-015 on PR #19, adds the focused portal-state regressions, pushes the corrected head, and waits for required GitHub CI success before returning `READY_FOR_REVIEW`.
-
-Do not merge PR #19 or start Tool 3 implementation until these final corrections are independently verified.
+Merge accepted PR #19 into protected `main`, close implementation issue #2 as completed, then proceed to Tool 3 planning/implementation when its definition is ready.
