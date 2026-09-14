@@ -423,5 +423,24 @@ class BaserowSnapshotProvider:
             return None
 
 
+    def fetch_all_travel_schedule_rows(self) -> List[Dict[str, Any]]:
+        """Fetch all rows from travel_schedule table with complete pagination.
+
+        Raises BaserowUnavailableError if table ID is unconfigured or if API fails.
+        """
+        if not self.travel_schedule_table_id:
+            raise BaserowUnavailableError("travel_schedule_table_id is not configured")
+        if not self.api_url or not self.api_token:
+            raise BaserowUnavailableError("Baserow API credentials (url or token) are missing")
+
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                return self._fetch_table_rows(client, self.travel_schedule_table_id)
+        except BaserowUnavailableError:
+            raise
+        except Exception as e:
+            raise BaserowUnavailableError(f"Failed to fetch travel schedule rows: {e}") from e
+
+
 # Alias for explicit live-naming
 BaserowLiveProvider = BaserowSnapshotProvider

@@ -1,0 +1,281 @@
+{
+  "total_reviewed": 260,
+  "downstream_from_t2": 0,
+  "counts": {
+    "CORROBORATED": 36,
+    "PROVISIONAL_ENRICHMENT": 44,
+    "MULTIPLE_SCHEDULE_CANDIDATES": 2,
+    "SCHEDULE_CONFLICT": 67,
+    "NO_SCHEDULE_SUPPORT": 54,
+    "INSUFFICIENT_EVIDENCE": 57,
+    "REFERENCE_UNAVAILABLE": 0
+  },
+  "when_enrichments": 19,
+  "where_enrichments": 25,
+  "overwritten_high_authority": 0,
+  "enriched_examples": [
+    {
+      "tracking_id": "02192d1b",
+      "before": "2015-07-10_KKS_SB-1-2-19-Serbia-summer-camp_ID-02192d1b.mp4",
+      "after": "2015-07-10_KKS_SB-1-2-19-Serbia-summer-camp_Serbian-Summer-Camp-rs_ID-02192d1b.mp4",
+      "when_val": null,
+      "where_val": "Serbian-Summer-Camp-rs",
+      "when_state": "strong",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "2f2bbf8a",
+      "before": "2012-01-07_KKS_SB-3-24-45-Leipzig_ID-2f2bbf8a.mp3",
+      "after": "2012-01-07_KKS_SB-3-24-45-Leipzig_Radhadesh-be_ID-2f2bbf8a.mp3",
+      "when_val": null,
+      "where_val": "Radhadesh-be",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "e54b1ac9",
+      "before": "2012-01-15_KKS_BG-6-46-Koln_ID-e54b1ac9.mp3",
+      "after": "2012-01-15_KKS_BG-6-46-Koln_Radhadesh-be_ID-e54b1ac9.mp3",
+      "when_val": null,
+      "where_val": "Radhadesh-be",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "598b631b",
+      "before": "2012-01-14_KKS_BG-9-6-Berlin_ID-598b631b.mp3",
+      "after": "2012-01-14_KKS_BG-9-6-Berlin_Radhadesh-be_ID-598b631b.mp3",
+      "when_val": null,
+      "where_val": "Radhadesh-be",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "18e552c8",
+      "before": "2012-01-13_KKS_SB-4-24-65-Berlin_ID-18e552c8.mp3",
+      "after": "2012-01-13_KKS_SB-4-24-65-Berlin_Radhadesh-be_ID-18e552c8.mp3",
+      "when_val": null,
+      "where_val": "Radhadesh-be",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "8f1b1945",
+      "before": "2012-07-13_KKS_CC-Antya-1-101-Serbia-Summercamp_ID-8f1b1945.mp3",
+      "after": "2012-07-13_KKS_CC-Antya-1-101-Serbia-Summercamp_Fruska-Goranga-rs_ID-8f1b1945.mp3",
+      "when_val": null,
+      "where_val": "Fruska-Goranga-rs",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "c79683a9",
+      "before": "2012-07-10_KKS_SB-6-1-15-Serbia-Summercamp_ID-c79683a9.mp3",
+      "after": "2012-07-10_KKS_SB-6-1-15-Serbia-Summercamp_Villa-Vrindavan-it_ID-c79683a9.mp3",
+      "when_val": null,
+      "where_val": "Villa-Vrindavan-it",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "739d6038",
+      "before": "2012-07-12_KKS_SB-1-1-3-Serbia-Summercamp_ID-739d6038.mp3",
+      "after": "2012-07-12_KKS_SB-1-1-3-Serbia-Summercamp_Fruska-Goranga-rs_ID-739d6038.mp3",
+      "when_val": null,
+      "where_val": "Fruska-Goranga-rs",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "3f59d5f5",
+      "before": "2012-07-17_KKS_SB-4-12-24-Prague_ID-3f59d5f5.mp3",
+      "after": "2012-07-17_KKS_SB-4-12-24-Prague_Czech-and-Slovakia-cz_ID-3f59d5f5.mp3",
+      "when_val": null,
+      "where_val": "Czech-and-Slovakia-cz",
+      "when_state": "exact",
+      "where_state": "provisional"
+    },
+    {
+      "tracking_id": "73510839",
+      "before": "2012-07-18_KKS_SB-3-27-22-Leipzig_ID-73510839.mp3",
+      "after": "2012-07-18_KKS_SB-3-27-22-Leipzig_Czech-and-Slovakia-cz_ID-73510839.mp3",
+      "when_val": null,
+      "where_val": "Czech-and-Slovakia-cz",
+      "when_state": "exact",
+      "where_state": "provisional"
+    }
+  ],
+  "category_examples": {
+    "CORROBORATED": [
+      {
+        "tracking_id": "7e1b65b4",
+        "filename": "Prague-Oct-2003-20260810T132808Z-1-001.zip",
+        "notes": [
+          "Schedule range corroborates existing partial date 2003-10-DD"
+        ],
+        "conflicts": [],
+        "candidates_count": 1
+      },
+      {
+        "tracking_id": "1ac45a3a",
+        "filename": "A024 03-10-26 SB 9.23.32 Praha.mp3",
+        "notes": [
+          "Schedule corroborates recording date 2003-10-26 and location Praha"
+        ],
+        "conflicts": [],
+        "candidates_count": 1
+      },
+      {
+        "tracking_id": "959c6356",
+        "filename": "A021 03-10-24 BG 4.38 Praha.mp3",
+        "notes": [
+          "Schedule corroborates recording date 2003-10-24 and location Praha"
+        ],
+        "conflicts": [],
+        "candidates_count": 1
+      }
+    ],
+    "SCHEDULE_CONFLICT": [
+      {
+        "tracking_id": "33f9c85b",
+        "filename": "A022 03-10-25 SB 4.9.11 Farma KD.mp3",
+        "notes": [
+          "Schedule conflict on 2003-10-25: planned Prague-cz vs local Krsna-Dvur"
+        ],
+        "conflicts": [
+          "Schedule on 2003-10-25 records speaker in Prague-cz, not Krsna-Dvur"
+        ],
+        "candidates_count": 1
+      },
+      {
+        "tracking_id": "ba363b11",
+        "filename": "A025 03-10-26 Govardhana lekce Pruhon.mp3",
+        "notes": [
+          "Schedule conflict on 2003-10-26: planned Prague-cz vs local Pruhonice"
+        ],
+        "conflicts": [
+          "Schedule on 2003-10-26 records speaker in Prague-cz, not Pruhonice"
+        ],
+        "candidates_count": 1
+      },
+      {
+        "tracking_id": "9e5482da",
+        "filename": "A026 03-10-26 Govardhana slideshow Pruhon.mp3",
+        "notes": [
+          "Schedule conflict on 2003-10-26: planned Prague-cz vs local Pruhonice"
+        ],
+        "conflicts": [
+          "Schedule on 2003-10-26 records speaker in Prague-cz, not Pruhonice"
+        ],
+        "candidates_count": 1
+      }
+    ],
+    "MULTIPLE_SCHEDULE_CANDIDATES": [
+      {
+        "tracking_id": "a16d92b3",
+        "filename": "R09_0004.MP3",
+        "notes": [
+          "Multiple distinct schedule visits (3) found for Radhadesh"
+        ],
+        "conflicts": [],
+        "candidates_count": 3
+      },
+      {
+        "tracking_id": "11aeecdc",
+        "filename": "R09_0002.MP3",
+        "notes": [
+          "Multiple distinct schedule visits (3) found for Radhadesh"
+        ],
+        "conflicts": [],
+        "candidates_count": 3
+      }
+    ],
+    "NO_SCHEDULE_SUPPORT": [
+      {
+        "tracking_id": "7e482fd9",
+        "filename": "2020-03-30_KKS_Reading-from-Kirtaniyah-sada-harih_livestream.mp4",
+        "notes": [
+          "No schedule entry found for date 2020-03-30"
+        ],
+        "conflicts": [],
+        "candidates_count": 0
+      },
+      {
+        "tracking_id": "3a65cf16",
+        "filename": "Anti-test.zip",
+        "notes": [
+          "No schedule entry found for place Thonon-les-Bains"
+        ],
+        "conflicts": [],
+        "candidates_count": 0
+      },
+      {
+        "tracking_id": "0a153c76",
+        "filename": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
+        "notes": [
+          "No schedule entry found for date 2011-08-20"
+        ],
+        "conflicts": [],
+        "candidates_count": 0
+      }
+    ],
+    "PROVISIONAL_ENRICHMENT": [
+      {
+        "tracking_id": "02192d1b",
+        "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
+        "notes": [
+          "Unique location Serbian-Summer-Camp-rs on 2015-07-10 authorizes provisional WHERE"
+        ],
+        "conflicts": [],
+        "candidates_count": 1
+      },
+      {
+        "tracking_id": "2f2bbf8a",
+        "filename": "2012-01-07_KKS_SB-3-24-45_Leipzig_de.mp3",
+        "notes": [
+          "Unique location Radhadesh-be on 2012-01-07 authorizes provisional WHERE"
+        ],
+        "conflicts": [],
+        "candidates_count": 1
+      },
+      {
+        "tracking_id": "e54b1ac9",
+        "filename": "2012-01-15_KKS_BG-6-46_Koln_de.mp3",
+        "notes": [
+          "Unique location Radhadesh-be on 2012-01-15 authorizes provisional WHERE"
+        ],
+        "conflicts": [],
+        "candidates_count": 1
+      }
+    ],
+    "INSUFFICIENT_EVIDENCE": [
+      {
+        "tracking_id": "59340821",
+        "filename": "2012-01-XX_KKS-Kirtan-10_de.mp3",
+        "notes": [
+          "Partial date without location is insufficient to constrain schedule"
+        ],
+        "conflicts": [],
+        "candidates_count": 0
+      },
+      {
+        "tracking_id": "b01efa4f",
+        "filename": "2012-01-XX_KKS-Kirtan-02_de.mp3",
+        "notes": [
+          "Partial date without location is insufficient to constrain schedule"
+        ],
+        "conflicts": [],
+        "candidates_count": 0
+      },
+      {
+        "tracking_id": "dab41a97",
+        "filename": "2012-01-XX_KKS-Kirtan-08_de.mp3",
+        "notes": [
+          "Partial date without location is insufficient to constrain schedule"
+        ],
+        "conflicts": [],
+        "candidates_count": 0
+      }
+    ]
+  }
+}

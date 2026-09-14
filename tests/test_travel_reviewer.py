@@ -1,0 +1,1077 @@
+"""Comprehensive tests for Tool 3 — Travel Schedule Reviewer.
+
+Implements all 40 required tests specified in Section 35 of docs/tool-3-travel-schedule-reviewer-build-plan.md.
+"""
+from datetime import date
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+import pytest
+from fastapi.testclient import TestClient
+
+from media_archive_tooling.cli import main as cli_main
+from media_archive_tooling.media_db_reviewer.baserow_provider import (
+    BaserowSnapshotProvider,
+    BaserowUnavailableError,
+)
+from media_archive_tooling.media_db_reviewer.models import (
+    MediaCandidate,
+    MediaDatabaseReviewResult,
+    RenamerEnrichment,
+    ReviewDecision,
+)
+from media_archive_tooling.renamer.models import (
+    EnrichmentEvidence,
+    Evidence,
+    Identity,
+    Context,
+    ParserResult,
+    RenameMode,
+    RenameProposal,
+    ResolutionState,
+    WhenResult,
+    WhatResult,
+    WhereResult,
+)
+from media_archive_tooling.renamer.registry.registry import LocalRegistry
+from media_archive_tooling.renamer.service import RenamerApplicationService
+from media_archive_tooling.review_portal.app import app, configure_review_context
+from media_archive_tooling.travel_reviewer.engine import (
+    TravelScheduleEngine,
+    TravelScheduleIndex,
+    group_candidates_semantically,
+    parse_iso_date,
+)
+from media_archive_tooling.travel_reviewer.models import (
+    NormalizedTravelRow,
+    TravelRenamerEnrichment,
+    TravelReviewDecision,
+    TravelReviewResult,
+    TravelScheduleManifest,
+)
+from media_archive_tooling.travel_reviewer.reference_store import (
+    TravelReferenceStore,
+    compute_canonical_sha256,
+    normalize_to_travel_row,
+)
+from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
+
+
+# --- Fixtures and Helpers ---
+
+def make_raw_schedule_row(
+    row_id: int,
+    start_date: str,
+    end_date: str = "",
+    place: str = "",
+    country: str = "",
+    text: str = "",
+):
+    return {
+        "id": row_id,
+        "Start Date": start_date,
+        "End Date": end_date,
+        "Place": place,
+        "Country": country,
+        "Schedule text": text,
+    }
+
+
+class FakeBaserowProvider:
+    def __init__(self, rows=None, travel_schedule_table_id="12345", fail=False):
+        self.rows = rows if rows is not None else []
+        self.travel_schedule_table_id = travel_schedule_table_id
+        self.fail = fail
+        self.fetch_count = 0
+
+    def fetch_all_travel_schedule_rows(self):
+        if self.fail:
+            raise BaserowUnavailableError("Baserow API connection failed")
+        self.fetch_count += 1
+        return self.rows
+
+
+def create_sample_parser_result(
+    tracking_id: str = "a1b2c3d4",
+    filename: str = "2019-09-10_KKS_Lecture_Berlin-de_ID-a1b2c3d4.mp3",
+    when_val: str = "2019-09-10",
+    when_state: ResolutionState = ResolutionState.EXACT,
+    when_precision: str = "day",
+    place: Optional[str] = "Berlin",
+    country: Optional[str] = "Germany",
+    country_iso2: Optional[str] = "de",
+    where_state: ResolutionState = ResolutionState.EXACT,
+    what_val: str = "Lecture",
+    parent_folder: str = "",
+) -> ParserResult:
+    return ParserResult(
+        identity=Identity(
+            tracking_id=tracking_id,
+            original_filename=filename,
+            original_path=f"/media/{filename}",
+            current_filename=filename,
+            extension=".mp3",
+        ),
+        context=Context(parent_folder=parent_folder),
+        when=WhenResult(
+            selected_value=when_val,
+            precision=when_precision,
+            state=when_state,
+            evidence=[Evidence(source="filename", raw_value=when_val)],
+        ),
+        who="KKS",
+        what=WhatResult(
+            selected_value=what_val,
+            state=ResolutionState.EXACT,
+        ),
+        where=WhereResult(
+            place_location=place,
+            country=country,
+            country_iso2=country_iso2,
+            state=where_state,
+            evidence=[Evidence(source="filename", raw_value=f"{place}-{country_iso2}")],
+        ),
+    )
+
+
+def register_file(registry: LocalRegistry, parser_res: ParserResult) -> str:
+    tid = parser_res.identity.tracking_id
+    prop = RenameProposal(
+        tracking_id=tid,
+        original_path=parser_res.identity.original_path,
+        current_filename=parser_res.identity.current_filename,
+        proposed_filename=parser_res.identity.current_filename,
+        proposed_path=parser_res.identity.original_path,
+        mode=RenameMode.INITIAL,
+        parser_result=parser_res,
+        needs_review=False,
+        review_reasons=[],
+    )
+    registry.save_proposal(prop)
+    return tid
+
+
+# --- 40 Required Tests ---
+
+def test_01_complete_static_reference_bootstrap_with_pagination(tmp_path):
+    """1. complete static reference bootstrap through Tool 2/shared provider with pagination."""
+    # Simulate 150 rows returned across pages by provider
+    raw_rows = [
+        make_raw_schedule_row(i, "2019-09-10", place=f"City{i}", country="Germany")
+        for i in range(1, 151)
+    ]
+    fake_provider = FakeBaserowProvider(rows=raw_rows, travel_schedule_table_id="777")
+    ref_file = tmp_path / "reference" / "travel_schedule.json"
+    store = TravelReferenceStore(reference_path=ref_file, provider=fake_provider)
+
+    manifest = store.ensure_reference(force_bootstrap=True)
+    assert fake_provider.fetch_count == 1
+    assert manifest.complete is True
+    assert manifest.row_count == 150
+    assert len(manifest.normalized_rows) == 150
+    assert manifest.source_table_id == "777"
+    assert len(manifest.canonical_sha256) == 64
+    assert ref_file.exists()
+
+
+def test_02_verified_local_reference_reused_with_zero_network_calls(tmp_path):
+    """2. verified local reference is reused with zero network calls on normal rerun."""
+    raw_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
+    fake_provider = FakeBaserowProvider(rows=raw_rows)
+    ref_file = tmp_path / "travel_schedule.json"
+    store = TravelReferenceStore(reference_path=ref_file, provider=fake_provider)
+
+    # Initial bootstrap
+    store.ensure_reference(force_bootstrap=True)
+    assert fake_provider.fetch_count == 1
+
+    # Second call should load from disk with zero network calls
+    manifest2 = store.ensure_reference(force_bootstrap=False)
+    assert fake_provider.fetch_count == 1
+    assert manifest2.row_count == 1
+
+
+def test_03_deterministic_reference_checksum_and_row_count():
+    """3. deterministic reference checksum and row count."""
+    row1 = normalize_to_travel_row(make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany"))
+    row2 = normalize_to_travel_row(make_raw_schedule_row(2, "2019-09-12", place="Leipzig", country="Germany"))
+
+    # Checksum computed with rows in order 1, 2 vs order 2, 1
+    sha_a = compute_canonical_sha256([row1, row2])
+    sha_b = compute_canonical_sha256([row2, row1])
+    assert sha_a == sha_b
+
+
+def test_04_corrupted_local_reference_rejected(tmp_path):
+    """4. corrupted local reference is rejected."""
+    ref_file = tmp_path / "travel_schedule.json"
+    raw_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=raw_rows))
+    store.ensure_reference(force_bootstrap=True)
+
+    # Tamper with file
+    with open(ref_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data["normalized_rows"][0]["place"] = "TamperedPlace"
+    with open(ref_file, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    assert store.load_reference() is None
+
+
+def test_05_corrupt_or_missing_reference_rebootstrapped(tmp_path):
+    """5. corrupt/missing reference can be re-bootstrapped when provider is available."""
+    ref_file = tmp_path / "travel_schedule.json"
+    raw_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
+    provider = FakeBaserowProvider(rows=raw_rows)
+    store = TravelReferenceStore(reference_path=ref_file, provider=provider)
+
+    # Write corrupt file
+    ref_file.write_text("{corrupt json", encoding="utf-8")
+    assert store.load_reference() is None
+
+    # ensure_reference re-bootstraps
+    manifest = store.ensure_reference(force_bootstrap=False)
+    assert manifest is not None
+    assert manifest.row_count == 1
+    assert provider.fetch_count == 1
+
+
+def test_06_corrupt_or_missing_reference_unavailable_provider(tmp_path):
+    """6. corrupt/missing reference + unavailable provider -> REFERENCE_UNAVAILABLE."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "missing_ref.json"
+    provider = FakeBaserowProvider(fail=True)
+    store = TravelReferenceStore(reference_path=ref_file, provider=provider)
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result()
+    register_file(reg, p_res)
+
+    res = service.review_file(p_res.identity.tracking_id)
+    assert res.decision == TravelReviewDecision.REFERENCE_UNAVAILABLE
+    assert "unavailable" in res.diagnostic_notes[0].lower()
+
+
+def test_07_explicit_remote_verify_unexpected_change(tmp_path):
+    """7. explicit remote verify with different canonical checksum surfaces unexpected reference change and does not silently replace local reference."""
+    ref_file = tmp_path / "travel_schedule.json"
+    initial_rows = [make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany")]
+    provider = FakeBaserowProvider(rows=initial_rows)
+    store = TravelReferenceStore(reference_path=ref_file, provider=provider)
+    manifest = store.ensure_reference(force_bootstrap=True)
+    orig_sha = manifest.canonical_sha256
+
+    # Remote table now has different rows
+    provider.rows = [
+        make_raw_schedule_row(1, "2019-09-10", place="Berlin", country="Germany"),
+        make_raw_schedule_row(2, "2019-09-15", place="Munich", country="Germany"),
+    ]
+
+    check = store.verify_remote_reference()
+    assert check["matches"] is False
+    assert check["unexpected_change"] is True
+    assert check["local_sha256"] == orig_sha
+    assert check["remote_sha256"] != orig_sha
+
+    # Verify local file was NOT silently overwritten
+    reloaded = store.load_reference()
+    assert reloaded.canonical_sha256 == orig_sha
+    assert reloaded.row_count == 1
+
+
+def test_08_exact_known_date_place_corroborated(tmp_path):
+    """8. exact known date + known place schedule match -> CORROBORATED, no field overwrite."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(10, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(when_val="2019-09-10", place="Berlin", country_iso2="de")
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.CORROBORATED
+    assert 10 in res.selected_schedule_row_ids
+    assert res.provisional_enrichment is None
+
+    # Proposal remains unchanged
+    stored = reg.get_file(tid)
+    assert stored["when_val"] == "2019-09-10"
+    assert stored["where_val"] == "Berlin-de"
+
+
+def test_09_known_date_place_vs_different_scheduled_place_conflict(tmp_path):
+    """9. known date/place vs different scheduled place -> SCHEDULE_CONFLICT, local values unchanged."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(11, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(when_val="2019-09-10", place="Leipzig", country_iso2="de")
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert len(res.conflicts) > 0
+    assert "Berlin" in res.conflicts[0]
+
+    # Local value preserved
+    stored = reg.get_file(tid)
+    assert "Leipzig" in stored["where_val"]
+
+
+def test_10_meaningful_query_no_schedule_row_no_support(tmp_path):
+    """10. meaningful query with no schedule row -> NO_SCHEDULE_SUPPORT, not conflict."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(12, "2019-09-20", place="Munich", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(when_val="2019-09-10", place="Berlin", country_iso2="de")
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.NO_SCHEDULE_SUPPORT
+    assert len(res.conflicts) == 0
+
+
+def test_11_known_location_single_day_visit_provisional_when(tmp_path):
+    """11. known location + exactly one single-day visit -> provisional full-date enrichment."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(20, "2015-08-12", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        when_precision="none",
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment is not None
+    assert res.provisional_enrichment.when_val == "2015-08-12"
+    assert res.provisional_enrichment.when_state == ResolutionState.PROVISIONAL
+
+    # In registry, proposal updated and when.state remains PROVISIONAL
+    stored = reg.get_file(tid)
+    assert stored["when_val"] == "2015-08-12"
+    p_dict = stored["parser_result"]
+    assert p_dict["when"]["state"] == "provisional"
+
+
+def test_12_known_location_multiday_in_one_month_partial_date(tmp_path):
+    """12. known location + one multi-day range in one month -> only month-precision partial date, not arbitrary day."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(21, "2015-08-10", end_date="2015-08-15", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment.when_val == "2015-08-DD"
+    assert res.provisional_enrichment.when_state == ResolutionState.PROVISIONAL
+
+
+def test_13_known_location_range_spanning_months_year_precision(tmp_path):
+    """13. known location + one range spanning months in one year -> only year precision."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(22, "2015-08-25", end_date="2015-09-05", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment.when_val == "2015-MM-DD"
+
+
+def test_14_range_spanning_years_no_invented_selected_date(tmp_path):
+    """14. date range spanning years -> no invented selected date."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(23, "2015-12-28", end_date="2016-01-05", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.MULTIPLE_SCHEDULE_CANDIDATES
+    assert res.provisional_enrichment is None
+
+
+def test_15_same_location_multiple_distinct_visits(tmp_path):
+    """15. same location with multiple distinct visits -> MULTIPLE_SCHEDULE_CANDIDATES."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [
+        make_raw_schedule_row(30, "2015-08-12", place="Berlin", country="Germany"),
+        make_raw_schedule_row(31, "2017-06-01", place="Berlin", country="Germany"),
+    ]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.MULTIPLE_SCHEDULE_CANDIDATES
+    assert res.provisional_enrichment is None
+    assert len(res.candidates) == 2
+
+
+def test_16_exact_date_single_structured_place_provisional_where(tmp_path):
+    """16. exact known date + exactly one structured place -> provisional WHERE enrichment."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(40, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="2019-09-10",
+        when_state=ResolutionState.EXACT,
+        place=None,
+        country=None,
+        country_iso2=None,
+        where_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment is not None
+    assert res.provisional_enrichment.where_val == "Berlin-de"
+    assert res.provisional_enrichment.where_state == ResolutionState.PROVISIONAL
+
+    # Stored state preserves PROVISIONAL
+    stored = reg.get_file(tid)
+    assert stored["where_val"] == "Berlin-de"
+    assert stored["parser_result"]["where"]["state"] == "provisional"
+
+
+def test_17_exact_date_multiple_different_places(tmp_path):
+    """17. exact known date + multiple materially different places -> multiple candidates, no selected WHERE."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [
+        make_raw_schedule_row(41, "2019-09-10", place="Berlin", country="Germany"),
+        make_raw_schedule_row(42, "2019-09-10", place="Leipzig", country="Germany"),
+    ]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="2019-09-10",
+        place=None,
+        country_iso2=None,
+        where_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.MULTIPLE_SCHEDULE_CANDIDATES
+    assert res.provisional_enrichment is None
+
+
+def test_18_known_place_missing_country_supplies_country(tmp_path):
+    """18. known place missing country + unique schedule match can provisionally fill country without replacing place."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(43, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Local has place Berlin, but no country
+    p_res = create_sample_parser_result(
+        when_val="2019-09-10",
+        place="Berlin",
+        country=None,
+        country_iso2=None,
+        where_state=ResolutionState.STRONG,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment.where_val == "Berlin-de"
+
+    stored = reg.get_file(tid)
+    assert stored["where_val"] == "Berlin-de"
+
+
+def test_19_country_contradiction_prevents_location_selection(tmp_path):
+    """19. country contradiction prevents automatic location selection."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(44, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Local has country IT (Italy)
+    p_res = create_sample_parser_result(
+        when_val="2019-09-10",
+        place=None,
+        country="Italy",
+        country_iso2="it",
+        where_state=ResolutionState.PROVISIONAL,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert res.provisional_enrichment is None
+    assert "contradicts" in res.conflicts[0]
+
+
+def test_20_partial_local_date_structurally_constrains_candidates(tmp_path):
+    """20. partial local date structurally constrains schedule candidates."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [
+        make_raw_schedule_row(50, "2014-05-10", place="Berlin", country="Germany"),
+        make_raw_schedule_row(51, "2015-08-12", place="Berlin", country="Germany"),
+        make_raw_schedule_row(52, "2016-09-01", place="Berlin", country="Germany"),
+    ]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Local partial date: 2015-08-DD
+    p_res = create_sample_parser_result(
+        when_val="2015-08-DD",
+        when_state=ResolutionState.STRONG,
+        when_precision="month",
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    # The partial date uniquely isolates row 51 (2015-08-12)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment.when_val == "2015-08-12"
+
+
+def test_21_inclusive_range_boundary_matches_start_and_end(tmp_path):
+    """21. inclusive range boundary matches start and end dates."""
+    rows = [normalize_to_travel_row(make_raw_schedule_row(60, "2019-09-10", end_date="2019-09-15", place="Berlin", country="Germany"))]
+    manifest = TravelScheduleManifest(
+        source_table_id="1", retrieved_at="now", row_count=1,
+        canonical_sha256=compute_canonical_sha256(rows), normalized_rows=rows,
+    )
+    index = TravelScheduleIndex(manifest)
+
+    assert len(index.get_rows_by_date("2019-09-10")) == 1  # Start boundary
+    assert len(index.get_rows_by_date("2019-09-12")) == 1  # Inside range
+    assert len(index.get_rows_by_date("2019-09-15")) == 1  # End boundary
+    assert len(index.get_rows_by_date("2019-09-09")) == 0  # Outside before
+    assert len(index.get_rows_by_date("2019-09-16")) == 0  # Outside after
+
+
+def test_22_invalid_end_before_start_cannot_authorize_enrichment(tmp_path):
+    """22. invalid end-before-start row cannot authorize enrichment."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(70, "2019-09-15", end_date="2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="2019-09-12",
+        place=None,
+        where_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    # The invalid row must not index for 2019-09-12
+    assert res.decision == TravelReviewDecision.NO_SCHEDULE_SUPPORT
+    assert res.provisional_enrichment is None
+
+
+def test_23_semantically_duplicate_schedule_rows_grouped(tmp_path):
+    """23. semantically duplicate schedule rows are grouped deterministically while all source row IDs remain in provenance."""
+    rows = [
+        normalize_to_travel_row(make_raw_schedule_row(81, "2019-09-10", place="Berlin", country="Germany", text="Morning Class")),
+        normalize_to_travel_row(make_raw_schedule_row(82, "2019-09-10", place="Berlin", country="Germany", text="Evening Kirtan")),
+    ]
+    candidates = group_candidates_semantically(rows)
+    assert len(candidates) == 1
+    cand = candidates[0]
+    assert sorted(cand.schedule_row_ids) == [81, 82]
+    assert "Morning Class" in cand.schedule_text
+    assert "Evening Kirtan" in cand.schedule_text
+
+
+def test_24_exact_schedule_text_cannot_authorize_automatic_enrichment(tmp_path):
+    """24. exact schedule text term may retrieve/support a candidate but text-only/fuzzy matching cannot authorize automatic enrichment."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    # Row has empty place, but notes mention Leipzig
+    rows = [make_raw_schedule_row(90, "2019-09-10", place="", country="Germany", text="Visit to Leipzig center")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="2019-09-10",
+        place=None,
+        where_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    # Cannot enrich place from schedule text alone!
+    assert res.decision != TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment is None
+
+
+def test_25_fuzzy_place_similarity_alone_cannot_authorize_enrichment(tmp_path):
+    """25. fuzzy place similarity alone cannot authorize automatic enrichment."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(91, "2015-08-12", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Local place has a typo "Berrlinx"
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        place="Berrlinx",
+        country_iso2="de",
+        where_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.NO_SCHEDULE_SUPPORT
+    assert res.provisional_enrichment is None
+
+
+def test_26_neither_date_nor_location_known_insufficient_evidence(tmp_path):
+    """26. neither date nor location known -> INSUFFICIENT_EVIDENCE, no unconstrained guess."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(92, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place=None,
+        country=None,
+        country_iso2=None,
+        where_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    assert res.provisional_enrichment is None
+    assert "tool_5_content_discovery" in res.downstream_routing
+
+
+def test_27_parent_folder_consumed_through_parser_result(tmp_path):
+    """27. parent-folder evidence is consumed through Tool 1 ParserResult; Tool 3 does not reparse raw folders independently."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(93, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Tool 1 provided parent folder evidence into where
+    p_res = create_sample_parser_result(
+        when_val="2019-09-10",
+        place="Berlin",
+        country_iso2="de",
+        parent_folder="Berlin_Recordings",
+    )
+    p_res.where.evidence.append(Evidence(source="parent_folder", raw_value="Berlin_Recordings"))
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid)
+    assert res.decision == TravelReviewDecision.CORROBORATED
+
+
+def test_28_confirmed_tool2_media_values_never_overridden(tmp_path):
+    """28. confirmed Tool 2 Media values are never overridden/downgraded by travel schedule."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    # Schedule places speaker in Munich on 2019-09-10
+    rows = [make_raw_schedule_row(100, "2019-09-10", place="Munich", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(when_val="2019-09-10", place="Berlin", country_iso2="de")
+    tid = register_file(reg, p_res)
+
+    # Confirmed Media match indicates Berlin
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id=tid,
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=555,
+        database_state="LIVE_CURRENT",
+        renamer_enrichment=RenamerEnrichment(
+            confirmed=True,
+            media_row_id=555,
+            when_val="2019-09-10",
+            where_val="Berlin-de",
+        ),
+    )
+
+    res = service.review_file(tid, tool2_context=t2_res)
+    # Schedule conflict does NOT change or override the confirmed Media values
+    assert res.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert res.provisional_enrichment is None
+
+
+def test_29_explicit_local_vs_confirmed_media_contradiction_preserved(tmp_path):
+    """29. explicit local <-> confirmed Media contradiction is preserved; Tool 3 does not adjudicate it."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(101, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(when_val="2019-09-01", place="Berlin", country_iso2="de")
+    tid = register_file(reg, p_res)
+
+    # High-authority conflict in Tool 2
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id=tid,
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=666,
+        database_state="LIVE_CURRENT",
+        conflicts=["Local date 2019-09-01 contradicts confirmed Media date 2019-09-10"],
+    )
+
+    res = service.review_file(tid, tool2_context=t2_res)
+    assert any("contradicts" in c for c in res.conflicts)
+    assert any("high-authority" in n for n in res.diagnostic_notes)
+
+
+def test_30_probable_or_multiple_tool2_candidates_do_not_leak_confirmed_enrichment(tmp_path):
+    """30. probable/multiple Tool 2 candidate metadata does not leak into confirmed Renamer enrichment through Tool 3."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(102, "2015-08-12", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    # Tool 2 candidate only
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id=tid,
+        decision=ReviewDecision.PROBABLE_EXISTING_MEDIA,
+        database_state="LIVE_CURRENT",
+        candidates=[MediaCandidate(media_row_id=777, score=85.0)],
+    )
+
+    res = service.review_file(tid, tool2_context=t2_res)
+    # Schedule enrichment MUST be provisional, never confirmed
+    if res.provisional_enrichment:
+        assert res.provisional_enrichment.confirmed is False
+        assert res.provisional_enrichment.source_tool == "tool_3_travel_schedule_review"
+
+
+def test_31_historical_tool2_result_not_treated_as_current_media_authority(tmp_path):
+    """31. historical stored Tool 2 result is not treated as current Media authority on an independent Tool 3 run that requires current Media context."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(103, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(when_val="2019-09-10", place="Berlin", country_iso2="de")
+    tid = register_file(reg, p_res)
+
+    # Independent run without passing live tool2_context
+    res = service.review_file(tid, tool2_context=None)
+    assert res.tool2_context_state == "UNAVAILABLE"
+
+
+def test_32_media_context_unavailable_still_produces_provisional_schedule_evidence(tmp_path):
+    """32. Media context unavailable + static reference available may still produce explicitly provisional schedule evidence and records Media unavailability."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(104, "2015-08-12", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id=tid,
+        decision=ReviewDecision.DATABASE_UNAVAILABLE,
+        database_state="DATABASE_UNAVAILABLE",
+    )
+
+    res = service.review_file(tid, tool2_context=t2_res, auto_enrich=True)
+    assert res.tool2_context_state == "DATABASE_UNAVAILABLE"
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment.when_val == "2015-08-12"
+    assert res.provisional_enrichment.confirmed is False
+
+
+def test_33_schedule_only_enrichment_remains_provisional_in_tool1_registry(tmp_path):
+    """33. Tool 3 schedule-only enrichment remains ResolutionState.PROVISIONAL in Tool 1 registry."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(105, "2015-08-12", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    service.review_file(tid, auto_enrich=True)
+
+    stored = reg.get_file(tid)
+    p_data = stored["parser_result"]
+    assert p_data["when"]["state"] == ResolutionState.PROVISIONAL.value
+    assert p_data["when"]["selected_value"] == "2015-08-12"
+
+
+def test_34_tool2_confirmed_enrichment_retains_stronger_state(tmp_path):
+    """34. existing Tool 2 confirmed enrichment still retains its accepted stronger state semantics after the enrichment-contract extension."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    renamer = RenamerApplicationService(registry=reg)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+    )
+    tid = register_file(reg, p_res)
+
+    # Tool 2 confirmed enrichment without when_state specified defaults to EXACT
+    evidence = EnrichmentEvidence(
+        tracking_id=tid,
+        when_val="2019-09-10",
+        source_tool="tool_2_media_database_review",
+        details="confirmed media match",
+    )
+    renamer.apply_enrichment(evidence)
+
+    stored = reg.get_file(tid)
+    p_data = stored["parser_result"]
+    assert p_data["when"]["state"] == ResolutionState.EXACT.value
+
+
+def test_35_only_safe_unique_provisional_enrichment_auto_hands_off(tmp_path):
+    """35. only safe unique PROVISIONAL_ENRICHMENT auto-hands off to Renamer."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [
+        make_raw_schedule_row(110, "2015-08-12", place="Berlin", country="Germany"),
+        make_raw_schedule_row(111, "2016-09-01", place="Berlin", country="Germany"),
+    ]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    res = service.review_file(tid, auto_enrich=True)
+    assert res.decision == TravelReviewDecision.MULTIPLE_SCHEDULE_CANDIDATES
+
+    # Proposal remains unresolved
+    stored = reg.get_file(tid)
+    assert stored["when_val"] == "YYYY-MM-DD"
+
+
+def test_36_multiple_conflict_no_support_do_not_change_tool1_selected_fields(tmp_path):
+    """36. multiple/conflict/no-support/insufficient/unavailable states do not change Tool 1 selected fields."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(120, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # 1. Conflict file
+    p1 = create_sample_parser_result(tracking_id="conf0001", when_val="2019-09-10", place="Leipzig")
+    register_file(reg, p1)
+    service.review_file("conf0001", auto_enrich=True)
+    assert reg.get_file("conf0001")["where_val"] == "Leipzig-de"
+
+    # 2. No support file
+    p2 = create_sample_parser_result(tracking_id="nosup001", when_val="1999-01-01", place="Tokyo")
+    register_file(reg, p2)
+    service.review_file("nosup001", auto_enrich=True)
+    assert reg.get_file("nosup001")["where_val"] == "Tokyo-de"
+
+
+def test_37_rerunning_tool3_is_idempotent(tmp_path):
+    """37. rerunning Tool 3 is idempotent and does not duplicate evidence/proposal tokens."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(130, "2015-08-12", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p_res = create_sample_parser_result(
+        when_val="YYYY-MM-DD",
+        when_state=ResolutionState.UNRESOLVED,
+        place="Berlin",
+        country_iso2="de",
+    )
+    tid = register_file(reg, p_res)
+
+    # Run 1
+    service.review_file(tid, auto_enrich=True)
+    file_1 = reg.get_file(tid)
+    when_ev_1 = len(file_1["parser_result"]["when"]["evidence"])
+    prop_1 = file_1["proposed_filename"]
+
+    # Run 2
+    service.review_file(tid, auto_enrich=True)
+    file_2 = reg.get_file(tid)
+    when_ev_2 = len(file_2["parser_result"]["when"]["evidence"])
+    prop_2 = file_2["proposed_filename"]
+
+    assert when_ev_1 == when_ev_2
+    assert prop_1 == prop_2
+
+
+def test_38_cli_batch_works_offline_with_verified_reference(tmp_path, monkeypatch):
+    """38. CLI batch works offline using verified reference."""
+    reg_db = tmp_path / "registry.sqlite3"
+    ref_file = tmp_path / "travel_schedule.json"
+    reg = LocalRegistry(reg_db)
+
+    p1 = create_sample_parser_result(tracking_id="cli00001", when_val="2019-09-10", place="Berlin")
+    register_file(reg, p1)
+
+    # Bootstrap reference file first
+    rows = [make_raw_schedule_row(140, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    store.ensure_reference(force_bootstrap=True)
+
+    # Execute CLI travel-review offline
+    test_args = [
+        "media-archive",
+        "travel-review",
+        "--registry-path", str(reg_db),
+        "--reference-path", str(ref_file),
+    ]
+    monkeypatch.setattr("sys.argv", test_args)
+    cli_main()
+
+    # Stored review should exist in SQLite registry
+    review = reg.get_travel_review("cli00001")
+    assert review is not None
+    assert review["decision"] == "CORROBORATED"
+
+
+def test_39_portal_displays_tool3_evidence(tmp_path):
+    """39. portal displays Tool 3 evidence/candidates and uses service boundaries rather than direct mutations."""
+    reg_db = tmp_path / "registry.sqlite3"
+    reg = LocalRegistry(reg_db)
+    configure_review_context(registry_path=reg_db)
+
+    p_res = create_sample_parser_result(tracking_id="port0001")
+    register_file(reg, p_res)
+
+    # Save a Tool 3 review into registry
+    review_res = TravelReviewResult(
+        tracking_id="port0001",
+        decision=TravelReviewDecision.CORROBORATED,
+        reference_checksum="abc123def4567890",
+        reference_row_count=42,
+        selected_schedule_row_ids=[10],
+        diagnostic_notes=["Schedule agrees with known date and place"],
+    )
+    reg.save_travel_review(
+        tracking_id="port0001",
+        decision=review_res.decision.value,
+        reference_checksum=review_res.reference_checksum,
+        reference_row_count=review_res.reference_row_count,
+        selected_row_ids=review_res.selected_schedule_row_ids,
+        result_json=review_res.model_dump_json(),
+    )
+
+    client = TestClient(app)
+    resp = client.get("/file/port0001")
+    assert resp.status_code == 200
+    assert "Tool 3 — Travel Schedule Review" in resp.text
+    assert "CORROBORATED" in resp.text
+    assert "abc123def456" in resp.text
+
+
+def test_40_batch_isolates_one_file_errors_and_continues(tmp_path):
+    """40. batch isolates one-file errors and continues."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    ref_file = tmp_path / "travel_schedule.json"
+    rows = [make_raw_schedule_row(150, "2019-09-10", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(reference_path=ref_file, provider=FakeBaserowProvider(rows=rows))
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p1 = create_sample_parser_result(tracking_id="good0001")
+    register_file(reg, p1)
+
+    # Review batch containing a non-existent tracking ID and the good tracking ID
+    results = service.review_batch(tracking_ids=["nonexistent_id", "good0001"])
+    assert len(results) == 2
+    assert results[0].decision == TravelReviewDecision.REFERENCE_UNAVAILABLE
+    assert "Batch processing error" in results[0].diagnostic_notes[0]
+    assert results[1].decision == TravelReviewDecision.CORROBORATED
