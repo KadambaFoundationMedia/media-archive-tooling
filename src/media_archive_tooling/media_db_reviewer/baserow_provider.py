@@ -149,7 +149,7 @@ def normalize_travel_schedule_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class BaserowSnapshotProvider:
-    """Read-only provider managing live fetching, schema normalization, and disk caching."""
+    """Read-only live query provider managing live fetching, schema normalization, and audit persistence."""
 
     def __init__(
         self,
@@ -159,6 +159,7 @@ class BaserowSnapshotProvider:
         category_table_id: Optional[str] = None,
         travel_schedule_table_id: Optional[str] = None,
         snapshot_path: Optional[Path] = None,
+        initial_snapshot: Optional[BaserowSnapshot] = None,
     ):
         self.api_url = api_url.rstrip("/")
         self.api_token = api_token
@@ -166,36 +167,35 @@ class BaserowSnapshotProvider:
         self.category_table_id = category_table_id
         self.travel_schedule_table_id = travel_schedule_table_id
         self.snapshot_path = snapshot_path or Path(".renamer/baserow_snapshot.json")
-
+        self._injected_snapshot = initial_snapshot
         self._current_snapshot: Optional[BaserowSnapshot] = None
 
     def load_snapshot(self, force_refresh: bool = False) -> BaserowSnapshot:
-        """Obtain a snapshot: live fetch if credentials present, otherwise local disk cache."""
+        """Obtain current Baserow state for decision-making.
+
+        In accordance with the Live Baserow Policy, decisions must be made from
+        successful live queries. Stale cached data is never used as an operational substitute.
+        """
+        if self._injected_snapshot is not None:
+            return self._injected_snapshot
+
         if not force_refresh and self._current_snapshot is not None:
             return self._current_snapshot
 
-        # Try live fetch first if credentials exist
+        # Query live Baserow if credentials exist
         if self.api_token and (self.media_table_id or self.category_table_id):
             try:
                 live_snapshot = self._fetch_live_snapshot()
-                self._save_snapshot_to_disk(live_snapshot)
+                self._save_audit_snapshot(live_snapshot)
                 self._current_snapshot = live_snapshot
                 return live_snapshot
             except Exception as e:
-                logger.warning(f"Live Baserow fetch failed: {e}. Checking local disk cache.")
+                logger.warning(f"Live Baserow query failed: {e}. Live authority disallows stale cache fallback.")
 
-        # If live fetch fails or no token, fall back to local disk cache
-        cached_snapshot = self._load_snapshot_from_disk()
-        if cached_snapshot is not None:
-            cached_snapshot.state = "CACHED_STALE"
-            cached_snapshot.complete = False  # Stale cache is incomplete relative to live authority
-            self._current_snapshot = cached_snapshot
-            return cached_snapshot
-
-        # If no cache available either, return UNAVAILABLE snapshot
+        # Live query unavailable or no token: return DATABASE_UNAVAILABLE
         unavailable_snapshot = BaserowSnapshot(
             snapshot_at=datetime.now(timezone.utc).isoformat(),
-            state="UNAVAILABLE",
+            state="DATABASE_UNAVAILABLE",
             complete=False,
             media_rows=[],
             category_title_rows=[],
@@ -203,6 +203,70 @@ class BaserowSnapshotProvider:
         )
         self._current_snapshot = unavailable_snapshot
         return unavailable_snapshot
+
+    def fetch_media_row_live(self, row_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a single Media row directly from live Baserow for revalidation."""
+        if self._injected_snapshot is not None:
+            for r in self._injected_snapshot.media_rows:
+                if r.get("id") == row_id:
+                    return normalize_media_row(r)
+            return None
+
+        if not (self.api_token and self.media_table_id):
+            return None
+
+        headers = {"Authorization": f"Token {self.api_token}"}
+        url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/{row_id}/?user_field_names=true"
+        try:
+            with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+                resp = client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    return normalize_media_row(resp.json())
+                elif resp.status_code == 404:
+                    return None
+                else:
+                    logger.warning(f"Baserow row {row_id} fetch failed: HTTP {resp.status_code}")
+                    return None
+        except Exception as e:
+            logger.warning(f"Error fetching live Baserow row {row_id}: {e}")
+            return None
+
+    def search_media_candidates_live(self, query_text: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Perform a targeted live search for media candidates."""
+        if self._injected_snapshot is not None:
+            if not query_text:
+                return [normalize_media_row(r) for r in self._injected_snapshot.media_rows]
+            results = []
+            q_lower = query_text.lower()
+            for r in self._injected_snapshot.media_rows:
+                norm = normalize_media_row(r)
+                if (
+                    q_lower in (norm["title"] or "").lower()
+                    or q_lower in (norm["what"] or "").lower()
+                    or q_lower in (norm["filename"] or "").lower()
+                    or any(q_lower in sid.lower() for sid in norm["source_ids"])
+                ):
+                    results.append(norm)
+            return results
+
+        if not (self.api_token and self.media_table_id):
+            return []
+
+        headers = {"Authorization": f"Token {self.api_token}"}
+        url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100"
+        if query_text:
+            import urllib.parse
+            url += f"&search={urllib.parse.quote(query_text)}"
+
+        try:
+            with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+                resp = client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    return [normalize_media_row(r) for r in resp.json().get("results", [])]
+                return []
+        except Exception as e:
+            logger.warning(f"Error querying live candidates: {e}")
+            return []
 
     def _fetch_table_rows(self, client: httpx.Client, table_id: str) -> List[Dict[str, Any]]:
         """Paginate through all rows in a Baserow table."""
@@ -237,24 +301,24 @@ class BaserowSnapshotProvider:
 
         return BaserowSnapshot(
             snapshot_at=now_str,
-            state="LIVE_COMPLETE",
+            state="LIVE_CURRENT",
             complete=True,
             media_rows=media_rows,
             category_title_rows=cat_rows,
             travel_schedule_rows=travel_rows,
         )
 
-    def _save_snapshot_to_disk(self, snapshot: BaserowSnapshot):
-        """Persist snapshot JSON to local path."""
+    def _save_audit_snapshot(self, snapshot: BaserowSnapshot):
+        """Persist snapshot JSON to local path for audit and historical inspection only."""
         try:
             self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.snapshot_path, "w", encoding="utf-8") as f:
                 f.write(snapshot.model_dump_json(indent=2))
         except Exception as e:
-            logger.warning(f"Failed to persist Baserow snapshot to disk: {e}")
+            logger.warning(f"Failed to persist Baserow audit record: {e}")
 
-    def _load_snapshot_from_disk(self) -> Optional[BaserowSnapshot]:
-        """Load cached snapshot from disk if present."""
+    def load_audit_snapshot(self) -> Optional[BaserowSnapshot]:
+        """Load historical audit snapshot from disk for inspection. Never use for operational decisions."""
         if not self.snapshot_path.exists():
             return None
         try:
@@ -262,5 +326,9 @@ class BaserowSnapshotProvider:
                 data = json.load(f)
             return BaserowSnapshot.model_validate(data)
         except Exception as e:
-            logger.warning(f"Failed to load cached Baserow snapshot: {e}")
+            logger.warning(f"Failed to load Baserow audit record: {e}")
             return None
+
+
+# Alias for explicit live-naming
+BaserowLiveProvider = BaserowSnapshotProvider

@@ -257,7 +257,7 @@ def test_04_live_over_cache_authority(tmp_path):
         mock_get.return_value = mock_resp
 
         snapshot = provider.load_snapshot(force_refresh=True)
-        assert snapshot.state == "LIVE_COMPLETE"
+        assert snapshot.state in ("LIVE_CURRENT", "LIVE_COMPLETE")
         assert snapshot.media_rows[0]["Title"] == "Fresh Live Title"
 
 
@@ -268,7 +268,7 @@ def test_05_stale_cache_not_producing_complete_no_match(tmp_path):
     snap_file = tmp_path / "snapshot.json"
     cached = BaserowSnapshot(
         snapshot_at="2025-01-01T00:00:00Z",
-        state="CACHED_STALE",
+        state="DATABASE_UNAVAILABLE",
         complete=False,
         media_rows=[{"id": 99, "Date": "2020-01-01", "Title": "Something else"}],
     )
@@ -276,7 +276,7 @@ def test_05_stale_cache_not_producing_complete_no_match(tmp_path):
 
     provider = BaserowSnapshotProvider(snapshot_path=snap_file)
     snapshot = provider.load_snapshot()
-    assert snapshot.state == "CACHED_STALE"
+    assert snapshot.state == "DATABASE_UNAVAILABLE"
 
     engine = MediaDatabaseReconciliationEngine()
     parser_res = make_parser_result(date_val="2021-05-05", what_val="BG-02-02", place="Zurich")
@@ -1156,15 +1156,364 @@ def test_31_portal_media_db_endpoints(tmp_path):
     assert "#501" in resp.text
 
     # POST human action
-    resp2 = client.post(
-        "/file/portal01/media-db-action",
-        data={
-            "action": "confirm_existing",
-            "media_row_id": "501",
-            "notes": "Verified in portal",
-            "reviewer": "web_operator",
-        },
-        follow_redirects=True,
+    with patch("httpx.Client.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "id": 501,
+            "Title": "Love in the Spiritual World",
+            "Date": "2014-08-04",
+            "Place": "Leipzig",
+            "Country": "Germany",
+            "What": "BG-01-18",
+        }
+        mock_get.return_value = mock_resp
+
+        resp2 = client.post(
+            "/file/portal01/media-db-action",
+            data={
+                "action": "confirm_existing",
+                "media_row_id": "501",
+                "notes": "Verified in portal",
+                "reviewer": "web_operator",
+            },
+            follow_redirects=True,
+        )
+        assert resp2.status_code == 200
+        assert "Tool 2 — Baserow Media Database Reconciliation" in resp2.text
+
+
+# ---------------------------------------------------------------------------
+# Test 32: Live revalidation race conditions (R-001)
+# ---------------------------------------------------------------------------
+def test_32_live_revalidation_race_collaborator_edit_or_delete(tmp_path):
+    reg_db = tmp_path / "reg.db"
+    registry = LocalRegistry(reg_db)
+    parser_res = make_parser_result(
+        tracking_id="race01",
+        orig_filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
     )
-    assert resp2.status_code == 200
-    assert "Tool 2 — Baserow Media Database Reconciliation" in resp2.text
+    prop = RenameProposal(
+        tracking_id="race01",
+        original_path="/archive/sample.mp3",
+        current_filename="sample.mp3",
+        proposed_filename="sample_ID-race01.mp3",
+        proposed_path="/archive/sample_ID-race01.mp3",
+        mode=RenameMode.INITIAL,
+        parser_result=parser_res,
+    )
+    registry.save_proposal(prop)
+
+    rev_res = MediaDatabaseReviewResult(
+        tracking_id="race01",
+        database_state="LIVE_CURRENT",
+        database_snapshot_at="2026-09-14T00:00:00Z",
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=777,
+        selected_field_evidence={
+            "local_date": "2014-08-04",
+            "local_what": "BG-01-18",
+            "local_place": "Leipzig",
+            "local_country": "DE",
+        },
+        candidates=[
+            MediaCandidate(
+                media_row_id=777,
+                raw_row={"id": 777, "Title": "Original Title"},
+                normalized_row={"id": 777, "title": "Original Title", "date": "2014-08-04", "what": "BG-01-18"},
+                retrieval_reasons=["Direct match"],
+                score=100.0,
+            )
+        ],
+    )
+    registry.save_media_db_review(
+        tracking_id="race01",
+        decision=rev_res.decision.value,
+        database_state="LIVE_CURRENT",
+        snapshot_timestamp=rev_res.database_snapshot_at,
+        result_json=rev_res.model_dump_json(),
+        selected_media_row_id=777,
+        review_required=False,
+    )
+
+    # Mock provider where row 777 was deleted by collaborator
+    mock_provider = MagicMock(spec=BaserowSnapshotProvider)
+    mock_provider.fetch_media_row_live.return_value = None
+
+    service = MediaDatabaseReviewService(registry=registry, provider=mock_provider)
+    with pytest.raises(RuntimeError, match="no longer exists in Baserow"):
+        service.confirm_existing(tracking_id="race01", media_row_id=777)
+
+    # Race condition on confirm_new: collaborator inserted matching row
+    mock_provider.search_media_candidates_live.return_value = [
+        {"id": 999, "title": "Collaborator Inserted", "date": "2014-08-04", "what": "BG-01-18"}
+    ]
+    with pytest.raises(RuntimeError, match="live search discovered matching row"):
+        service.confirm_new(tracking_id="race01")
+
+
+# ---------------------------------------------------------------------------
+# Test 33: Pure boolean predicate (R-002) - high score without predicate does not confirm
+# ---------------------------------------------------------------------------
+def test_33_negative_test_high_score_without_explicit_predicates_does_not_auto_confirm():
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2014-08-04",
+        what_val="Seminar",  # Generic topic, not specific scripture reference
+        place="London",
+    )
+    # Candidate with partial overlap (place match, topic overlap) but missing date -> unconfirmed
+    candidate_row = {
+        "id": 10,
+        "Date": "",  # Missing in database
+        "Place": "London",
+        "Title": "London Seminar on Bhakti",
+        "Category": "Seminar",
+    }
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[candidate_row],
+    )
+    result = engine.reconcile(parser_res, snapshot)
+    # Even if scoring assigns points, decision must NOT be EXISTING_MEDIA_MATCH
+    assert result.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert result.decision == ReviewDecision.PROBABLE_EXISTING_MEDIA
+    assert result.review_required is True
+
+
+# ---------------------------------------------------------------------------
+# Test 34: Country contradiction flags conflict (R-003)
+# ---------------------------------------------------------------------------
+def test_34_country_contradiction_flags_conflict():
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Paris",
+        country="United States",  # Paris, Texas / US
+    )
+    candidate_row = {
+        "id": 20,
+        "Date": "2014-08-04",
+        "Place": "Paris",
+        "Country": "France",  # Paris, France
+        "What": "BG-01-18",
+        "Title": "Bhagavad-gita 1.18",
+    }
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[candidate_row],
+    )
+    result = engine.reconcile(parser_res, snapshot)
+    assert result.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert len(result.candidates) > 0
+    cand = result.candidates[0]
+    places_comp = cand.field_comparisons.get("place")
+    assert places_comp is not None
+    assert places_comp.state == FieldComparisonState.CONFLICT
+    assert any("Country conflict" in c for c in cand.conflicts)
+
+
+# ---------------------------------------------------------------------------
+# Test 35: Structural scripture reference matching (R-004)
+# ---------------------------------------------------------------------------
+def test_35_structural_scripture_reference_matching():
+    engine = MediaDatabaseReconciliationEngine()
+    # Negative test: BG-01-01 vs BG-01-10
+    p1 = make_parser_result(date_val="2014-08-04", what_val="BG-01-01", place="Leipzig")
+    c1 = {
+        "id": 31,
+        "Date": "2014-08-04",
+        "Place": "Leipzig",
+        "What": "BG-01-10",
+        "Title": "BG 1.10",
+    }
+    snap1 = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[c1],
+    )
+    res1 = engine.reconcile(p1, snap1)
+    assert res1.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    what_comp = res1.candidates[0].field_comparisons.get("what")
+    assert what_comp.state == FieldComparisonState.CONFLICT
+
+    # Multi-verse range test: BG-01-01-02 vs BG-01-01
+    p2 = make_parser_result(date_val="2014-08-04", what_val="BG-01-01-02", place="Leipzig")
+    c2 = {
+        "id": 32,
+        "Date": "2014-08-04",
+        "Place": "Leipzig",
+        "What": "BG-01-01",
+        "Title": "BG 1.1",
+    }
+    snap2 = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[c2],
+    )
+    res2 = engine.reconcile(p2, snap2)
+    cand2 = res2.candidates[0]
+    assert cand2.field_comparisons["what"].state == FieldComparisonState.AGREES
+
+
+# ---------------------------------------------------------------------------
+# Test 36: Tool 1 partial date matching (R-005)
+# ---------------------------------------------------------------------------
+def test_36_tool1_partial_date_matching():
+    engine = MediaDatabaseReconciliationEngine()
+    # Partial date YYYY-MM-DD where day is unknown
+    p1 = make_parser_result(date_val="2015-02-DD", what_val="BG-01-18", place="Leipzig")
+    c1 = {"id": 41, "Date": "2015-02-15", "Place": "Leipzig", "What": "BG-01-18", "Title": "Lecture"}
+    snap1 = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[c1],
+    )
+    res1 = engine.reconcile(p1, snap1)
+    cand1 = res1.candidates[0]
+    date_comp = cand1.field_comparisons.get("date")
+    assert date_comp is not None
+    assert date_comp.state == FieldComparisonState.AGREES
+    assert "Partial date match" in (date_comp.details or "")
+
+    # Different month -> CONFLICT
+    c2 = {"id": 42, "Date": "2015-03-15", "Place": "Leipzig", "What": "BG-01-18", "Title": "Lecture"}
+    snap2 = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[c2],
+    )
+    res2 = engine.reconcile(p1, snap2)
+    cand2 = res2.candidates[0]
+    assert cand2.field_comparisons["date"].state == FieldComparisonState.CONFLICT
+
+
+# ---------------------------------------------------------------------------
+# Test 37: Bounded travel schedule corroboration (R-006)
+# ---------------------------------------------------------------------------
+def test_37_bounded_travel_schedule_corroboration():
+    engine = MediaDatabaseReconciliationEngine()
+    travel_row = {
+        "id": 1,
+        "City": "Leipzig",
+        "Country": "Germany",
+        "Start Date": "2014-08-01",
+        "End Date": "2014-08-05",
+    }
+    candidate_row = {
+        "id": 51,
+        "Date": "2014-08-03",
+        "Place": "",  # missing in media row
+        "What": "BG-01-18",
+        "Title": "BG 1.18",
+    }
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[candidate_row],
+        travel_schedule_rows=[travel_row],
+    )
+    # Inside travel range: corroborates
+    p_inside = make_parser_result(date_val="2014-08-03", what_val="BG-01-18", place="Leipzig")
+    res_inside = engine.reconcile(p_inside, snapshot)
+    cand_inside = res_inside.candidates[0]
+    assert any("Travel schedule records 'Leipzig'" in c for c in cand_inside.travel_schedule_context)
+    assert any("Travel schedule corroborates" in r for r in cand_inside.retrieval_reasons)
+
+    # Outside travel range (same month): does NOT corroborate
+    p_outside = make_parser_result(date_val="2014-08-25", what_val="BG-01-18", place="Leipzig")
+    cand_outside_row = dict(candidate_row, id=52, Date="2014-08-25")
+    snap_outside = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[cand_outside_row],
+        travel_schedule_rows=[travel_row],
+    )
+    res_outside = engine.reconcile(p_outside, snap_outside)
+    cand_outside = res_outside.candidates[0]
+    assert not any("Travel schedule records 'Leipzig'" in c for c in cand_outside.travel_schedule_context)
+
+
+# ---------------------------------------------------------------------------
+# Test 38: Progressive conflict routing (R-007)
+# ---------------------------------------------------------------------------
+def test_38_progressive_conflict_routing_location_vs_identity():
+    engine = MediaDatabaseReconciliationEngine()
+    # Case 1: Location-only conflict -> routed downstream to Tool 3, review_required_now is False
+    p_loc = make_parser_result(date_val="2014-08-04", what_val="BG-01-18", place="Berlin")
+    c_loc = {"id": 61, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Title": "BG 1.18"}
+    snap1 = BaserowSnapshot(snapshot_at="2026-09-14T00:00:00Z", state="LIVE_CURRENT", complete=True, media_rows=[c_loc])
+    res1 = engine.reconcile(p_loc, snap1)
+    assert res1.review_required is True
+    assert res1.review_required_now is False
+    assert any("tool_3" in r.lower() for r in res1.downstream_routing)
+
+    # Case 2: Direct-identity contradiction (same filename, conflicting date) -> review_required_now is True
+    p_ident = make_parser_result(
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
+        orig_filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
+    )
+    c_ident = {
+        "id": 62,
+        "Date": "2014-08-05",  # Date conflict!
+        "What": "BG-01-18",
+        "Place": "Leipzig",
+        "Title": "BG 1.18",
+        "Filename": "2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",  # Direct identity match!
+    }
+    snap2 = BaserowSnapshot(snapshot_at="2026-09-14T00:00:00Z", state="LIVE_CURRENT", complete=True, media_rows=[c_ident])
+    res2 = engine.reconcile(p_ident, snap2)
+    assert res2.review_required_now is True
+    assert res2.review_required is True
+
+
+# ---------------------------------------------------------------------------
+# Test 39: Renamer enrichment carries live provenance (R-001)
+# ---------------------------------------------------------------------------
+def test_39_renamer_enrichment_carries_live_provenance():
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
+    )
+    candidate_row = {
+        "id": 71,
+        "Date": "2014-08-04",
+        "Place": "Leipzig",
+        "Country": "Germany",
+        "What": "BG-01-18",
+        "Title": "Love in the Spiritual World",
+    }
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[candidate_row],
+    )
+    result = engine.reconcile(parser_res, snapshot)
+    assert result.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    enrichment = result.renamer_enrichment
+    assert enrichment.confirmed is True
+    assert enrichment.media_row_id == 71
+    assert enrichment.baserow_read_at == "2026-09-14T10:00:00Z"
+    assert enrichment.live_read_complete is True
+

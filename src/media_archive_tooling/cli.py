@@ -181,7 +181,8 @@ def run_media_db_review(args):
     print(f"insufficient evidence: {sum(1 for r in results if r.decision.value == 'INSUFFICIENT_EVIDENCE')}")
     print(f"conflicts: {sum(1 for r in results if r.decision.value == 'CONFLICT_WITH_EXISTING')}")
     print(f"database failures: {sum(1 for r in results if r.decision.value == 'DATABASE_UNAVAILABLE')}")
-    print(f"human-review-required-now: {sum(1 for r in results if r.review_required)}")
+    print(f"human-review-required-now: {sum(1 for r in results if r.review_required_now)}")
+    print(f"review-required-overall: {sum(1 for r in results if r.review_required)}")
     print(f"downstream-to-Tool-3 count: {sum(1 for r in results if 'tool_3_travel_schedule_review' in r.downstream_routing)}")
     print(f"confirmed title/metadata enrichments: {sum(1 for r in results if r.renamer_enrichment.confirmed)}")
 

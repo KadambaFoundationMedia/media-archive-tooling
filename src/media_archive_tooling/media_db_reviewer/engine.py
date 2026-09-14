@@ -32,8 +32,76 @@ def _norm_token(text: Optional[str]) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "", ascii_val).lower()
 
 
+def _norm_country(country: Optional[str]) -> Optional[str]:
+    """Normalize country string to uppercase ISO2 code if recognized."""
+    if not country:
+        return None
+    c_clean = country.strip()
+    if len(c_clean) == 2 and c_clean.isalpha():
+        return c_clean.upper()
+
+    c_lower = c_clean.lower()
+    from ..adapters.baserow import COUNTRIES_PATH
+    import json
+    try:
+        if COUNTRIES_PATH.exists():
+            with open(COUNTRIES_PATH, "r", encoding="utf-8") as f:
+                c_map = json.load(f)
+                if c_lower in c_map:
+                    return c_map[c_lower].upper()
+    except Exception:
+        pass
+
+    common = {
+        "india": "IN", "germany": "DE", "deutschland": "DE", "usa": "US",
+        "united states": "US", "united kingdom": "GB", "uk": "GB",
+        "great britain": "GB", "france": "FR", "italy": "IT", "russia": "RU",
+        "switzerland": "CH", "sweden": "SE", "australia": "AU", "brazil": "BR",
+        "czech republic": "CZ", "czechia": "CZ", "netherlands": "NL",
+    }
+    return common.get(c_lower, c_clean.upper())
+
+
+def parse_scripture_reference(val: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse canonical scripture reference (BG, SB, CC, etc.) into structured components.
+
+    Returns dict with book, canto, chapter, v_start, v_end, or None if not recognized.
+    """
+    if not val:
+        return None
+    clean = val.strip()
+
+    # BG: BG-01-01, BG 1.1, BG-1-1-2
+    bg_m = re.match(r"^(?:BG|Bhagavad[\s\-_]*Gita)[\s\-_]+(\d+)[\s\-_.:]+(\d+)(?:[\s\-_.:]+(\d+))?", clean, re.IGNORECASE)
+    if bg_m:
+        ch = int(bg_m.group(1))
+        v1 = int(bg_m.group(2))
+        v2 = int(bg_m.group(3)) if bg_m.group(3) else v1
+        return {"book": "BG", "canto": None, "chapter": ch, "v_start": min(v1, v2), "v_end": max(v1, v2)}
+
+    # SB: SB-01-01-01, SB 1.1.1, SB-01-01-01-02
+    sb_m = re.match(r"^(?:SB|Srimad[\s\-_]*Bhagavatam)[\s\-_]+(\d+)[\s\-_.:]+(\d+)[\s\-_.:]+(\d+)(?:[\s\-_.:]+(\d+))?", clean, re.IGNORECASE)
+    if sb_m:
+        ca = int(sb_m.group(1))
+        ch = int(sb_m.group(2))
+        v1 = int(sb_m.group(3))
+        v2 = int(sb_m.group(4)) if sb_m.group(4) else v1
+        return {"book": "SB", "canto": ca, "chapter": ch, "v_start": min(v1, v2), "v_end": max(v1, v2)}
+
+    # CC: CC-Adi-01-01, CC-01-01-01
+    cc_m = re.match(r"^(?:CC|Caitanya[\s\-_]*Caritamrta)[\s\-_]+([A-Za-z]+|\d+)[\s\-_.:]+(\d+)[\s\-_.:]+(\d+)(?:[\s\-_.:]+(\d+))?", clean, re.IGNORECASE)
+    if cc_m:
+        part = cc_m.group(1).capitalize()
+        ch = int(cc_m.group(2))
+        v1 = int(cc_m.group(3))
+        v2 = int(cc_m.group(4)) if cc_m.group(4) else v1
+        return {"book": "CC", "canto": part, "chapter": ch, "v_start": min(v1, v2), "v_end": max(v1, v2)}
+
+    return None
+
+
 def _compare_dates(local_date: Optional[str], db_date: Optional[str]) -> Tuple[FieldComparisonState, Optional[str]]:
-    """Compare local recording date with Baserow date."""
+    """Compare local recording date with Baserow date supporting partial precision."""
     if not local_date and not db_date:
         return FieldComparisonState.NOT_COMPARABLE, "Both dates missing"
     if local_date and not db_date:
@@ -48,15 +116,34 @@ def _compare_dates(local_date: Optional[str], db_date: Optional[str]) -> Tuple[F
     if l_clean == d_clean:
         return FieldComparisonState.AGREES, None
 
-    # Check for exact YYYY-MM-DD vs YYYY-MM
-    if len(l_clean) == 10 and len(d_clean) == 10:
-        if l_clean != d_clean:
-            return FieldComparisonState.CONFLICT, f"Local date '{l_clean}' conflicts with database date '{d_clean}'"
+    l_parts = l_clean.split("-")
+    d_parts = d_clean.split("-")
 
-    if l_clean.startswith(d_clean) or d_clean.startswith(l_clean):
-        return FieldComparisonState.AGREES, "Partial date match"
+    l_year = l_parts[0] if len(l_parts) > 0 else ""
+    d_year = d_parts[0] if len(d_parts) > 0 else ""
 
-    return FieldComparisonState.CONFLICT, f"Local date '{l_clean}' conflicts with database date '{d_clean}'"
+    if l_year != d_year:
+        return FieldComparisonState.CONFLICT, f"Local year '{l_year}' conflicts with database year '{d_year}'"
+
+    l_month = l_parts[1] if len(l_parts) > 1 else ""
+    d_month = d_parts[1] if len(d_parts) > 1 else ""
+
+    if not l_month or l_month.upper() in ("MM", "??", "00"):
+        return FieldComparisonState.AGREES, "Partial date match (year compatible)"
+
+    if l_month != d_month:
+        return FieldComparisonState.CONFLICT, f"Local month '{l_month}' conflicts with database month '{d_month}'"
+
+    l_day = l_parts[2] if len(l_parts) > 2 else ""
+    d_day = d_parts[2] if len(d_parts) > 2 else ""
+
+    if not l_day or l_day.upper() in ("DD", "??", "00"):
+        return FieldComparisonState.AGREES, "Partial date match (year and month compatible)"
+
+    if l_day != d_day:
+        return FieldComparisonState.CONFLICT, f"Local day '{l_day}' conflicts with database day '{d_day}'"
+
+    return FieldComparisonState.AGREES, None
 
 
 def _compare_places(
@@ -65,7 +152,7 @@ def _compare_places(
     db_place: Optional[str],
     db_country: Optional[str],
 ) -> Tuple[FieldComparisonState, Optional[str]]:
-    """Compare local place/country with Baserow place/country."""
+    """Compare local place/country with Baserow place/country with country awareness."""
     if not local_place and not db_place:
         return FieldComparisonState.NOT_COMPARABLE, "Both locations missing"
     if local_place and not db_place:
@@ -73,13 +160,26 @@ def _compare_places(
     if not local_place and db_place:
         return FieldComparisonState.LOCAL_MISSING, "Local location is blank"
 
+    # Normalize and compare countries when both provided
+    nc_local = _norm_country(local_country)
+    nc_db = _norm_country(db_country)
+
+    if nc_local and nc_db and nc_local != nc_db:
+        return (
+            FieldComparisonState.CONFLICT,
+            f"Country conflict: local '{local_country}' ({nc_local}) contradicts database '{db_country}' ({nc_db})",
+        )
+
     norm_lp = _norm_token(local_place)
     norm_dp = _norm_token(db_place)
 
-    if norm_lp == norm_dp or norm_lp in norm_dp or norm_dp in norm_lp:
+    if norm_lp == norm_dp:
         return FieldComparisonState.AGREES, None
 
-    # Fuzzy check for minor spelling variations
+    if norm_lp in norm_dp or norm_dp in norm_lp:
+        if len(norm_lp) >= 4 and len(norm_dp) >= 4:
+            return FieldComparisonState.AGREES, None
+
     ratio = fuzz.ratio(norm_lp, norm_dp)
     if ratio >= 85:
         return FieldComparisonState.AGREES, f"Fuzzy location match ({ratio:.1f}%)"
@@ -94,7 +194,7 @@ def _compare_what(
     db_title: Optional[str],
     db_category: Optional[str],
 ) -> Tuple[FieldComparisonState, Optional[str]]:
-    """Compare local WHAT with Baserow what/title."""
+    """Compare local WHAT with Baserow what/title using structural scripture matching."""
     if not local_what and not db_what and not db_title:
         return FieldComparisonState.NOT_COMPARABLE, "Both WHAT and title missing"
     if local_what and not db_what and not db_title:
@@ -102,28 +202,60 @@ def _compare_what(
     if not local_what and (db_what or db_title):
         return FieldComparisonState.LOCAL_MISSING, "Local what is blank"
 
+    local_scrip = parse_scripture_reference(local_what)
+    db_scrip = parse_scripture_reference(db_what) or parse_scripture_reference(db_title)
+
+    if local_scrip and db_scrip:
+        if local_scrip["book"] != db_scrip["book"]:
+            return FieldComparisonState.CONFLICT, f"Scripture book mismatch: '{local_what}' vs '{db_what or db_title}'"
+        if local_scrip["canto"] != db_scrip["canto"]:
+            return FieldComparisonState.CONFLICT, f"Scripture canto mismatch: '{local_what}' vs '{db_what or db_title}'"
+        if local_scrip["chapter"] != db_scrip["chapter"]:
+            return FieldComparisonState.CONFLICT, f"Scripture chapter mismatch: '{local_what}' vs '{db_what or db_title}'"
+
+        lv1, lv2 = local_scrip["v_start"], local_scrip["v_end"]
+        dv1, dv2 = db_scrip["v_start"], db_scrip["v_end"]
+        if max(lv1, dv1) <= min(lv2, dv2):
+            if lv1 == dv1 and lv2 == dv2:
+                return FieldComparisonState.AGREES, None
+            return FieldComparisonState.AGREES, f"Scripture verse range overlap: {lv1}-{lv2} and {dv1}-{dv2}"
+        else:
+            return FieldComparisonState.CONFLICT, f"Scripture verse conflict: '{local_what}' vs '{db_what or db_title}'"
+
+    if local_scrip and not db_scrip:
+        if db_what:
+            return FieldComparisonState.CONFLICT, f"Local scripture '{local_what}' conflicts with database WHAT '{db_what}'"
+        norm_lw = _norm_token(local_what)
+        norm_dt = _norm_token(db_title)
+        if norm_lw and norm_lw in norm_dt:
+            return FieldComparisonState.AGREES, "Local scripture mentioned in database title"
+        return FieldComparisonState.DATABASE_MISSING, "Database scripture reference is blank"
+
+    if not local_scrip and db_scrip:
+        if local_what:
+            return FieldComparisonState.CONFLICT, f"Local non-scripture WHAT '{local_what}' conflicts with database scripture '{db_what or db_title}'"
+
     norm_lw = _norm_token(local_what)
     norm_dw = _norm_token(db_what)
     norm_dt = _norm_token(db_title)
 
-    # If scripture reference matches
-    if norm_dw and (norm_lw == norm_dw or norm_lw in norm_dw or norm_dw in norm_lw):
+    if norm_dw and norm_lw == norm_dw:
         return FieldComparisonState.AGREES, None
-
-    # If title matches local what
     if norm_dt and (norm_lw in norm_dt or norm_dt in norm_lw):
         return FieldComparisonState.AGREES, "Local what matches database title"
+    if db_category and _norm_token(db_category) == norm_lw:
+        return FieldComparisonState.AGREES, "Local what matches database category"
 
-    # If local scripture and db scripture exist and differ
-    if norm_lw and norm_dw and norm_lw != norm_dw:
+    if norm_dw and fuzz.ratio(norm_lw, norm_dw) >= 85:
+        return FieldComparisonState.AGREES, "Fuzzy WHAT match"
+    if norm_dt and fuzz.ratio(norm_lw, norm_dt) >= 85:
+        return FieldComparisonState.AGREES, "Fuzzy title match"
+
+    if norm_dw and norm_lw != norm_dw:
         return FieldComparisonState.CONFLICT, f"Local WHAT '{local_what}' conflicts with database WHAT '{db_what}'"
 
-    # If db_what is blank but db_title exists and doesn't match local_what
-    if norm_lw and not norm_dw:
-        return FieldComparisonState.DATABASE_MISSING, "Database WHAT/scripture is blank"
-
-    if db_title and not local_what:
-        return FieldComparisonState.LOCAL_MISSING, None
+    if not norm_dw:
+        return FieldComparisonState.DATABASE_MISSING, "Database WHAT is blank"
 
     return FieldComparisonState.CONFLICT, f"Local WHAT '{local_what}' does not match database WHAT '{db_what or db_title}'"
 
@@ -250,17 +382,25 @@ class MediaDatabaseReconciliationEngine:
                 score += 20.0
                 reasons.append("Exact date + WHAT + corroborating title/category signature")
 
-            # F. Supporting travel schedule context
+            # F. Supporting travel schedule context (R-006: exact date or bounded range only)
             travel_context = []
-            if local_date or row["date"]:
-                eval_date = local_date or row["date"]
+            eval_date = local_date or row["date"]
+            if eval_date and len(eval_date) == 10 and not eval_date.endswith("DD"):
                 for tr in norm_travel_rows:
-                    if tr["start_date"] == eval_date or (tr["start_date"] and eval_date.startswith(tr["start_date"][:7])):
-                        if tr["place"]:
-                            travel_context.append(f"Travel schedule records '{tr['place']}' on {tr['start_date']}")
-                            if local_place and _norm_token(local_place) == _norm_token(tr["place"]):
-                                reasons.append(f"Travel schedule corroborates place '{tr['place']}'")
-                                score += 10.0
+                    start = tr.get("start_date")
+                    end = tr.get("end_date")
+                    in_range = False
+                    if start and end and len(start) == 10 and len(end) == 10:
+                        in_range = (start <= eval_date <= end)
+                    elif start and start == eval_date:
+                        in_range = True
+
+                    if in_range and tr.get("place"):
+                        date_desc = f"{start}..{end}" if end and end != start else f"{start}"
+                        travel_context.append(f"Travel schedule records '{tr['place']}' on {date_desc}")
+                        if local_place and _norm_token(local_place) == _norm_token(tr["place"]):
+                            reasons.append(f"Travel schedule corroborates place '{tr['place']}'")
+                            score += 10.0
 
             # G. Category title matching support
             category_context = []
@@ -330,27 +470,66 @@ class MediaDatabaseReconciliationEngine:
                 )
                 candidates.append(candidate)
 
-        # Sort candidates descending by score
+        # Sort candidates descending by score for secondary ranking/display
         candidates.sort(key=lambda c: c.score, reverse=True)
 
-        # 2. Decision Logic
-        has_direct_identity = False
-        best_candidate: Optional[MediaCandidate] = None
+        # 2. Decision Logic via Explicit Predicates (R-002)
+        def _check_predicates(cand: MediaCandidate) -> Tuple[bool, str]:
+            """Evaluate explicit rules for confirmed association. Score alone never authorizes match."""
+            if cand.conflicts:
+                return False, ""
 
-        if candidates:
-            best_candidate = candidates[0]
-            has_direct_identity = bool(best_candidate.identity_evidence)
+            # Rule 1: Direct Identity Match (highest confidence)
+            if cand.identity_evidence:
+                return True, "rule1_direct_identity"
 
-        # Check for material conflicts on the leading candidate
-        has_material_conflict = bool(best_candidate and best_candidate.conflicts)
+            # Check semantic fields
+            d_comp = cand.field_comparisons.get("date")
+            w_comp = cand.field_comparisons.get("what")
+            p_comp = cand.field_comparisons.get("place")
+
+            date_agrees = d_comp is not None and d_comp.state == FieldComparisonState.AGREES
+            what_agrees = w_comp is not None and w_comp.state == FieldComparisonState.AGREES
+            place_agrees = p_comp is not None and p_comp.state == FieldComparisonState.AGREES
+
+            # Rule 2: Unique High-Specificity Semantic Match (Date + WHAT + WHERE)
+            if date_agrees and what_agrees and place_agrees:
+                return True, "rule2_date_what_where"
+
+            # Rule 3: High-Specificity Semantic Match with Category/Title Corroboration
+            corroboration = (
+                bool(cand.normalized_row.get("title"))
+                or (cand.normalized_row.get("category") and cand.normalized_row.get("category") == local_what_category)
+                or bool(cand.category_title_context)
+            )
+            if date_agrees and what_agrees and corroboration:
+                return True, "rule3_date_what_corroboration"
+
+            return False, ""
+
+        confirmed_candidates = []
+        for c in candidates:
+            is_match, rule_name = _check_predicates(c)
+            if is_match:
+                confirmed_candidates.append((c, rule_name))
+
+        has_material_conflict = False
+        leading_candidate_with_conflict: Optional[MediaCandidate] = None
+        for c in candidates:
+            if c.conflicts:
+                has_material_conflict = True
+                leading_candidate_with_conflict = c
+                break
 
         # Check for competing equally plausible candidates
         multiple_plausible = False
         if len(candidates) >= 2:
             top_score = candidates[0].score
             second_score = candidates[1].score
-            if abs(top_score - second_score) < 10.0 and top_score >= 50.0:
+            if abs(top_score - second_score) < 15.0 and top_score >= 35.0:
                 multiple_plausible = True
+
+        best_candidate: Optional[MediaCandidate] = candidates[0] if candidates else None
 
         decision = ReviewDecision.INSUFFICIENT_EVIDENCE
         decision_state = ""
@@ -361,40 +540,27 @@ class MediaDatabaseReconciliationEngine:
         review_reasons = []
         conflicts_out = []
         diag_notes = []
+        review_required_now = False
 
-        if has_material_conflict:
-            decision = ReviewDecision.CONFLICT_WITH_EXISTING
-            decision_state = f"Candidate Media row {best_candidate.media_row_id} contradicts incoming evidence"
-            conflicts_out.extend(best_candidate.conflicts)
-            review_reasons.extend(best_candidate.conflicts)
-            diag_notes.append(f"Conflict with Baserow Media row {best_candidate.media_row_id}: {'; '.join(best_candidate.conflicts)}")
-            tool4_action = Tool4Action.NEEDS_REVIEW
-            # Material contradiction stays unconfirmed and routes onward / human review
-            routing.append("tool_3_travel_schedule_review")
+        is_live = snapshot.state in ("LIVE_CURRENT", "LIVE_COMPLETE")
 
-        elif multiple_plausible:
-            decision = ReviewDecision.MULTIPLE_CANDIDATES
-            decision_state = f"Multiple plausible Media rows found ({candidates[0].media_row_id}, {candidates[1].media_row_id})"
-            diag_notes.append(f"Multiple plausible Baserow rows found ({len(candidates)} candidates)")
-            tool4_action = Tool4Action.NEEDS_REVIEW
-            routing.append("tool_3_travel_schedule_review")
-
-        elif best_candidate and (has_direct_identity or best_candidate.score >= 70.0):
-            # Confirmed match!
+        if len(confirmed_candidates) == 1 and not has_material_conflict:
+            # Exactly one candidate satisfies the explicit confirmed predicates with no conflicts!
+            matched_cand, rule_name = confirmed_candidates[0]
             decision = ReviewDecision.EXISTING_MEDIA_MATCH
-            selected_row_id = best_candidate.media_row_id
-            decision_state = f"Confirmed association with Baserow Media row {selected_row_id}"
-            diag_notes.append(f"Confirmed match with Baserow Media row {selected_row_id}")
+            selected_row_id = matched_cand.media_row_id
+            decision_state = f"Confirmed association with Baserow Media row {selected_row_id} via {rule_name}"
+            diag_notes.append(f"Confirmed match with Baserow Media row {selected_row_id} ({rule_name})")
 
             # Determine proposed Tool 4 action: link existing (if format differs) or enrich existing
-            row_format = (best_candidate.normalized_row.get("format") or "").lower()
+            row_format = (matched_cand.normalized_row.get("format") or "").lower()
             if ext in (".mp4", ".mkv", ".avi", ".mov") and "video" not in row_format:
                 tool4_action = Tool4Action.LINK_EXISTING
             else:
                 tool4_action = Tool4Action.ENRICH_EXISTING
 
             # Prepare confirmed Renamer enrichment
-            db_row = best_candidate.normalized_row
+            db_row = matched_cand.normalized_row
             title_full = db_row.get("title") or ""
             what_val = None
             if title_full and local_what:
@@ -421,49 +587,104 @@ class MediaDatabaseReconciliationEngine:
                 where_val=where_val,
                 category=db_row.get("category") or local_what_category,
                 source_identifiers=db_row.get("source_ids") or [],
-                evidence=[f"baserow_media_row:{selected_row_id}"] + best_candidate.retrieval_reasons,
+                evidence=[f"baserow_media_row:{selected_row_id}", f"predicate:{rule_name}"] + matched_cand.retrieval_reasons,
+                baserow_read_at=snapshot.snapshot_at,
+                live_read_complete=is_live,
             )
 
-        elif best_candidate and best_candidate.score >= 30.0:
-            # Probable match (unconfirmed)
+        elif len(confirmed_candidates) > 1 or (not confirmed_candidates and multiple_plausible):
+            # Multiple candidates satisfy confirmed criteria or are equally plausible (R-002)
+            c1_id = confirmed_candidates[0][0].media_row_id if confirmed_candidates else candidates[0].media_row_id
+            c2_id = confirmed_candidates[1][0].media_row_id if len(confirmed_candidates) > 1 else candidates[1].media_row_id
+            decision = ReviewDecision.MULTIPLE_CANDIDATES
+            decision_state = f"Multiple plausible Media rows found ({c1_id}, {c2_id})"
+            diag_notes.append(f"Multiple plausible Baserow rows found ({len(candidates)} candidates)")
+            tool4_action = Tool4Action.NEEDS_REVIEW
+            routing.append("tool_3_travel_schedule_review")
+            review_required_now = False
+
+        elif has_material_conflict:
+            # Conflict with existing candidate (R-007)
+            cand_c = leading_candidate_with_conflict or candidates[0]
+            decision = ReviewDecision.CONFLICT_WITH_EXISTING
+            decision_state = f"Candidate Media row {cand_c.media_row_id} contradicts incoming evidence"
+            conflicts_out.extend(cand_c.conflicts)
+            diag_notes.append(f"Conflict with Baserow Media row {cand_c.media_row_id}: {'; '.join(cand_c.conflicts)}")
+            tool4_action = Tool4Action.NEEDS_REVIEW
+
+            # Check if this is an immediate human-review contradiction or resolvable by Tool 3
+            is_direct_identity_contradiction = bool(cand_c.identity_evidence)
+            conflict_fields = [
+                fld for fld, comp in cand_c.field_comparisons.items() if comp.state == FieldComparisonState.CONFLICT
+            ]
+            only_place_conflict = (conflict_fields == ["place"])
+
+            if is_direct_identity_contradiction or not only_place_conflict:
+                # Direct-identity contradiction or multi-field irreducible conflict: requires human review now
+                review_required_now = True
+                review_reasons.extend(cand_c.conflicts)
+            else:
+                # Location-only conflict on semantic candidate: route to Tool 3 without immediate human review
+                review_required_now = False
+                routing.append("tool_3_travel_schedule_review")
+                diag_notes.append("Location conflict routed to Tool 3 travel schedule review")
+
+        elif best_candidate and (
+            best_candidate.field_comparisons.get("date", FieldComparison(field_name="d", state=FieldComparisonState.NOT_COMPARABLE)).state == FieldComparisonState.AGREES
+            or best_candidate.field_comparisons.get("what", FieldComparison(field_name="w", state=FieldComparisonState.NOT_COMPARABLE)).state == FieldComparisonState.AGREES
+        ):
+            # Partial semantic match, unconfirmed
             decision = ReviewDecision.PROBABLE_EXISTING_MEDIA
-            decision_state = f"Probable association with Baserow Media row {best_candidate.media_row_id} (score {best_candidate.score:.1f})"
+            decision_state = f"Probable association with Baserow Media row {best_candidate.media_row_id}; unconfirmed"
             diag_notes.append(f"Probable association with Baserow Media row {best_candidate.media_row_id}; unconfirmed")
             tool4_action = Tool4Action.NO_WRITE
             routing.append("tool_3_travel_schedule_review")
+            review_required_now = False
 
         else:
             # No candidate found
-            # Check if input was discriminating
             is_discriminating = bool(local_date and (local_what or local_place))
-            if snapshot.state == "LIVE_COMPLETE" and is_discriminating:
+            if is_live and is_discriminating:
                 decision = ReviewDecision.NEW_MEDIA_CANDIDATE
                 decision_state = "No matching Media row found; input is discriminating"
                 diag_notes.append("Complete live database check: no matching Media row found (new media candidate)")
                 tool4_action = Tool4Action.CREATE_NEW
-            elif snapshot.state == "CACHED_STALE":
-                # Stale cache must NOT produce complete no-match!
+            elif not is_live:
                 decision = ReviewDecision.DATABASE_UNAVAILABLE
-                decision_state = "Database snapshot is stale; cannot confirm new media candidate"
-                diag_notes.append("Stale cache cannot confirm no-match / new media candidate")
+                decision_state = "Database is unavailable; cannot confirm media database association"
+                diag_notes.append("Baserow database unavailable; live read required")
                 tool4_action = Tool4Action.NO_WRITE
+                routing.append("tool_2_media_database_review")
             else:
                 decision = ReviewDecision.INSUFFICIENT_EVIDENCE
                 decision_state = "Input metadata is too sparse to evaluate media match"
                 diag_notes.append("Insufficient evidence to determine media database association")
                 tool4_action = Tool4Action.NO_WRITE
 
-        # Baserow check complete is true ONLY when a complete usable database review occurred
+        # Baserow check complete is true ONLY when a live check confirmed or ruled out
         baserow_check_complete = (
-            snapshot.state == "LIVE_COMPLETE"
+            is_live
             and decision in (ReviewDecision.EXISTING_MEDIA_MATCH, ReviewDecision.NEW_MEDIA_CANDIDATE)
+        )
+
+        # Determine review_required (non-automated/review needed overall) vs review_required_now (immediate human blocker)
+        review_required = (
+            decision in (
+                ReviewDecision.MULTIPLE_CANDIDATES,
+                ReviewDecision.CONFLICT_WITH_EXISTING,
+                ReviewDecision.PROBABLE_EXISTING_MEDIA,
+                ReviewDecision.DATABASE_UNAVAILABLE,
+            )
+            or review_required_now
         )
 
         return MediaDatabaseReviewResult(
             tracking_id=tracking_id,
             database_state=snapshot.state,
             database_snapshot_at=snapshot.snapshot_at,
+            baserow_read_at=snapshot.snapshot_at,
             snapshot_complete=snapshot.complete,
+            live_read_complete=is_live,
             baserow_check_complete=baserow_check_complete,
             decision=decision,
             decision_state=decision_state,
@@ -478,7 +699,8 @@ class MediaDatabaseReconciliationEngine:
             renamer_enrichment=renamer_enr,
             proposed_tool4_action=tool4_action,
             downstream_routing=routing,
-            review_required=bool(review_reasons),
+            review_required=review_required,
+            review_required_now=review_required_now,
             review_reasons=review_reasons,
             conflicts=conflicts_out,
             diagnostic_notes=diag_notes,

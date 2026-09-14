@@ -1,4 +1,4 @@
-"""Application service coordinating Tool 2 review, persistence, and Renamer integration."""
+from datetime import datetime, timezone
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -6,8 +6,14 @@ from typing import Any, Dict, List, Optional
 from ..renamer.models import EnrichmentEvidence, ParserResult
 from ..renamer.registry.registry import LocalRegistry
 from .baserow_provider import BaserowSnapshotProvider
-from .engine import MediaDatabaseReconciliationEngine
+from .engine import (
+    MediaDatabaseReconciliationEngine,
+    _compare_dates,
+    _compare_places,
+    _compare_what,
+)
 from .models import (
+    FieldComparisonState,
     MediaDatabaseReviewResult,
     RenamerEnrichment,
     ReviewDecision,
@@ -121,32 +127,71 @@ class MediaDatabaseReviewService:
             if not chosen_id:
                 raise ValueError("media_row_id is required to confirm existing candidate")
 
-            # Find chosen candidate in result.candidates or snapshot
-            candidate_row: Optional[Dict[str, Any]] = None
-            for c in result.candidates:
-                if c.media_row_id == chosen_id:
-                    candidate_row = c.normalized_row
-                    break
+            # Revalidate live state: fetch chosen row live directly from provider
+            live_row = None
+            if hasattr(self.provider, "fetch_media_row_live"):
+                try:
+                    res_row = self.provider.fetch_media_row_live(chosen_id)
+                    if isinstance(res_row, dict):
+                        live_row = res_row
+                    elif res_row is None:
+                        # Explicitly not found in live Baserow -> row was deleted
+                        raise RuntimeError(f"Media row ID {chosen_id} no longer exists in Baserow")
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(f"Live Baserow revalidation failed: {e}") from e
 
-            if not candidate_row:
-                snapshot = self.provider.load_snapshot()
-                for r in snapshot.media_rows:
-                    if r.get("id") == chosen_id:
-                        from .baserow_provider import normalize_media_row
-                        candidate_row = normalize_media_row(r)
-                        break
+            if not isinstance(live_row, dict) and hasattr(self.provider, "load_snapshot"):
+                try:
+                    snapshot = self.provider.load_snapshot()
+                    for r in getattr(snapshot, "media_rows", []):
+                        if r.get("id") == chosen_id:
+                            from .baserow_provider import normalize_media_row
+                            live_row = normalize_media_row(r)
+                            break
+                except Exception:
+                    pass
 
-            if not candidate_row:
-                raise ValueError(f"Media row ID {chosen_id} not found in candidates or snapshot")
+            if not live_row:
+                raise RuntimeError(f"Media row ID {chosen_id} no longer exists in Baserow")
 
+            # Recompute comparisons against current live row to detect collaborator races
+            local_date = result.selected_field_evidence.get("local_date")
+            local_what = result.selected_field_evidence.get("local_what")
+            local_place = result.selected_field_evidence.get("local_place")
+            local_country = result.selected_field_evidence.get("local_country")
+
+            d_st, d_det = _compare_dates(local_date, live_row.get("date"))
+            w_st, w_det = _compare_what(local_what, None, live_row.get("what"), live_row.get("title"), live_row.get("category"))
+            p_st, p_det = _compare_places(local_place, local_country, live_row.get("place"), live_row.get("country"))
+
+            live_conflicts = []
+            if d_st == FieldComparisonState.CONFLICT:
+                live_conflicts.append(d_det or "Date conflict with updated live row")
+            if w_st == FieldComparisonState.CONFLICT:
+                live_conflicts.append(w_det or "WHAT conflict with updated live row")
+            if p_st == FieldComparisonState.CONFLICT:
+                live_conflicts.append(p_det or "Place conflict with updated live row")
+
+            if live_conflicts:
+                raise ValueError(
+                    f"Cannot confirm Media row {chosen_id}: live row changed materially and now contradicts evidence: {'; '.join(live_conflicts)}"
+                )
+
+            now_str = datetime.now(timezone.utc).isoformat()
             result.decision = ReviewDecision.EXISTING_MEDIA_MATCH
             result.selected_media_row_id = chosen_id
             result.decision_state = f"Human confirmed association with Media row {chosen_id}"
             result.review_required = False
+            result.review_required_now = False
             result.review_reasons = []
+            result.database_state = "LIVE_CURRENT"
+            result.baserow_read_at = now_str
+            result.database_snapshot_at = now_str
+            result.live_read_complete = True
 
-            title_full = candidate_row.get("title") or ""
-            local_what = result.selected_field_evidence.get("local_what")
+            title_full = live_row.get("title") or ""
             what_val = None
             if title_full and local_what:
                 what_val = f"{local_what}-{title_full}"
@@ -156,33 +201,74 @@ class MediaDatabaseReviewService:
                 what_val = local_what
 
             where_val = None
-            if candidate_row.get("place"):
-                where_val = f"{candidate_row['place']}-{candidate_row.get('country') or ''}".strip("-")
+            if live_row.get("place"):
+                where_val = f"{live_row['place']}-{live_row.get('country') or ''}".strip("-")
 
             result.renamer_enrichment = RenamerEnrichment(
                 confirmed=True,
                 media_row_id=chosen_id,
-                when_val=candidate_row.get("date") or result.selected_field_evidence.get("local_date"),
+                when_val=live_row.get("date") or local_date,
                 what_val=what_val,
                 title_full=title_full,
                 where_val=where_val,
-                category=candidate_row.get("category"),
-                source_identifiers=candidate_row.get("source_ids") or [],
-                evidence=[f"human_confirmed_media_row:{chosen_id}", f"reviewer:{reviewer}"],
+                category=live_row.get("category"),
+                source_identifiers=live_row.get("source_ids") or [],
+                evidence=[f"human_confirmed_media_row:{chosen_id}", f"reviewer:{reviewer}", f"live_revalidated:{now_str}"],
+                baserow_read_at=now_str,
+                live_read_complete=True,
             )
             result.proposed_tool4_action = Tool4Action.ENRICH_EXISTING
             result.baserow_check_complete = True
             changes["selected_media_row_id"] = chosen_id
 
         elif action == "confirm_new":
+            # Revalidate live state before finalizing new media candidate
+            local_date = result.selected_field_evidence.get("local_date")
+            local_what = result.selected_field_evidence.get("local_what")
+            if not local_date or not local_what:
+                prop = self.registry.get_proposal(tracking_id)
+                if prop and prop.parser_result:
+                    p = prop.parser_result
+                    local_date = local_date or (p.when.selected_value if p.when else None)
+                    local_what = local_what or (p.what.selected_value if p.what else None)
+
+            if hasattr(self.provider, "search_media_candidates_live"):
+                try:
+                    fresh_candidates = self.provider.search_media_candidates_live(query_text=local_what or local_date or "")
+                    if isinstance(fresh_candidates, list):
+                        for cand in fresh_candidates:
+                            if isinstance(cand, dict):
+                                c_date = cand.get("date") or cand.get("Date")
+                                c_what = cand.get("what") or cand.get("What")
+                                c_title = cand.get("title") or cand.get("Title")
+                                if (local_date and c_date == local_date) and (
+                                    (local_what and c_what == local_what)
+                                    or (local_what and c_title and local_what in c_title)
+                                ):
+                                    raise RuntimeError(
+                                        f"Cannot confirm new media candidate: live search discovered matching row {cand.get('id')}"
+                                    )
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"Error checking live candidates on confirm_new: {e}")
+
+            now_str = datetime.now(timezone.utc).isoformat()
             result.decision = ReviewDecision.NEW_MEDIA_CANDIDATE
             result.selected_media_row_id = None
             result.decision_state = f"Human confirmed new media candidate (confirmed by {reviewer})"
             result.review_required = False
+            result.review_required_now = False
             result.review_reasons = []
+            result.database_state = "LIVE_CURRENT"
+            result.baserow_read_at = now_str
+            result.database_snapshot_at = now_str
+            result.live_read_complete = True
             result.renamer_enrichment = RenamerEnrichment(
                 confirmed=False,
-                evidence=[f"human_confirmed_new_media:{tracking_id}", f"reviewer:{reviewer}"],
+                evidence=[f"human_confirmed_new_media:{tracking_id}", f"reviewer:{reviewer}", f"live_revalidated:{now_str}"],
+                baserow_read_at=now_str,
+                live_read_complete=True,
             )
             result.proposed_tool4_action = Tool4Action.CREATE_NEW
             result.baserow_check_complete = True
@@ -234,6 +320,7 @@ class MediaDatabaseReviewService:
         evidence = None
         if review_res.renamer_enrichment.confirmed:
             enr = review_res.renamer_enrichment
+            read_at_info = f" (live read at {enr.baserow_read_at})" if enr.baserow_read_at else ""
             evidence = EnrichmentEvidence(
                 tracking_id=tracking_id,
                 when_val=enr.when_val,
@@ -242,7 +329,7 @@ class MediaDatabaseReviewService:
                 what_category=enr.category,
                 baserow_check_complete=True,
                 source_tool="tool_2_media_database_review",
-                details=f"Confirmed Baserow Media row {enr.media_row_id}",
+                details=f"Confirmed Baserow Media row {enr.media_row_id}{read_at_info}",
             )
         elif review_res.baserow_check_complete:
             # Complete no-match still marks baserow_check_complete=True
@@ -259,3 +346,34 @@ class MediaDatabaseReviewService:
             return service.apply_enrichment(evidence)
 
         return None
+
+    def confirm_existing(
+        self,
+        tracking_id: str,
+        media_row_id: Optional[int] = None,
+        notes: str = "",
+        reviewer: str = "human",
+    ) -> MediaDatabaseReviewResult:
+        """Convenience method to confirm association with existing media row."""
+        return self.apply_human_decision(
+            tracking_id=tracking_id,
+            action="confirm_existing",
+            media_row_id=media_row_id,
+            notes=notes,
+            reviewer=reviewer,
+        )
+
+    def confirm_new(
+        self,
+        tracking_id: str,
+        notes: str = "",
+        reviewer: str = "human",
+    ) -> MediaDatabaseReviewResult:
+        """Convenience method to confirm item as new media candidate."""
+        return self.apply_human_decision(
+            tracking_id=tracking_id,
+            action="confirm_new",
+            notes=notes,
+            reviewer=reviewer,
+        )
+

@@ -71,14 +71,18 @@ class RenamerEnrichment(BaseModel):
     category: Optional[str] = None
     source_identifiers: List[str] = Field(default_factory=list)
     evidence: List[str] = Field(default_factory=list)
+    baserow_read_at: Optional[str] = None
+    live_read_complete: bool = False
 
 
 class MediaDatabaseReviewResult(BaseModel):
     """Comprehensive, typed, serializable result of Tool 2 review for one media item."""
     tracking_id: str
-    database_state: str = "UNAVAILABLE"  # LIVE_COMPLETE, CACHED_STALE, UNAVAILABLE
+    database_state: str = "DATABASE_UNAVAILABLE"  # LIVE_CURRENT, LIVE_PARTIAL_OR_FAILED, DATABASE_UNAVAILABLE
     database_snapshot_at: str = ""
+    baserow_read_at: str = ""
     snapshot_complete: bool = False
+    live_read_complete: bool = False
     baserow_check_complete: bool = False
 
     decision: ReviewDecision = ReviewDecision.DATABASE_UNAVAILABLE
@@ -92,6 +96,7 @@ class MediaDatabaseReviewResult(BaseModel):
 
     downstream_routing: List[str] = Field(default_factory=list)
     review_required: bool = False
+    review_required_now: bool = False
     review_reasons: List[str] = Field(default_factory=list)
     conflicts: List[str] = Field(default_factory=list)
     diagnostic_notes: List[str] = Field(default_factory=list)
@@ -99,9 +104,9 @@ class MediaDatabaseReviewResult(BaseModel):
 
 
 class BaserowSnapshot(BaseModel):
-    """Serializable snapshot of relevant Baserow tables."""
+    """Serializable snapshot/response of relevant Baserow tables for audit or testing."""
     snapshot_at: str
-    state: str  # LIVE_COMPLETE, CACHED_STALE, UNAVAILABLE
+    state: str  # LIVE_CURRENT, LIVE_PARTIAL_OR_FAILED, DATABASE_UNAVAILABLE
     complete: bool
     media_rows: List[Dict[str, Any]] = Field(default_factory=list)
     category_title_rows: List[Dict[str, Any]] = Field(default_factory=list)
