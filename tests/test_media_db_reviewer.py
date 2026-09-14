@@ -1145,7 +1145,13 @@ def test_31_portal_media_db_endpoints(tmp_path):
         review_required=False,
     )
 
-    configure_review_context(registry_path=reg_db)
+    fake_provider = BaserowSnapshotProvider(
+        api_url="https://api.baserow.io",
+        api_token="test_mock_token",
+        media_table_id="100",
+        snapshot_path=tmp_path / "mock_snapshot.json",
+    )
+    configure_review_context(registry_path=reg_db, media_db_provider=fake_provider)
     client = TestClient(app)
 
     # GET file detail - should display Tool 2 card
@@ -1181,6 +1187,15 @@ def test_31_portal_media_db_endpoints(tmp_path):
         )
         assert resp2.status_code == 200
         assert "Tool 2 — Baserow Media Database Reconciliation" in resp2.text
+
+    updated_rev = registry.get_media_db_review("portal01")
+    assert updated_rev is not None
+    assert updated_rev["decision"] == ReviewDecision.EXISTING_MEDIA_MATCH.value
+    assert updated_rev["selected_media_row_id"] == 501
+    enrichment = updated_rev["result"]["renamer_enrichment"]
+    assert enrichment["confirmed"] is True
+    assert enrichment["title_full"] == "Love in the Spiritual World"
+    assert enrichment["live_read_complete"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1516,4 +1531,110 @@ def test_39_renamer_enrichment_carries_live_provenance():
     assert enrichment.media_row_id == 71
     assert enrichment.baserow_read_at == "2026-09-14T10:00:00Z"
     assert enrichment.live_read_complete is True
+
+
+# ---------------------------------------------------------------------------
+# Test 40: Portal media DB action fails without live provider in production (R-010)
+# ---------------------------------------------------------------------------
+def test_40_portal_media_db_action_fails_without_live_provider_in_production(tmp_path, monkeypatch):
+    """Proves that when Baserow credentials are absent in production, live authority prevents false confirmation."""
+    from fastapi.testclient import TestClient
+    from media_archive_tooling.review_portal.app import app, configure_review_context
+    from media_archive_tooling.config import AppConfig
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    parser_res = make_parser_result(
+        tracking_id="noprov01",
+        orig_filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
+    )
+    prop = RenameProposal(
+        tracking_id="noprov01",
+        original_path="/archive/sample.mp3",
+        current_filename="sample.mp3",
+        proposed_filename="sample_ID-noprov01.mp3",
+        proposed_path="/archive/sample_ID-noprov01.mp3",
+        mode=RenameMode.INITIAL,
+        parser_result=parser_res,
+    )
+    registry.save_proposal(prop)
+
+    # Configure portal without any injected provider/service
+    configure_review_context(registry_path=reg_db, media_db_service=None, media_db_provider=None)
+
+    # Ensure environment has no Baserow credentials
+    monkeypatch.delenv("BASEROW_API_TOKEN", raising=False)
+    monkeypatch.delenv("BASEROW_MEDIA_TABLE_ID", raising=False)
+
+    with patch("media_archive_tooling.review_portal.app.load_config", return_value=AppConfig()):
+        client = TestClient(app)
+        resp = client.post(
+            "/file/noprov01/media-db-action",
+            data={
+                "action": "confirm_existing",
+                "media_row_id": "501",
+                "notes": "Attempt in unconfigured env",
+                "reviewer": "web_operator",
+            },
+        )
+        assert resp.status_code == 400
+        assert "no longer exists in Baserow" in resp.json().get("detail", "")
+
+
+# ---------------------------------------------------------------------------
+# Test 41: Portal media DB action supports injected service (R-010)
+# ---------------------------------------------------------------------------
+def test_41_portal_media_db_action_supports_injected_service(tmp_path):
+    """Proves that custom media_db_service can be directly injected into review portal context."""
+    from fastapi.testclient import TestClient
+    from media_archive_tooling.review_portal.app import app, configure_review_context
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    parser_res = make_parser_result(
+        tracking_id="servinj01",
+        orig_filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
+        date_val="2014-08-04",
+        what_val="BG-01-18",
+        place="Leipzig",
+    )
+    prop = RenameProposal(
+        tracking_id="servinj01",
+        original_path="/archive/sample.mp3",
+        current_filename="sample.mp3",
+        proposed_filename="sample_ID-servinj01.mp3",
+        proposed_path="/archive/sample_ID-servinj01.mp3",
+        mode=RenameMode.INITIAL,
+        parser_result=parser_res,
+    )
+    registry.save_proposal(prop)
+
+    mock_service = MagicMock()
+    configure_review_context(registry_path=reg_db, media_db_service=mock_service)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/file/servinj01/media-db-action",
+        data={
+            "action": "confirm_new",
+            "notes": "Confirmed via injected service",
+            "reviewer": "web_operator",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    mock_service.apply_human_decision.assert_called_once_with(
+        tracking_id="servinj01",
+        action="confirm_new",
+        media_row_id=None,
+        notes="Confirmed via injected service",
+        reviewer="review_portal",
+    )
+    mock_service.apply_enrichment_to_renamer.assert_called_once_with("servinj01")
+
 

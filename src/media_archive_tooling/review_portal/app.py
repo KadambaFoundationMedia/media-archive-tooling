@@ -1,7 +1,7 @@
 """Localhost FastAPI review portal application."""
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -29,20 +29,26 @@ if STATIC_DIR.exists():
 _service: Optional[RenamerApplicationService] = None
 _commit_service: Optional[RenameCommitService] = None
 _review_root: Optional[Path] = None
+_media_db_service: Optional[Any] = None
+_media_db_provider: Optional[Any] = None
 
 
 def configure_review_context(
     registry_path: Optional[Path] = None,
     review_root: Optional[Path] = None,
+    media_db_service: Optional[Any] = None,
+    media_db_provider: Optional[Any] = None,
 ) -> None:
     """Configure the portal to use the same local review registry/root as the scan."""
-    global _service, _commit_service, _review_root
+    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider
     config = load_config()
     selected_registry = Path(registry_path) if registry_path else config.registry_path
     registry = LocalRegistry(selected_registry)
     _service = RenamerApplicationService(registry=registry)
     _commit_service = RenameCommitService(registry=registry)
     _review_root = Path(review_root).expanduser().resolve() if review_root else None
+    _media_db_service = media_db_service
+    _media_db_provider = media_db_provider
 
 
 def get_service() -> RenamerApplicationService:
@@ -62,6 +68,30 @@ def get_commit_service() -> RenameCommitService:
 
 def get_registry() -> LocalRegistry:
     return get_service().registry
+
+
+def get_media_db_service() -> Any:
+    """Return configured MediaDatabaseReviewService with support for test dependency injection."""
+    global _media_db_service
+    if _media_db_service is not None:
+        return _media_db_service
+
+    from ..media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+    from ..media_db_reviewer.service import MediaDatabaseReviewService
+
+    config = load_config()
+    registry = get_registry()
+    provider = _media_db_provider
+    if provider is None:
+        provider = BaserowSnapshotProvider(
+            api_url=config.baserow_api_url,
+            api_token=config.baserow_api_token,
+            media_table_id=config.baserow_media_table_id,
+            category_table_id=config.baserow_category_table_id,
+            travel_schedule_table_id=config.baserow_travel_schedule_table_id,
+            snapshot_path=config.baserow_snapshot_path,
+        )
+    return MediaDatabaseReviewService(registry=registry, provider=provider)
 
 
 def _dashboard_record(record: dict) -> dict:
@@ -125,20 +155,7 @@ def media_db_action(
     media_row_id: Optional[int] = Form(None),
     notes: str = Form(""),
 ):
-    from ..media_db_reviewer.baserow_provider import BaserowSnapshotProvider
-    from ..media_db_reviewer.service import MediaDatabaseReviewService
-
-    config = load_config()
-    registry = get_registry()
-    provider = BaserowSnapshotProvider(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-        category_table_id=config.baserow_category_table_id,
-        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
-        snapshot_path=config.baserow_snapshot_path,
-    )
-    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    service = get_media_db_service()
     try:
         service.apply_human_decision(
             tracking_id=tracking_id,
