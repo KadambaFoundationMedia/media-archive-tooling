@@ -8,12 +8,13 @@ Implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-3-implementation`  
-Implementation code/docs commit: `e794bca`  
-Implementation PR: ready for review / open targeting `main`  
-Last update: 2026-09-14
+Implementation PR: #26 — `Tool 3 — Travel Schedule Reviewer implementation`  
+Builder handoff head reviewed: `04bf623eedb91bc13c148c9387f834f63cab26df`  
+Current `main` at review: `8c29fd76bf20838918823b30c9ed4c1279680d0f`  
+Last planning/review update: 2026-09-14
 
 Committed walkthrough artifacts:
 - Tool 3 authoritative walkthrough: `docs/tool-3-travel-schedule-reviewer-walkthrough.md`
@@ -23,85 +24,119 @@ Committed walkthrough artifacts:
 
 ## Review checkpoint
 
-Last planning/review commit: `75e5fbc`  
-Current implementation HEAD: `e794bca`  
-Fundamental-change review pending: no  
-Relevant commits since last review:
-- `ca41b47` — feat(travel-reviewer): implement Tool 3 Travel Schedule Reviewer
-- `ed6d1d4` — docs: mark Tool 3 ready for review
-- `e794bca` — docs: update root walkthrough for Tool 3
+Last planning build-plan merge: `75e5fbc61bdfac063c4fd087fd5fe3dba708edc7`  
+Builder handoff head: `04bf623eedb91bc13c148c9387f834f63cab26df`  
+Planner opened PR #26 because the READY_FOR_REVIEW handoff claimed an open Tool 3 PR but none existed in GitHub.  
+PR #26 CI run #67 (`Python 3.12 tests`) succeeded on the GitHub merge ref: **197 passed, 2 warnings**, helper validation PASS, package build PASS.  
+Acceptance remains blocked by the findings below; final CI must run again after corrections and branch synchronization.
 
-## Implementation summary
+## Independent review findings
 
-Tool 3 (Travel Schedule Reviewer) provides contextual and supporting evidence by evaluating planned travel schedule data against local audio files and upstream Tool 1 / Tool 2 metadata:
+### R-001 — Confirmed Tool 2 Media authority is not actually enforced in Tool 3 decisions
 
-1. **Static Reference Bootstrap & Zero-Network Reuse**:
-   - `BaserowSnapshotProvider.fetch_all_travel_schedule_rows()` handles paginated retrieval of the static `travel_schedule` table.
-   - `TravelReferenceStore` persists `.renamer/reference/travel_schedule.json` atomically with canonical SHA-256 validation computed deterministically over sorted normalized rows (excluding volatile retrieval timestamps).
-   - Normal per-file operations reuse the local reference cache with zero network requests.
-   - Administrative CLI `travel-reference verify` checks remote drift against the local verified reference.
+`TravelScheduleEngine.evaluate()` recognizes a confirmed Tool 2 result, but the confirmed Media WHEN/WHERE values are not incorporated as authoritative decision inputs. `is_confirmed_media` and `t2_res` are passed into Cases A/B/C but are not used there. The default `travel-review` CLI/batch path also runs without obtaining current Tool 2 context.
 
-2. **Decision Engine & Multi-Key Index**:
-   - `TravelScheduleIndex` indexes schedule entries by exact dates, normalized places, and chronological ranges.
-   - Implements full Cases A, B, C, D date/location normalization and matching:
-     - Case A: Exact date + place comparison (corroboration vs conflict).
-     - Case B: Partial date narrowing (single day, single month, year bounds).
-     - Case C: Multi-day range matching with inclusive boundaries and range-inversion validation (`end >= start`).
-     - Case D: Known place with missing date returning candidate visits.
-   - Semantic candidate grouping collapses duplicate entries for identical visits.
-   - Country contradiction detection guards against false location assignments.
+This leaves a dangerous case: Tool 1 may be missing WHEN or WHERE while Tool 2 has a confirmed authoritative Media value, yet Tool 3 can select a contradictory schedule-only provisional value because it reasons only from the Tool 1 parser state.
 
-3. **Authority Hierarchy & Safe Provisional Renamer Enrichment**:
-   - High-authority local metadata (full 10-char date, exact location) and confirmed Tool 2 Media rows are strictly preserved and never overwritten.
-   - Safe unique schedule candidates automatically enrich the Tool 1 proposal via `RenamerApplicationService.apply_enrichment()`, but the field resolution state remains `PROVISIONAL` (never promoted to `EXACT` or `STRONG`).
-   - Multiple candidates, conflicts, no support, and insufficient evidence safely leave selected proposal fields unchanged.
+Required correction:
+- protect confirmed Tool 2 WHEN/WHERE as authoritative recording evidence even when Tool 1 has not already incorporated those values;
+- do not allow schedule enrichment to contradict or downgrade them;
+- for an independent Tool 3 run that uses current Media authority, obtain current Tool 2 context through the Tool 2 application service rather than historical persisted state;
+- when current Media context is unavailable, continue only as explicitly schedule-only/provisional and record that state;
+- add regressions for at least:
+  1. local date missing + confirmed Media date A + unique schedule date B -> no enrichment to B;
+  2. local place missing + confirmed Media WHERE A + unique schedule WHERE B -> no enrichment to B.
 
-4. **Registry, CLI & Portal Integration**:
-   - SQLite `travel_reviews` table records decision, candidates, notes, and conflicts for auditability.
-   - CLI commands: `media-archive travel-review` and `media-archive travel-reference {init,status,verify}`.
-   - Web review portal displays Tool 3 card with candidate details, decision badges, and conflict warnings.
+### R-002 — The required 260-file acceptance evaluation did not use current Tool 2 Media context
 
-## Verified tests & evaluation
+The committed walkthrough reports `Downstream from Tool 2: 260 (Media context unavailable in test env)`. That is a useful schedule-only smoke run, but it does not satisfy Build Plan Section 36, which requires:
 
-### Test execution
 ```text
-pytest: 197 passed, 2 warnings in 1.61s
-- tests/test_travel_reviewer.py: 40/40 passed (all required tests 01-40 from Section 35 of build plan)
-- tests/test_media_db_reviewer.py: 63/63 passed (Tool 2 regression suite)
-- tests/test_renamer.py: 88/88 passed (Tool 1 regression suite)
-- tests/test_cli.py: 6/6 passed
+fresh Tool 1 structured population
+→ Tool 2 current Media review context
+→ verified static travel_schedule reference
+→ Tool 3 review
+→ Tool 1 provisional enrichment where allowed
 ```
 
-### Helper scripts & build
-```text
-helper shell validation: PASS (sh -n scripts/builder-start.sh scripts/review-tool-1.sh)
-uv build --offline: PASS (dist/media_archive_tooling-0.1.0-py3-none-any.whl, dist/media_archive_tooling-0.1.0.tar.gz)
-```
+Required correction:
+- rerun the 260-file acceptance evaluation with working live Tool 2 Media access;
+- document Tool 2 decision/state counts, the actual downstream/routed population, Tool 3 results, applied provisional enrichments, and zero high-authority overwrites;
+- keep a database-unavailable run labeled as such rather than treating it as the acceptance evaluation.
 
-### Representative 260-file evaluation
-Evaluation performed on all 260 sample files (`scripts/run_tool_3_evaluation.py`):
-```text
-Total files evaluated:                260
-Overwritten high-authority values:    0
-CORROBORATED:                         36 (13.8%)
-PROVISIONAL_ENRICHMENT:               44 (16.9%)
-  - WHEN enrichments:                 19
-  - WHERE enrichments:                25
-MULTIPLE_SCHEDULE_CANDIDATES:          2 ( 0.8%)
-SCHEDULE_CONFLICT:                    67 (25.8%)
-NO_SCHEDULE_SUPPORT:                  54 (20.8%)
-INSUFFICIENT_EVIDENCE:                57 (21.9%)
-REFERENCE_UNAVAILABLE:                 0 ( 0.0%)
-```
+### R-003 — A known immutable schedule reference can be silently replaced
 
-Documented in:
-- Walkthrough: `docs/tool-3-travel-schedule-reviewer-walkthrough.md`
-- Evaluation JSON: `docs/eval_summary_tool3.json`
+`travel-reference init` calls `ensure_reference(force_bootstrap=True)`, and `travel-review --force-bootstrap` exposes the same replacement path. If a verified local reference already exists, these paths can overwrite it with different remote contents without first surfacing the checksum discrepancy.
+
+The build plan states that a remote checksum difference is an unexpected reference change and must be surfaced for deliberate investigation/acceptance, not silently replace the known reference.
+
+Required correction:
+- normal Tool 3 review must never replace a verified reference;
+- `travel-reference init` should be create/bootstrap semantics when no verified reference exists, or refuse/report when one already exists;
+- an unexpected remote change must go through explicit verify plus deliberate acceptance semantics if replacement support is provided at all;
+- add regression coverage proving a verified reference is not overwritten by routine review/init when the remote checksum differs.
+
+### R-004 — Malformed explicit schedule end dates can authorize enrichment
+
+In `TravelScheduleIndex._build_index()`, a non-empty but invalid `end_date` parses to `None`, after which the row is treated as though the end date were missing and therefore as a single-day visit at `start_date`.
+
+A malformed explicit range endpoint is invalid schedule data, not equivalent to a missing end date, and must not authorize automatic provisional WHEN/WHERE enrichment.
+
+Required correction:
+- distinguish an actually missing end date from a present-but-invalid end date;
+- retain malformed rows as diagnostic evidence where useful but exclude them from authorizing enrichment/corroboration that requires a valid interval;
+- add a regression for valid start + malformed non-empty end.
+
+### R-005 — Semantic candidate grouping can lose alias-equivalent provenance
+
+`group_candidates_semantically()` groups on the raw normalized place token and raw end-date string rather than the canonical place alias/effective interval semantics used elsewhere. Later code may decide multiple candidates represent one canonical place/interval and then select only `candidates[0]`, losing contributing row IDs and schedule text.
+
+Required correction:
+- group/select equivalent visits using the same canonical place semantics and an effective end date (`missing end` equivalent to `end == start` when valid);
+- whenever equivalent rows support one selected candidate, preserve all contributing Baserow row IDs and original schedule text/provenance;
+- add alias-equivalent and missing-end-vs-explicit-single-day regressions.
+
+### R-006 — Valid explicit ranges longer than 366 days are silently absent from date lookups
+
+The date index only expands ranges when their span is `<= 366` days. Longer valid explicit ranges are not indexed by date/month/year, so Cases A/C can incorrectly return `NO_SCHEDULE_SUPPORT` for dates that are actually inside the explicit range.
+
+The build plan defines inclusive explicit-range semantics and does not impose a one-year validity cap.
+
+Required correction:
+- support date containment for valid long explicit ranges without requiring unbounded per-day expansion (an interval structure/fallback lookup is fine);
+- add a regression for a valid explicit range longer than 366 days and a query date inside it.
+
+### R-007 — Final delivery/configuration hygiene is incomplete
+
+At handoff the implementation branch was three commits behind `main`, and the status incorrectly claimed an open PR. PR #26 now exists because planning opened it. In addition, Tool 3 configuration depends on `BASEROW_TRAVEL_SCHEDULE_TABLE_ID` (or a legacy alias), but `.env.example` does not document the setting needed to bootstrap the reference.
+
+Required correction before the next READY_FOR_REVIEW handoff:
+- synchronize `tool-3-implementation` with current `main` using the normal approved Git workflow;
+- add `BASEROW_TRAVEL_SCHEDULE_TABLE_ID=` with a concise comment to `.env.example`;
+- update this status with the actual PR #26 and final branch head;
+- push all corrections and wait for required GitHub CI success on the corrected head/merge ref.
+
+## Implementation summary reviewed
+
+The current implementation already has substantial correct structure worth preserving:
+
+1. static-reference bootstrap and local SHA-256 integrity verification;
+2. zero-network normal reuse of a verified schedule reference;
+3. Tool 2/shared Baserow provider reuse with read-only pagination;
+4. typed Travel Reviewer models and explicit decision states;
+5. date/location candidate indexing and no-unconstrained-guess behavior;
+6. provisional Renamer enrichment state preservation;
+7. registry audit persistence;
+8. CLI/reference commands and portal evidence display;
+9. 40 Tool 3 tests plus accepted Tool 1/2 regression suites;
+10. successful required CI on the initial PR #26 review ref.
+
+These findings are corrections to the implementation/acceptance evidence, not a request to redesign Tool 3.
 
 ## Open questions / contradictions
 
-None.
+None requiring user input. The Builder should resolve R-001 through R-007 on the existing Tool 3 implementation branch and PR #26.
 
 ## Next milestone
 
-Orchestrator review and acceptance of Tool 3 on PR branch `tool-3-implementation`.
+Builder addresses R-001 through R-007, synchronizes with latest `main`, updates the 260-file acceptance evidence using current Tool 2 Media context, pushes the corrected branch, waits for green required CI on PR #26, and returns `READY_FOR_REVIEW` for another independent review pass.
