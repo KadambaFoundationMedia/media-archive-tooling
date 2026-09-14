@@ -9,63 +9,90 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
-Builder handoff head: `0b349b998501b4f430c984e2b88f0247c0152fc8`  
+Builder handoff head reviewed: `1ecb95c461c1391256acc8deb6562f0f4ff025a8`  
+Primary correction commit reviewed: `0b349b998501b4f430c984e2b88f0247c0152fc8`  
 Last planning/review update: 2026-09-14
 
-All blocking findings (R-001, R-004, R-011) have been addressed and verified with targeted regressions (tests 42–46). Full test suite passes with **140 passed, 2 warnings**, helper scripts validate cleanly, and package build succeeds. Fresh 260-file live evaluation was executed against production Baserow.
+GitHub CI run #45 on the handoff head passed the required `Python 3.12 tests` job with **140 passed, 2 warnings**, helper-script validation, and package-build success. The branch is current with `main` (`behind_by=0`) and PR #19 is mergeable.
+
+The latest Builder corrections successfully remove session-wide snapshot reuse, tighten scripture range identity, and distinguish explicit row absence from Baserow unavailability. Acceptance is still blocked by two deeper correctness findings found during independent review.
 
 ## Review checkpoint
 
-The branch is current with `main` and PR #19 is ready for orchestrator review.
+Planning/review inspected the actual correction commit, current provider/service/engine code, new tests 42–46, fresh live-evaluation report, branch divergence, and GitHub CI rather than relying on the Builder summary.
 
-### Resolved findings summary for this checkpoint
+### Corrections verified from the previous round
 
-- **R-001 (Live-current Baserow policy fully implemented)**:
-  - Removed operational `_current_snapshot` caching from `BaserowSnapshotProvider`.
-  - Implemented per-decision targeted live querying in `load_snapshot(parser_result=...)` via `_fetch_targeted_media_rows()`.
-  - `review_file()` and `review_batch()` now execute per-decision live queries; no batch-wide or session-wide full-table snapshot is reused across independent decisions.
-  - Added regression `test_42` (sequential reviews see live collaborator additions) and `test_43` (batch review queries live per item and sees updates).
-
-- **R-004 (Scripture comparison canonical identity and strict grammar)**:
-  - Enforced Tool 1 scripture grammar via `SB_REGEX`, `BG_REGEX`, `CC_REGEX`.
-  - Rejected malformed dotted extra numeric components (`BG 13.8.12` -> `None`) and descending ranges (`BG 1.12-8` -> `None`).
-  - In `_compare_what()`, exact canonical scripture identity (`lv1 == dv1 and lv2 == dv2`) is required for `FieldComparisonState.AGREES`. Overlapping but non-identical verse ranges (`BG 1.1-3` vs `BG 1.3-5`, `BG-01-01-02` vs `BG-01-01`) return `FieldComparisonState.CONFLICT` with detail explaining partial verse overlap does not establish identity.
-  - Candidate retrieval retains partial verse overlap in reasons with partial score (15.0) for human inspection/routing without setting `what_match=True`, preventing Rule 2/Rule 3 auto-confirmation.
-  - Updated `test_35` and added regression `test_44`.
-
-- **R-011 (Live revalidation distinguishes database failure from row absence and guards confirm_new)**:
-  - Defined `BaserowUnavailableError(RuntimeError)`.
-  - `fetch_media_row_live(row_id)` raises `BaserowUnavailableError` on missing credentials, HTTP errors (non-200/non-404), or network timeouts; returns `None` ONLY on explicit HTTP 404.
-  - `apply_human_decision("confirm_existing")` raises `RuntimeError("Media row ID {id} no longer exists in Baserow")` exclusively on explicit 404, and raises `RuntimeError("Cannot confirm Media row {id}: live database is unavailable: ...")` on `BaserowUnavailableError`.
-  - `search_media_candidates_live()` raises `BaserowUnavailableError` on missing credentials or HTTP/transport failure.
-  - `apply_human_decision("confirm_new")` requires a successful complete live search; on `BaserowUnavailableError`, it raises `RuntimeError("Cannot confirm new media candidate: live database search is unavailable: ...")` and refuses to finalize `NEW_MEDIA_CANDIDATE`.
-  - Updated portal test `test_40` and added regressions `test_45` (`confirm_new` failure guard) and `test_46` (explicit 404 vs unavailable distinction).
+- **R-001 freshness core fixed:** `_current_snapshot` operational reuse is removed and `review_batch()` now requests live state per file/decision.
+- **R-004 scripture range core fixed:** exact canonical scripture identity is required for `AGREES`; overlapping-but-different ranges no longer auto-match; dotted extra numeric and descending ranges are rejected.
+- **R-011 availability-state core fixed:** missing credentials/HTTP/transport failures raise unavailable semantics; explicit HTTP 404 alone means a row is absent; `confirm_new` no longer treats transport failure as an empty successful search.
+- **R-009/R-010 CI isolation remains healthy:** credential-free GitHub Actions now passes.
 
 ## Active review findings
 
-None. All review findings R-001 through R-011 are resolved.
+### R-002 — Automatic-association predicates are explicit but still too permissive
+
+Status: **REOPENED — BLOCKING / false-association risk**
+
+The build plan permits automatic `EXISTING_MEDIA_MATCH` only from unique **high-specificity exact evidence** with no material contradiction. The current predicates use broad comparison state `AGREES`, which also represents compatibility/fuzzy evidence rather than exact identity.
+
+Current problems:
+
+- `_compare_dates()` returns `AGREES` for compatible partial dates such as `2015-02-DD` vs `2015-02-15`; Rule 2/Rule 3 then treat this as the required exact full WHEN.
+- `_compare_places()` returns `AGREES` for substring/fuzzy location similarity; Rule 2 then treats this as exact normalized WHERE.
+- Rule 2/Rule 3 do not explicitly require a sufficiently specific WHAT; a generic WHAT that happens to compare as `AGREES` can participate in automatic association.
+- Rule 3 currently treats **any non-empty database title** as corroboration (`bool(title)`), even if the title provides no independent agreement with the local evidence. Mere field presence is not corroboration.
+
+Required correction:
+
+- automatic predicates must distinguish **exact/high-specificity evidence** from compatible/fuzzy/supporting evidence;
+- Rule 2 requires exact full date + specific WHAT + exact normalized place/country;
+- Rule 3 requires exact full date + specific WHAT + a genuinely matching independent corroborating field/reference, not merely a populated title/category field;
+- compatible partial dates, fuzzy/substring locations, generic WHAT, and unrelated title presence may support ranking/probable state but must never authorize automatic `EXISTING_MEDIA_MATCH`;
+- add negative regressions for partial-date agreement, fuzzy-place agreement, generic WHAT, and unrelated non-empty title; add positive regressions for genuinely corroborated Rule 3 evidence.
+
+### R-012 — Targeted live candidate search is not completeness-preserving and can produce false `NEW_MEDIA_CANDIDATE`
+
+Status: **OPEN — BLOCKING / duplicate-row risk**
+
+The live-data amendment allows targeted querying only if the current decision is still based on a **complete live search of the relevant candidate space**. The current targeted provider and `confirm_new` revalidation can miss existing rows and then incorrectly conclude that the item is new.
+
+Current problems:
+
+- `_fetch_targeted_media_rows()` requests `size=100` for each Baserow `search=` query but does not follow the returned `next` pagination URL. A matching row on page 2+ is invisible.
+- `search_media_candidates_live()` also returns only the first `size=100` page and does not paginate.
+- `confirm_new` performs a fresh search using only `local_what or local_date`; when WHAT exists it does not rerun the full candidate strategy (date/source/file/location context). An existing row discoverable by date/place or another candidate route can therefore be missed.
+- for partial dates ending in `DD`, `_fetch_targeted_media_rows()` deliberately skips the date query and does not add a place query. A partial-date + place input can still be treated by the engine as discriminating enough for `NEW_MEDIA_CANDIDATE`, even though the live candidate search may not have searched the discriminating place/date evidence.
+- `load_snapshot()` can mark a snapshot `LIVE_CURRENT` when the Media table ID is absent but another table ID is configured. A Media no-match/new-item decision must never be considered complete when the authoritative Media table was not queried.
+
+Required correction:
+
+- every narrowed Baserow candidate query must paginate to completion (or otherwise use a server-side query proven complete for the criteria);
+- `confirm_new` should reuse/rerun the same complete live candidate-retrieval/reconciliation path as a current Tool 2 review, and finalize only if that fresh review still yields a valid `NEW_MEDIA_CANDIDATE`;
+- targeted retrieval must cover every evidence combination that can authorize a complete no-match/new-item decision; if evidence cannot be searched completely, return insufficient/unavailable rather than new;
+- missing/unusable Media table configuration must yield database unavailable/incomplete for Media decisions;
+- add regressions with a matching candidate on a second API page, a candidate discoverable by date/place but not WHAT, partial-date+place input, and missing Media table configuration.
 
 ## Resolved findings
 
-- **R-001** — live-current Baserow policy implemented; operational caching removed; per-decision live querying used in review_file and review_batch.
-- **R-002** — numeric score no longer authorizes automatic association; explicit predicates are used.
+- **R-001** — session/batch snapshot reuse removed; current decisions request live state per operation. (Completeness of targeted retrieval is tracked separately as R-012.)
 - **R-003** — country contradictions are considered in WHERE comparison.
-- **R-004** — scripture comparison requires exact canonical identity for AGREES; partial range overlaps marked CONFLICT; Tool 1 regex grammar enforced.
-- **R-005** — compatible partial Tool 1 dates no longer become full-date conflicts.
+- **R-004** — exact scripture identity/range grammar corrected.
+- **R-005** — compatible partial Tool 1 dates no longer become full-date conflicts. (They still must not count as exact association evidence; tracked under reopened R-002.)
 - **R-006** — travel corroboration no longer uses broad same-month matching.
 - **R-007** — progressive Tool 3 routing is separated from immediate human review.
-- **R-008** — fresh 260-file live Baserow evaluation completed.
-- **R-009** — branch/PR/CI handoff is now healthy; CI run #43 passed.
+- **R-008** — representative live evaluation uses a fresh 260-file Tool 1 population.
+- **R-009** — branch/PR/CI handoff is healthy.
 - **R-010** — portal tests are dependency-injectable and credential-independent.
-- **R-011** — live revalidation explicitly distinguishes 404 from database unavailable; confirm_new cannot succeed on database failure.
+- **R-011** — explicit 404 is distinguished from database unavailability and transport failure cannot directly confirm new media.
 
 ## Current verified tests / CI
 
-Local verification on implementation head `0b349b998501b4f430c984e2b88f0247c0152fc8`:
+GitHub Actions run #45 on head `1ecb95c461c1391256acc8deb6562f0f4ff025a8`:
 
 ```text
 Python 3.12 tests: SUCCESS
@@ -74,9 +101,11 @@ helper shell validation: PASS
 uv build: PASS
 ```
 
+Passing CI does not override the semantic findings above; the missing cases are not covered by the current suite.
+
 ## Last live sample evaluation
 
-Fresh live read-only evaluation across the 260 representative `sample-files/` using per-decision targeted live Baserow querying:
+The Builder's latest fresh live read-only evaluation across the 260 representative `sample-files/` reported:
 
 ```text
 total files: 260
@@ -93,17 +122,14 @@ downstream-to-Tool-3 count: 135
 confirmed title/metadata enrichments: 1
 ```
 
-Evaluation highlights:
-- 1 confirmed existing match (`2014-08-04_KKS_BG-01-18_Leipzig-de.mp3` -> Baserow row 403, Rule 3 confirmed) with title/metadata enrichment applied.
-- 76 new-media candidates: files with discriminating metadata (valid date + WHAT/place) with complete live check confirming zero candidate rows.
-- 109 multiple candidate ambiguities and 14 probable matches routed downstream to Tool 3 travel schedule review without premature human blocker.
-- Immediate human review required narrowed strictly to 9 files (irreducible conflicts or direct-identity contradictions).
-- 0 database failures.
+These counts must be rerun after R-002 and R-012 because both corrections can materially change automatic-match and new-media decisions.
 
 ## Open questions / contradictions
 
-None. All implementation and test requirements are finalized and verified.
+None requiring user input. These are implementation-correctness issues under already-finalized Tool 2 and live-Baserow policy.
 
 ## Next milestone
 
-Handoff to Orchestrator for final review on PR #19.
+Builder resumes Tool 2 on PR #19 and addresses **R-002 (reopened)** and **R-012**. It must add the required regressions, rerun the complete test suite, rerun the fresh 260-file live read-only evaluation, push the corrected head, and wait for the required GitHub CI to pass before returning `READY_FOR_REVIEW`.
+
+Do not weaken the finalized build plan or live-data amendment to fit the current implementation.
