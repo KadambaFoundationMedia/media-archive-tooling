@@ -24,4 +24,8 @@ The repeated Tool 1 entries are additional passes of the same Renamer, not separ
 
 Tool 11 is the **Processed Media Organiser**. Its purpose is to move fully processed media into the correct final archive location based on the resolved media category / class or kirtan type and the corresponding configured category path.
 
-Detailed Tool 11 planning is intentionally deferred until the project reaches that stage. No destination-path grammar, move/commit policy, retention policy, or implementation details are finalized here.
+A deferred Tool 11 build-plan draft now records the agreed processing-safety architecture, transactional move/copy behavior, rolling temporary-work model, hash/lineage requirements, crash recovery direction, and later planning questions:
+
+`docs/tool-11-processed-media-organiser-build-plan.md`
+
+That document is explicitly **DRAFT / DEFERRED — not implementation-ready**. Detailed Tool 11 planning remains intentionally postponed until the project reaches that stage. No destination mapping, collision policy, retention policy, final rename ordering, or Builder implementation has been finalized yet.
