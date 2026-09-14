@@ -11,17 +11,25 @@ Implementation protocol: `docs/implementation-protocol.md`
 Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-3-implementation`  
-Implementation code/docs commit: `ca41b475369cb3a002831fe1bb93c359dbe2c250`  
+Implementation code/docs commit: `e794bca`  
 Implementation PR: ready for review / open targeting `main`  
 Last update: 2026-09-14
+
+Committed walkthrough artifacts:
+- Tool 3 authoritative walkthrough: `docs/tool-3-travel-schedule-reviewer-walkthrough.md`
+- Repository root walkthrough: `walkthrough.md`
+- Tool 1 historical walkthrough: `docs/tool-1-renamer-walkthrough.md`
+- Tool 2 historical walkthrough: `docs/tool-2-media-database-reviewer-walkthrough.md`
 
 ## Review checkpoint
 
 Last planning/review commit: `75e5fbc`  
-Current implementation HEAD: `ca41b475369cb3a002831fe1bb93c359dbe2c250`  
+Current implementation HEAD: `e794bca`  
 Fundamental-change review pending: no  
 Relevant commits since last review:
 - `ca41b47` — feat(travel-reviewer): implement Tool 3 Travel Schedule Reviewer
+- `ed6d1d4` — docs: mark Tool 3 ready for review
+- `e794bca` — docs: update root walkthrough for Tool 3
 
 ## Implementation summary
 
