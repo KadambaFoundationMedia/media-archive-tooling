@@ -27,7 +27,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 printf '%s\n' "Synchronizing repository before Tool 1 review..."
-git fetch --prune "$REMOTE"
+git fetch --prune --no-write-fetch-head "$REMOTE"
 
 BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 if [ -z "$BRANCH" ]; then
