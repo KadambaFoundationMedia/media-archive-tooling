@@ -11,7 +11,7 @@ Planner / Builder coordination: `docs/planner-builder-coordination.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
@@ -19,18 +19,21 @@ Primary implementation code commit: `87270d5`
 Last implementation update: 2026-09-14  
 Last planning/review update: 2026-09-14
 
-The implementation branch was synchronized with `origin/main` (merge commit `74287dc`) to incorporate PR #18 (`docs/baserow-live-data-policy.md` and `docs/tool-2-media-database-reviewer-live-data-amendment.md`). All review findings R-001 through R-009 have been addressed on branch `tool-2-implementation` targeting PR #19.
+The implementation branch was synchronized with `origin/main` (merge commit `74287dc`) to incorporate PR #18 (`docs/baserow-live-data-policy.md` and `docs/tool-2-media-database-reviewer-live-data-amendment.md`). Findings R-001 through R-008 remain resolved. R-009 is reopened because the required GitHub CI gate failed on the Builder handoff head. R-010 records the concrete CI/test-isolation defect.
 
 ## Review checkpoint
 
-Last planning/review commit: current `READY_FOR_REVIEW` status update on PR #19 (see PR branch HEAD)  
-Current implementation HEAD reviewed: `87270d5`  
-Fundamental-change review pending: no — live shared-state policy implemented and automatic-association safety predicates established.
+Last planning/review checkpoint: required CI review of PR #19 head `bdf5074bc374632a6bdff6d7b91620879d37b1f1`  
+Current implementation HEAD reviewed: `bdf5074bc374632a6bdff6d7b91620879d37b1f1`  
+Fundamental-change review pending: no — remaining blocker is CI/test isolation around the live provider, not archive policy.
 
-Relevant commits since last review:
+Relevant commits since the previous planning review:
 - `dfd20fe` — `fix(scripts): use --no-write-fetch-head during repo sync`
 - `74287dc` — `Merge remote-tracking branch 'origin/main' into tool-2-implementation`
 - `87270d5` — `feat(media-db-reviewer): implement live Baserow policy and address R-001..R-007`
+- `bdf5074` — `docs(status): mark Tool 2 READY_FOR_REVIEW with R-001..R-009 resolved`
+
+Required GitHub CI on `bdf5074` failed: workflow run #41 (`Python 3.12 tests`) reported exactly one failure, `tests/test_media_db_reviewer.py::test_31_portal_media_db_endpoints`, with `1 failed, 132 passed`. The portal POST returned HTTP 400 instead of 200.
 
 ## Planner-authored maintenance / coordination
 
@@ -99,10 +102,36 @@ Resolution: Implemented progressive conflict routing separating `review_required
 Status: RESOLVED  
 Resolution: Executed a fresh, clean Tool 1 dry-run scan across the representative 260 files in `sample-files/` into a fresh registry, followed by live read-only Tool 2 evaluation against the production Baserow API (`state=LIVE_CURRENT`, zero database failures). Detailed counts recorded below, and confirmed associations manually verified against live Baserow data.
 
-### R-009 — Builder handoff did not satisfy PR / up-to-date / CI protocol
+### R-009 — Builder handoff / CI protocol
 
-Status: RESOLVED  
-Resolution: Synchronized `origin/main` into `tool-2-implementation`. Addressed git fetch sandbox restrictions via `--no-write-fetch-head` in repository scripts. Maintained PR #19 as review surface. Followed two-step commit protocol recording reachable HEAD before setting `READY_FOR_REVIEW`.
+Status: REOPENED  
+Severity: BLOCKING acceptance
+
+The branch/PR synchronization and reachable-head parts are corrected, but the required `Python 3.12 tests` GitHub Actions gate failed on handoff head `bdf5074bc374632a6bdff6d7b91620879d37b1f1`. A failed required check means the tool cannot be `READY_FOR_REVIEW` or merged.
+
+Required correction:
+- address R-010 below on the same `tool-2-implementation` branch / PR #19;
+- run the full suite without relying on private `.env` credentials;
+- push the correction and wait for the required GitHub CI check to pass;
+- record the real final reachable branch HEAD and CI result before returning `READY_FOR_REVIEW`.
+
+### R-010 — Portal integration test depends on local Baserow configuration
+
+Status: OPEN  
+Severity: BLOCKING CI / test isolation
+
+GitHub CI run #41 fails exactly one test: `tests/test_media_db_reviewer.py::test_31_portal_media_db_endpoints`. The POST to `/file/portal01/media-db-action` returns HTTP 400 instead of the expected 200.
+
+Root cause: `review_portal.app.media_db_action()` constructs `BaserowSnapshotProvider` from `load_config()` / local `.env`. The test mocks `httpx.Client.get`, but GitHub CI intentionally has no private Baserow credentials or table IDs. Without token/table configuration, `fetch_media_row_live()` returns no row before any mocked HTTP request is made, so the human-confirmation path fails. The Builder's local `.env` masked this and allowed the local suite to pass.
+
+Required correction:
+- preserve R-001 live-authority and human-revalidation semantics; do **not** weaken live revalidation and do **not** add Baserow secrets to GitHub Actions;
+- make the portal/service test path dependency-injectable, or otherwise provide an explicit fake live provider/config in the test, so the endpoint can be tested hermetically without `.env`;
+- add/adjust regression coverage proving the portal action test passes with Baserow environment variables absent while production still requires a live authoritative provider;
+- run the complete test suite in a credentials-absent environment (or explicit equivalent) and confirm success;
+- package build must also pass after the test suite.
+
+No fresh 260-file semantic evaluation is required solely for this test-isolation correction unless the Builder changes Tool 2 matching/reconciliation behavior while fixing it.
 
 ## Milestones
 
@@ -129,19 +158,31 @@ Resolution: Synchronized `origin/main` into `tool-2-implementation`. Addressed g
 - [x] R-006 travel evidence boundary corrected
 - [x] R-007 progressive conflict routing corrected
 - [x] R-008 fresh 260-file + live Baserow evaluation completed
-- [x] R-009 branch/head/CI handoff protocol satisfied
-- [x] Required freshness/race and regression tests passing
-- [x] Ready for re-review
+- [ ] R-009 required-CI handoff protocol satisfied
+- [ ] R-010 credential-independent portal integration test corrected
+- [x] Required freshness/race and semantic regression tests passing locally
+- [ ] Required GitHub CI passing on corrected review head
+- [ ] Ready for re-review
 - [ ] Accepted and merged to `main`
 
 ## Tests/results
 
-Full local test suite passes under Python 3.12:
+Builder local result before CI:
 
-- **133 passed** (39 Tool 2 tests in `tests/test_media_db_reviewer.py` + 94 existing unit tests);
-- 8 new regression tests covering R-001 through R-007 added;
-- `uv build --offline` successfully built source distribution and wheel;
-- All live revalidation, scripture structural matching, country contradiction, and partial date tests verified.
+- **133 passed** under Python 3.12;
+- 39 Tool 2 tests + 94 existing tests;
+- `uv build --offline` successful.
+
+Independent GitHub CI result on handoff head `bdf5074`:
+
+- required workflow: `CI`, run #41;
+- required job: `Python 3.12 tests`;
+- result: **FAILURE**;
+- test result: **1 failed, 132 passed, 2 warnings**;
+- failing test: `tests/test_media_db_reviewer.py::test_31_portal_media_db_endpoints`;
+- package-build step skipped because pytest failed.
+
+The discrepancy is explained by local `.env` Baserow configuration being present during Builder local tests while GitHub CI correctly runs without private service credentials.
 
 ## Sample/evaluation results
 
@@ -177,15 +218,15 @@ confirmed title/metadata enrichments: 1
 
 ## Known defects / limitations
 
-None. All review findings R-001 through R-009 are resolved.
+R-010 is currently blocking acceptance: portal human-action integration testing is accidentally coupled to the developer's local `.env`. This is a test/dependency-injection defect; it must be corrected without weakening live Baserow authority.
 
 ## Open questions / contradictions
 
-None.
+None requiring user input.
 
 ## Next milestone
 
-Orchestration / Planning re-review of PR #19 against `READY_FOR_REVIEW` handoff.
+Builder runs `./scripts/builder-start.sh 2`, addresses R-009/R-010 on PR #19, validates the full suite without Baserow credentials, pushes the correction, and hands back only after required GitHub CI passes.
 
 ## Progress log
 
@@ -223,7 +264,7 @@ Orchestration / Planning re-review of PR #19 against `READY_FOR_REVIEW` handoff.
 - Inspected the actual provider/service/engine/test implementation rather than relying on the Builder summary.
 - Recorded blocking findings R-001 through R-009 and moved status to `CHANGES_REQUESTED`.
 
-### 2026-09-14 — R-001..R-009 resolved and live evaluation completed
+### 2026-09-14 — R-001..R-008 corrected and live evaluation completed
 
 - Fixed git fetch helper scripts with `--no-write-fetch-head` (commit `dfd20fe`).
 - Synchronized latest `origin/main` into `tool-2-implementation` (commit `74287dc`).
@@ -233,6 +274,11 @@ Orchestration / Planning re-review of PR #19 against `READY_FOR_REVIEW` handoff.
 - Added country-aware WHERE comparison and structural scripture reference matching (BG, SB, CC).
 - Supported Tool 1 partial dates and bounded travel schedule corroboration.
 - Implemented progressive conflict routing separating immediate human review from Tool 3 routing.
-- Added 8 new regression and race condition tests (39 Tool 2 tests, 133 total passed).
+- Added 8 new regression and race condition tests (39 Tool 2 tests, 133 total passed locally).
 - Executed live read-only evaluation across representative 260 sample files against live Baserow.
-- Status set to `READY_FOR_REVIEW` on PR #19.
+
+### 2026-09-14 — Required CI failed after Builder READY_FOR_REVIEW handoff
+
+- GitHub CI run #41 on PR #19 head `bdf5074` failed one portal integration test (`1 failed, 132 passed`).
+- Diagnosed local `.env` leakage into the test path: the portal constructs its live provider from production config, so the Builder's local credentials made the test pass while credential-free CI correctly failed.
+- Reopened R-009 and added R-010. Tool 2 returned to `CHANGES_REQUESTED`; no user policy decision is required.
