@@ -142,7 +142,7 @@ Press `Ctrl-C` in the terminal to stop the local review portal when finished.
 
 ### Tool 2 — Media Database Reviewer
 
-Status: **FINALIZED BUILD PLAN + LIVE-DATA AMENDMENT / NOT_STARTED**
+Status: **ACCEPTED**
 
 Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
 
@@ -150,10 +150,18 @@ Authoritative live-data amendment: `docs/tool-2-media-database-reviewer-live-dat
 
 Project-wide Baserow policy: `docs/baserow-live-data-policy.md`
 
-Implementation status: `status/tool-2-media-database-reviewer.md`
+Implementation status and acceptance record: `status/tool-2-media-database-reviewer.md`
+
+Implementation walkthrough: `docs/tool-2-media-database-reviewer-walkthrough.md`
 
 Implementation tracking/discussion: GitHub issue #2
 
-Planned implementation branch: `tool-2-implementation`
+Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`.
 
-Tool 2 remains read-only, but every current Media/category/schedule decision is live. Stored Baserow rows/results are retained for audit and review history only. The original plan's stale-cache/session-snapshot fallback wording is superseded by the live-data amendment before implementation begins.
+Tool 2 is the read-only live Baserow Media reconciliation service. It consumes structured Tool 1 filename evidence, performs targeted and pagination-complete live candidate retrieval, compares WHEN/WHAT/WHERE and supporting category/travel evidence, separates confirmed enrichment from candidate-only metadata, and returns structured decisions for the Renamer, Tool 3, Tool 4, CLI, and review portal.
+
+Every current-state database decision is live: persisted Baserow rows/results are audit/history only. Database unavailability cannot be treated as a no-match, human confirmations are live-revalidated, and Tool 4 remains the only Baserow writer.
+
+The accepted implementation resolved findings R-001 through R-015. Required GitHub CI passed with **157 tests**, helper-script validation, and package build success. A fresh live read-only evaluation across the 260 representative sample files produced 1 confirmed existing match, 20 probable matches, 99 multiple-candidate cases, 39 new-media candidates, 32 insufficient-evidence cases, 69 conflicts, and 0 database failures.
+
+The final Tool 1 ↔ Tool 2 acceptance smoke test verified the supported automatic enrichment path. The confirmed live match for Baserow row `2335` changed the Tool 1 proposal from `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-f7903be1.mp3` to `2015-08-27_KKS_SB-3-6-6-class_Sweden-se_ID-f7903be1.mp3`. Candidate-only metadata from unconfirmed results was not copied into filenames, and valid completed no-match decisions propagated `baserow_check_complete=True` without inventing title/location metadata.
