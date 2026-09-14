@@ -339,12 +339,30 @@ class MediaDatabaseReviewService:
             result.baserow_check_complete = True
 
         elif action == "defer":
+            if (
+                result.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+                or (result.renamer_enrichment and result.renamer_enrichment.confirmed)
+                or (previous_values.get("decision") == ReviewDecision.EXISTING_MEDIA_MATCH.value)
+            ):
+                raise ValueError(
+                    f"Cannot defer tracking ID '{tracking_id}': media association is already confirmed. "
+                    "Contradictory deferral of a confirmed enrichment is not permitted."
+                )
+
             result.decision = ReviewDecision.INSUFFICIENT_EVIDENCE
+            result.selected_media_row_id = None
             result.decision_state = f"Deferred by {reviewer}"
             result.review_required = True
+            result.review_required_now = True
             result.review_reasons = ["Review deferred by human operator"]
             result.proposed_tool4_action = Tool4Action.NEEDS_REVIEW
             result.baserow_check_complete = False
+            result.renamer_enrichment = RenamerEnrichment(
+                confirmed=False,
+                evidence=[f"deferred_by_{reviewer}:{tracking_id}"],
+                baserow_read_at=result.baserow_read_at,
+                live_read_complete=result.live_read_complete,
+            )
 
         else:
             raise ValueError(f"Unknown human decision action '{action}'")
@@ -388,6 +406,10 @@ class MediaDatabaseReviewService:
             return None
 
         review_res = MediaDatabaseReviewResult.model_validate(stored["result"])
+
+        # Never apply enrichment if decision is deferred / insufficient evidence / unavailable (R-014 defense-in-depth)
+        if review_res.decision in (ReviewDecision.INSUFFICIENT_EVIDENCE, ReviewDecision.DATABASE_UNAVAILABLE):
+            return None
 
         evidence = None
         if review_res.renamer_enrichment.confirmed:

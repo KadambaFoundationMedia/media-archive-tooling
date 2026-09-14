@@ -1637,7 +1637,7 @@ def test_41_portal_media_db_action_supports_injected_service(tmp_path):
         notes="Confirmed via injected service",
         reviewer="review_portal",
     )
-    mock_service.apply_enrichment_to_renamer.assert_called_once_with("servinj01")
+    mock_service.apply_enrichment_to_renamer.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2483,5 +2483,267 @@ def test_60_rerunning_review_is_idempotent_and_does_not_duplicate_title(tmp_path
     assert len(rec_long_2["proposed_filename"]) <= 128
 
 
+# ---------------------------------------------------------------------------
+# Test 61: Portal confirmation produces single enrichment audit event (R-014)
+# ---------------------------------------------------------------------------
+def test_61_r014_portal_confirmation_produces_single_enrichment_audit_event(tmp_path):
+    """Portal confirmation route invokes apply_human_decision as single owner and records exactly one enrich audit action."""
+    from fastapi.testclient import TestClient
+    from media_archive_tooling.review_portal.app import app, configure_review_context
 
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p = make_parser_result(tracking_id="portalevt01", orig_filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig", country="de")
+    registry.save_proposal(RenameProposal(
+        tracking_id="portalevt01",
+        original_path="path/orig.mp3",
+        current_filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
+        proposed_filename="2014-08-04_KKS_BG-01-18_Leipzig-de_ID-portalevt01.mp3",
+        proposed_path="path/2014-08-04_KKS_BG-01-18_Leipzig-de_ID-portalevt01.mp3",
+        mode=RenameMode.INITIAL,
+        parser_result=p,
+    ))
+
+    # Initial probable review
+    cand_row = {"id": 901, "date": "2014-08-04", "what": "BG-01-18", "place": "Leipzig", "country": "Germany", "title": "Divine Heritage"}
+    rev_res = MediaDatabaseReviewResult(
+        tracking_id="portalevt01",
+        decision=ReviewDecision.PROBABLE_EXISTING_MEDIA,
+        decision_state="Probable candidate found",
+        review_required=True,
+        review_required_now=False,
+        selected_field_evidence={"local_date": "2014-08-04", "local_what": "BG-01-18", "local_place": "Leipzig", "local_country": "de"},
+        candidates=[MediaCandidate(media_row_id=901, score=85.0, normalized_row=cand_row, retrieval_reasons=["matching date"])],
+        proposed_tool4_action=Tool4Action.NEEDS_REVIEW,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-14T10:00:00Z",
+        database_snapshot_at="2026-09-14T10:00:00Z",
+        live_read_complete=True,
+    )
+    registry.save_media_db_review(
+        tracking_id="portalevt01",
+        decision=rev_res.decision.value,
+        database_state="LIVE_CURRENT",
+        snapshot_timestamp=rev_res.database_snapshot_at,
+        result_json=rev_res.model_dump_json(),
+        selected_media_row_id=None,
+        review_required=True,
+    )
+
+    fake_provider = BaserowSnapshotProvider(
+        api_url="https://api.baserow.io",
+        api_token="test_mock_token",
+        media_table_id="100",
+        snapshot_path=tmp_path / "mock_snapshot.json",
+    )
+    configure_review_context(registry_path=reg_db, media_db_provider=fake_provider)
+    client = TestClient(app)
+
+    with patch("httpx.Client.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "id": 901,
+            "Title": "Divine Heritage",
+            "Date": "2014-08-04",
+            "Place": "Leipzig",
+            "Country": "Germany",
+            "What": "BG-01-18",
+        }
+        mock_get.return_value = mock_resp
+
+        resp = client.post(
+            "/file/portalevt01/media-db-action",
+            data={
+                "action": "confirm_existing",
+                "media_row_id": "901",
+                "notes": "Confirmed via single-owner portal",
+                "reviewer": "web_operator",
+            },
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+
+    actions = registry.get_review_actions("portalevt01")
+    enrich_actions = [a for a in actions if a["action"] == "enrich"]
+    portal_actions = [a for a in actions if a["action"] == "media_db_confirm_existing"]
+
+    # Exactly ONE enrich action and ONE portal decision action
+    assert len(enrich_actions) == 1, f"Expected exactly 1 enrich audit action, got {len(enrich_actions)}: {enrich_actions}"
+    assert len(portal_actions) == 1
+    assert enrich_actions[0]["reviewer"] == "tool_2_media_database_review"
+    assert portal_actions[0]["reviewer"] == "review_portal"
+
+    # Enriched proposal
+    rec = registry.get_file("portalevt01")
+    assert rec["status"] == "enriched"
+    assert "Divine-Heritage" in rec["proposed_filename"]
+
+
+# ---------------------------------------------------------------------------
+# Test 62: Defer on confirmed association is rejected as contradictory (R-014)
+# ---------------------------------------------------------------------------
+def test_62_r014_defer_on_confirmed_association_is_rejected_as_contradictory(tmp_path):
+    """Attempting to defer a confirmed existing media match raises ValueError and portal returns 400 without modifying proposal."""
+    from fastapi.testclient import TestClient
+    from media_archive_tooling.review_portal.app import app, configure_review_context
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p = make_parser_result(tracking_id="defconf01", date_val="2014-08-04", what_val="BG-01-18", place="Leipzig", country="de")
+    registry.save_proposal(RenameProposal(
+        tracking_id="defconf01",
+        original_path="p",
+        current_filename="f.mp3",
+        proposed_filename="2014-08-04_KKS_BG-01-18_Leipzig-de_ID-defconf01.mp3",
+        proposed_path="p",
+        mode=RenameMode.INITIAL,
+        parser_result=p,
+    ))
+
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T10:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[{"id": 902, "Date": "2014-08-04", "What": "BG-01-18", "Place": "Leipzig", "Country": "Germany", "Title": "Sacred Assembly"}],
+    )
+    provider = MagicMock()
+    provider.load_snapshot.return_value = snapshot
+    provider.fetch_media_row_live.return_value = {"id": 902, "date": "2014-08-04", "what": "BG-01-18", "place": "Leipzig", "country": "Germany", "title": "Sacred Assembly"}
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+
+    # 1. Review confirms match and applies enrichment
+    service.review_file("defconf01")
+    rec_before = registry.get_file("defconf01")
+    assert rec_before["status"] == "enriched"
+    assert "Sacred-Assembly" in rec_before["proposed_filename"]
+    actions_before = registry.get_review_actions("defconf01")
+    assert any(a["action"] == "enrich" for a in actions_before)
+
+    # 2. Service-level defer attempt on confirmed association must raise ValueError
+    with pytest.raises(ValueError, match="Cannot defer tracking ID 'defconf01': media association is already confirmed"):
+        service.apply_human_decision("defconf01", action="defer", reviewer="tester")
+
+    # 3. Verify registry proposal and actions are completely unchanged
+    rec_after = registry.get_file("defconf01")
+    assert rec_after["status"] == "enriched"
+    assert rec_after["proposed_filename"] == rec_before["proposed_filename"]
+    assert len(registry.get_review_actions("defconf01")) == len(actions_before)
+
+    # 4. Portal-level defer attempt returns HTTP 400
+    configure_review_context(registry_path=reg_db, media_db_provider=provider)
+    client = TestClient(app)
+    resp = client.post(
+        "/file/defconf01/media-db-action",
+        data={"action": "defer", "notes": "Try deferring confirmed"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "Cannot defer tracking ID 'defconf01'" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Test 63: Defer on unconfirmed stored review resets enrichment state (R-014)
+# ---------------------------------------------------------------------------
+def test_63_r014_defer_on_unconfirmed_stored_review_resets_enrichment_state(tmp_path):
+    """Deferring an unconfirmed candidate review sets INSUFFICIENT_EVIDENCE, clears candidate selection, and never triggers Renamer enrichment."""
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p = make_parser_result(
+        tracking_id="defunconf01",
+        orig_filename="2014-08-04_KKS_Class_Leipzig.mp3",
+        date_val="2014-08-04",
+        what_val="Class",
+        place="Leipzig",
+        country="de",
+    )
+    p.review_reasons = ["WHAT is unresolved"]
+    orig_proposed = "2014-08-04_KKS_Class_Leipzig-de_ID-defunconf01.mp3"
+    registry.save_proposal(RenameProposal(
+        tracking_id="defunconf01",
+        original_path="p",
+        current_filename="2014-08-04_KKS_Class_Leipzig.mp3",
+        proposed_filename=orig_proposed,
+        proposed_path="p",
+        mode=RenameMode.INITIAL,
+        parser_result=p,
+        needs_review=True,
+    ))
+
+    # Stored review with probable candidate and candidate metadata
+    cand_row = {"id": 903, "date": "2014-08-04", "what": "Class", "place": "Leipzig", "country": "Germany", "title": "Stale Title To Avoid"}
+    stored_res = MediaDatabaseReviewResult(
+        tracking_id="defunconf01",
+        decision=ReviewDecision.PROBABLE_EXISTING_MEDIA,
+        decision_state="Probable match found",
+        review_required=True,
+        review_required_now=False,
+        selected_field_evidence={"local_date": "2014-08-04", "local_what": "Class", "local_place": "Leipzig", "local_country": "de"},
+        selected_media_row_id=903,
+        candidates=[MediaCandidate(media_row_id=903, score=70.0, normalized_row=cand_row, retrieval_reasons=["matching date"])],
+        proposed_tool4_action=Tool4Action.NEEDS_REVIEW,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-14T10:00:00Z",
+        database_snapshot_at="2026-09-14T10:00:00Z",
+        live_read_complete=True,
+        renamer_enrichment=RenamerEnrichment(
+            confirmed=False,
+            media_row_id=903,
+            what_val="Class-Stale-Title-To-Avoid",
+            title_full="Stale Title To Avoid",
+            evidence=["stored_candidate:903"],
+        ),
+    )
+    registry.save_media_db_review(
+        tracking_id="defunconf01",
+        decision=stored_res.decision.value,
+        database_state="LIVE_CURRENT",
+        snapshot_timestamp=stored_res.database_snapshot_at,
+        result_json=stored_res.model_dump_json(),
+        selected_media_row_id=903,
+        review_required=True,
+    )
+
+    provider = MagicMock()
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+
+    # Defer decision
+    result = service.apply_human_decision("defunconf01", action="defer", notes="Needs more research", reviewer="operator_jane")
+
+    # Verify review result state
+    assert result.decision == ReviewDecision.INSUFFICIENT_EVIDENCE
+    assert result.selected_media_row_id is None
+    assert result.baserow_check_complete is False
+    assert result.renamer_enrichment.confirmed is False
+    assert result.renamer_enrichment.what_val is None
+    assert result.renamer_enrichment.title_full is None
+    assert "deferred_by_operator_jane:defunconf01" in result.renamer_enrichment.evidence
+
+    # Verify stored review in registry
+    stored_after = registry.get_media_db_review("defunconf01")
+    assert stored_after["decision"] == ReviewDecision.INSUFFICIENT_EVIDENCE.value
+    assert stored_after["selected_media_row_id"] is None
+    res_after = stored_after["result"]
+    assert res_after["renamer_enrichment"]["confirmed"] is False
+    assert res_after["baserow_check_complete"] is False
+
+    # Verify Renamer proposal remained untouched (no enrichment, no stale title)
+    rec = registry.get_file("defunconf01")
+    assert rec["status"] == "pending"
+    assert rec["needs_review"] == 1 or rec["needs_review"] is True
+    assert rec["proposed_filename"] == orig_proposed
+    assert "Stale" not in rec["proposed_filename"]
+
+    # Verify review actions: only media_db_defer, exactly zero enrich actions
+    actions = registry.get_review_actions("defunconf01")
+    assert len(actions) == 1
+    assert actions[0]["action"] == "media_db_defer"
+    assert not any(a["action"] == "enrich" for a in actions)
+
+    # Verify apply_enrichment_to_renamer returns None (defense-in-depth)
+    assert service.apply_enrichment_to_renamer("defunconf01") is None
 

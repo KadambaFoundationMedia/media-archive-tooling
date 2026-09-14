@@ -7,8 +7,7 @@ Tool 2 (Media Database Reviewer) has been implemented and verified on branch `to
 - `docs/builder-git-sandbox-policy.md`
 - `docs/implementation-protocol.md`
 
-Historical walkthrough documentation for Tool 1 (Renamer) is preserved in [docs/tool-1-renamer-walkthrough.md](docs/tool-1-renamer-walkthrough.md).  
-A dedicated copy of this document is maintained in [docs/tool-2-media-database-reviewer-walkthrough.md](docs/tool-2-media-database-reviewer-walkthrough.md).
+Historical walkthrough documentation for Tool 1 (Renamer) is preserved in [docs/tool-1-renamer-walkthrough.md](tool-1-renamer-walkthrough.md).
 
 ---
 
@@ -122,7 +121,7 @@ confirmed title/metadata enrichments: 1
 ## 5. Git & Handoff State
 
 - **Branch**: `tool-2-implementation` (PR #19)
-- **Status Document**: [status/tool-2-media-database-reviewer.md](status/tool-2-media-database-reviewer.md)
-- **Tool 1 Historical Walkthrough**: [docs/tool-1-renamer-walkthrough.md](docs/tool-1-renamer-walkthrough.md)
-- **Tool 2 Committed Walkthrough**: [docs/tool-2-media-database-reviewer-walkthrough.md](docs/tool-2-media-database-reviewer-walkthrough.md)
-- **Repo Root Walkthrough**: [walkthrough.md](walkthrough.md)
+- **Status Document**: [status/tool-2-media-database-reviewer.md](../status/tool-2-media-database-reviewer.md)
+- **Tool 1 Historical Walkthrough**: [docs/tool-1-renamer-walkthrough.md](tool-1-renamer-walkthrough.md)
+- **Tool 2 Committed Walkthrough**: [docs/tool-2-media-database-reviewer-walkthrough.md](tool-2-media-database-reviewer-walkthrough.md)
+- **Repo Root Walkthrough**: [walkthrough.md](../walkthrough.md)

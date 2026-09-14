@@ -164,7 +164,6 @@ def media_db_action(
             notes=notes,
             reviewer="review_portal",
         )
-        service.apply_enrichment_to_renamer(tracking_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -225,7 +225,11 @@
                 <button type="submit" name="action" value="confirm_existing" class="btn btn-success">Confirm Existing Row</button>
                 {% endif %}
                 <button type="submit" name="action" value="confirm_new" class="btn btn-primary">Confirm New Media Item</button>
+                {% if media_db_review.decision == 'EXISTING_MEDIA_MATCH' or (media_db_review.result.renamer_enrichment and media_db_review.result.renamer_enrichment.confirmed) %}
+                <button type="button" class="btn" disabled title="Cannot defer an already confirmed media association" style="opacity: 0.6; cursor: not-allowed;">Defer Decision</button>
+                {% else %}
                 <button type="submit" name="action" value="defer" class="btn">Defer Decision</button>
+                {% endif %}
             </div>
         </form>
     </div>
