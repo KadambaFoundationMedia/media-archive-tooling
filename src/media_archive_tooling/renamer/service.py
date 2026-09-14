@@ -102,7 +102,13 @@ class RenamerApplicationService:
                     parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(place))
                     parser_res.where.country_iso2 = iso.lower()
                 else:
-                    parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
+                    from ..media_db_reviewer.engine import _norm_country
+                    norm_c = _norm_country(iso)
+                    if norm_c and len(norm_c) == 2:
+                        parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(place))
+                        parser_res.where.country_iso2 = norm_c.lower()
+                    else:
+                        parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
             else:
                 parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
             parser_res.where.state = ResolutionState.EXACT

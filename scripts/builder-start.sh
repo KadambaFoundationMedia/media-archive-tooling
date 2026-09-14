@@ -32,7 +32,7 @@ if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
 fi
 
 printf '%s\n' "Synchronizing repository before reading builder status..."
-git fetch --prune "$REMOTE"
+git fetch --prune --no-write-fetch-head "$REMOTE"
 
 UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
 if [ -z "$UPSTREAM" ]; then

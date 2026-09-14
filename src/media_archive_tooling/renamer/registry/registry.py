@@ -10,7 +10,7 @@ from ..models import ParserResult, RenameProposal
 
 class LocalRegistry:
     def __init__(self, db_path: Path):
-        self.db_path = db_path
+        self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -67,8 +67,22 @@ class LocalRegistry:
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS media_db_reviews (
+                tracking_id TEXT PRIMARY KEY,
+                decision TEXT NOT NULL,
+                selected_media_row_id INTEGER,
+                database_state TEXT NOT NULL,
+                snapshot_timestamp TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                review_required INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(original_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_current_path ON files(current_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_decision ON media_db_reviews(decision)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -294,3 +308,79 @@ class LocalRegistry:
 
     def get_history(self, tracking_id: str) -> List[Dict[str, Any]]:
         return self.get_review_actions(tracking_id)
+
+    def save_media_db_review(
+        self,
+        tracking_id: str,
+        decision: str,
+        database_state: str,
+        snapshot_timestamp: str,
+        result_json: str,
+        selected_media_row_id: Optional[int] = None,
+        review_required: bool = False,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO media_db_reviews (
+                tracking_id, decision, selected_media_row_id, database_state,
+                snapshot_timestamp, result_json, review_required, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id) DO UPDATE SET
+                decision = excluded.decision,
+                selected_media_row_id = excluded.selected_media_row_id,
+                database_state = excluded.database_state,
+                snapshot_timestamp = excluded.snapshot_timestamp,
+                result_json = excluded.result_json,
+                review_required = excluded.review_required,
+                updated_at = excluded.updated_at
+            """, (
+                tracking_id,
+                decision,
+                selected_media_row_id,
+                database_state,
+                snapshot_timestamp,
+                result_json,
+                1 if review_required else 0,
+                now,
+            ))
+            conn.commit()
+
+    def get_media_db_review(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM media_db_reviews WHERE tracking_id = ?", (tracking_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["result"] = json.loads(d["result_json"])
+                return d
+        return None
+
+    def list_media_db_reviews(
+        self,
+        decision: Optional[str] = None,
+        review_required: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM media_db_reviews WHERE 1=1"
+        params = []
+        if decision:
+            query += " AND decision = ?"
+            params.append(decision)
+        if review_required is not None:
+            query += " AND review_required = ?"
+            params.append(1 if review_required else 0)
+        query += " ORDER BY updated_at DESC"
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["result"] = json.loads(d["result_json"])
+                results.append(d)
+            return results
+

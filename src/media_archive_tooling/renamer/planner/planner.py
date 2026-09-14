@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from ..models import ParserResult, RenameProposal, RenameMode, ResolutionState
 from ...common.ascii_latin import sanitize_filename_token, to_ascii_latin
+from ...media_db_reviewer.title_compaction import compact_title_for_filename
 
 
 SAFE_ABBREVIATIONS = [
@@ -79,6 +80,36 @@ class RenamePlanner:
         needs_review = bool(review_reasons)
 
         # Enforce hard 128-character limit
+        # 1. First shorten only the title component at whole-word boundaries if filename exceeds 128 during ENRICH/FINALIZE
+        if len(proposed_name) > 128 and has_meaningful_what and self.mode in (RenameMode.ENRICH, RenameMode.FINALIZE):
+            non_what_len = len(proposed_name) - len(what_clean)
+            max_what_budget = max(10, 128 - non_what_len)
+            if len(what_clean) > max_what_budget:
+                scripture_match = re.match(r"^([A-Za-z0-9\-]+?)-(.*)$", what_clean)
+                if scripture_match and re.match(r"^(?:BG|SB|CC|NOD|BS|ISO)-[0-9]", scripture_match.group(1), re.IGNORECASE):
+                    prefix = scripture_match.group(1)
+                    title_part = scripture_match.group(2)
+                    avail_title = max_what_budget - len(prefix) - 1
+                    if avail_title > 0:
+                        compacted_title, was_c, reason = compact_title_for_filename(title_part, avail_title)
+                        if was_c:
+                            what_clean = f"{prefix}-{compacted_title}"
+                            result.diagnostic_notes.append(f"Title shortened at whole-word boundary for length budget: {reason}")
+                else:
+                    compacted_what, was_c, reason = compact_title_for_filename(what_clean, max_what_budget)
+                    if was_c:
+                        what_clean = compacted_what
+                        result.diagnostic_notes.append(f"Title shortened at whole-word boundary for length budget: {reason}")
+
+                # Rebuild canonical name with compacted title
+                parts[2] = what_clean
+                base_canonical = "_".join(parts)
+                if self.mode == RenameMode.FINALIZE and not edited_suffix:
+                    proposed_name = f"{base_canonical}{ext}"
+                else:
+                    proposed_name = f"{base_canonical}{edited_suffix}_ID-{tracking_id}{ext}"
+
+        # 2. Check safe abbreviations if still over 128
         if len(proposed_name) > 128:
             for full, abbr in SAFE_ABBREVIATIONS:
                 if full in proposed_name:

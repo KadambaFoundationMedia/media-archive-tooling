@@ -123,9 +123,95 @@ def run_status(args):
                     print("      Review required (no reason recorded)")
 
 
+def run_media_db_review(args):
+    from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+    from .media_db_reviewer.service import MediaDatabaseReviewService
+
+    config = load_config()
+    reg_path = Path(args.registry_path) if args.registry_path else config.registry_path
+    registry = LocalRegistry(reg_path)
+    snapshot_path = Path(args.snapshot_path) if getattr(args, "snapshot_path", None) else config.baserow_snapshot_path
+
+    provider = BaserowSnapshotProvider(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
+        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
+        snapshot_path=snapshot_path,
+    )
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+
+    force_refresh = getattr(args, "refresh_snapshot", False)
+    auto_enrich = getattr(args, "auto_enrich", True)
+
+    if getattr(args, "tracking_id", None):
+        result = service.review_file(args.tracking_id, force_refresh=force_refresh, auto_enrich=auto_enrich)
+        results = [result]
+    else:
+        results = service.review_batch(force_refresh=force_refresh, auto_enrich=auto_enrich)
+
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps([r.model_dump() for r in results], indent=2))
+        return
+
+    print(f"=== Tool 2: Media Database Review ({len(results)} files evaluated) ===")
+    if len(results) <= 20:
+        for r in results:
+            print(f"[{r.tracking_id}] Decision: {r.decision.value} (Database: {r.database_state})")
+            if r.selected_media_row_id:
+                print(f"  Selected Media Row ID: {r.selected_media_row_id}")
+            if r.candidates:
+                print(f"  Candidates found: {len(r.candidates)}")
+                for c in r.candidates[:3]:
+                    print(f"    - Row {c.media_row_id}: {c.normalized_row.get('title') or ''} (Score: {c.score:.1f})")
+            if r.conflicts:
+                print(f"  Conflicts: {', '.join(r.conflicts)}")
+            if r.renamer_enrichment.confirmed:
+                print(f"  Confirmed Title: {r.renamer_enrichment.title_full}")
+            file_rec = registry.get_file(r.tracking_id)
+            if file_rec and (r.renamer_enrichment.confirmed or r.baserow_check_complete):
+                print(f"  Proposed Filename: {file_rec.get('proposed_filename')}")
+    else:
+        print(f"Sample evaluation across {len(results)} files completed.")
+        confirmed_matches = [r for r in results if r.decision.value == 'EXISTING_MEDIA_MATCH']
+        if confirmed_matches:
+            print("\n--- Confirmed Existing Matches ---")
+            for cm in confirmed_matches:
+                file_rec = registry.get_file(cm.tracking_id)
+                print(f"[{cm.tracking_id}] Row ID {cm.selected_media_row_id}: {cm.renamer_enrichment.title_full}")
+                if file_rec:
+                    print(f"  Proposed Filename: {file_rec.get('proposed_filename')}")
+
+    print("\n--- Evaluation Summary ---")
+    print(f"total files: {len(results)}")
+    print(f"confirmed existing matches: {sum(1 for r in results if r.decision.value == 'EXISTING_MEDIA_MATCH')}")
+    print(f"probable existing matches: {sum(1 for r in results if r.decision.value == 'PROBABLE_EXISTING_MEDIA')}")
+    print(f"multiple candidates: {sum(1 for r in results if r.decision.value == 'MULTIPLE_CANDIDATES')}")
+    print(f"new-media candidates: {sum(1 for r in results if r.decision.value == 'NEW_MEDIA_CANDIDATE')}")
+    print(f"insufficient evidence: {sum(1 for r in results if r.decision.value == 'INSUFFICIENT_EVIDENCE')}")
+    print(f"conflicts: {sum(1 for r in results if r.decision.value == 'CONFLICT_WITH_EXISTING')}")
+    print(f"database failures: {sum(1 for r in results if r.decision.value == 'DATABASE_UNAVAILABLE')}")
+    print(f"human-review-required-now: {sum(1 for r in results if r.review_required_now)}")
+    print(f"review-required-overall: {sum(1 for r in results if r.review_required)}")
+    print(f"downstream-to-Tool-3 count: {sum(1 for r in results if 'tool_3_travel_schedule_review' in r.downstream_routing)}")
+    print(f"confirmed title/metadata enrichments: {sum(1 for r in results if r.renamer_enrichment.confirmed)}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Tool 2: Media Database Reviewer command
+    media_db_parser = subparsers.add_parser("media-db-review", help="Run Tool 2: Media Database Reviewer")
+    media_db_parser.add_argument("tracking_id", nargs="?", help="Optional tracking ID to review")
+    media_db_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    media_db_parser.add_argument("--snapshot-path", help="Custom Baserow snapshot JSON path")
+    media_db_parser.add_argument("--refresh-snapshot", action="store_true", default=False, help="Force refresh live snapshot from Baserow")
+    media_db_parser.add_argument("--no-enrich", dest="auto_enrich", action="store_false", default=True, help="Do not automatically apply confirmed enrichment to Renamer proposals")
+    media_db_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    media_db_parser.set_defaults(func=run_media_db_review)
 
     # Renamer command
     renamer_parser = subparsers.add_parser("renamer", help="Run Tool 1: Renamer")
