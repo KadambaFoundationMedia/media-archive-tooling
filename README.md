@@ -57,20 +57,22 @@ Planner / Builder coordination: `docs/planner-builder-coordination.md`
 
 The implementation uses `uv` for Python environment/dependency management. Tool logic remains callable programmatically for the future orchestrator; CLI and review UI both call the same Python application services. The initial review portal uses FastAPI with server-rendered Jinja2 + HTMX so no Xcode/Swift or Node/React toolchain is required for v1. A packaged desktop shell can be evaluated later without moving archive logic out of Python.
 
-## Baserow live-data authority
+## Baserow data authority
 
-The Baserow Media database is continuously updated by external collaborators. Any tool that needs to know the **current** database state must perform a live Baserow read for that decision; persisted row copies are audit/history only and must not be used as an authoritative operational cache.
+The mutable Baserow Media database is continuously updated by external collaborators. Any tool that needs to know the **current mutable database state** must perform a live Baserow read for that decision; persisted mutable row copies are audit/history only and must not be used as an authoritative operational cache.
 
 Project-wide policy: `docs/baserow-live-data-policy.md`
 
 Important consequences include:
 
-- database/network failure is not treated as a valid no-match;
-- cached rows cannot produce a current confirmed Media association or enrichment;
-- Tool 2 revalidates live state when a human confirms a candidate/new-item decision;
-- Tool 3 uses live `travel_schedule` evidence when consulting Baserow;
+- database/network failure is not treated as a valid Media no-match;
+- cached mutable rows cannot produce a current confirmed Media association or enrichment;
+- Tool 2 revalidates mutable live state when a human confirms a candidate/new-item decision;
+- `travel_schedule` is a deliberate exception: it is a static historical reference table that will never be updated, so Tool 3 may use a complete verified local snapshot/cache across files, batches, sessions, and offline runs;
 - Tool 4 re-reads immediately before update and re-checks existence immediately before create so collaborator changes are not silently overwritten or duplicated;
-- stored Baserow values remain useful for audit provenance, but not as a substitute for a fresh current read.
+- stored mutable Baserow values remain useful for audit provenance, but not as a substitute for a fresh current read.
+
+The static nature of `travel_schedule` changes only its freshness/caching semantics. Its evidentiary strength remains limited: planned travel may corroborate or suggest WHEN/WHERE, but it is not absolute proof that a recording occurred at that place/time.
 
 ## Continuous integration
 
@@ -160,7 +162,7 @@ Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d37752
 
 Tool 2 is the read-only live Baserow Media reconciliation service. It consumes structured Tool 1 filename evidence, performs targeted and pagination-complete live candidate retrieval, compares WHEN/WHAT/WHERE and supporting category/travel evidence, separates confirmed enrichment from candidate-only metadata, and returns structured decisions for the Renamer, Tool 3, Tool 4, CLI, and review portal.
 
-Every current-state database decision is live: persisted Baserow rows/results are audit/history only. Database unavailability cannot be treated as a no-match, human confirmations are live-revalidated, and Tool 4 remains the only Baserow writer.
+Every current-state **mutable Media/database** decision is live: persisted mutable Baserow rows/results are audit/history only. Database unavailability cannot be treated as a Media no-match, human confirmations are live-revalidated, and Tool 4 remains the only Baserow writer. The immutable `travel_schedule` reference is exempt from per-decision freshness requirements; Tool 2's existing live schedule reads remain valid but are not a requirement for Tool 3.
 
 The accepted implementation resolved findings R-001 through R-015. Required GitHub CI passed with **157 tests**, helper-script validation, and package build success. A fresh live read-only evaluation across the 260 representative sample files produced 1 confirmed existing match, 20 probable matches, 99 multiple-candidate cases, 39 new-media candidates, 32 insufficient-evidence cases, 69 conflicts, and 0 database failures.
 
