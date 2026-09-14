@@ -9,31 +9,57 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
-Builder handoff head reviewed: `a44a8736c8171a65b3c2ff15348d67741b471c48`  
-Primary R-013 correction commit reviewed: `a44a8736c8171a65b3c2ff15348d67741b471c48`  
+Builder R-013 implementation commit reviewed: `a44a8736c8171a65b3c2ff15348d67741b471c48`  
+Builder handoff/status head reviewed: `cb42ed8a2a72f92abee354cd80ae1a2e96efe862`  
 Last planning/review update: 2026-09-14
 
-Local verified test suite:
-- `pytest`: **154 passed, 2 warnings** (60 tests in `test_media_db_reviewer.py`)
-- `helper shell validation`: **PASS** (`sh -n scripts/builder-start.sh scripts/review-tool-1.sh`)
+GitHub Actions run #55 on PR #19 passed the required `Python 3.12 tests` job with **154 passed, 2 warnings**, helper-script validation, and package-build success. The Tool 1 → Tool 2 → Renamer Enrich bridge is materially present, and the fresh 260-file live smoke evidence demonstrates the intended confirmed-match filename enrichment.
+
+Acceptance is blocked by one final application-flow defect found during independent review plus one handoff-artifact correction.
 
 ## Active review findings
 
-None. All findings are resolved.
+### R-014 — Portal human-decision path can double-apply enrichment and a deferred decision can retain/reapply stale confirmed enrichment
+
+Status: **OPEN — BLOCKING / review-state and audit correctness**
+
+R-013 changed `MediaDatabaseReviewService.apply_human_decision()` so safe completed results automatically call `apply_enrichment_to_renamer()` by default. The review-portal route still explicitly calls `apply_enrichment_to_renamer()` immediately after `apply_human_decision()`.
+
+Consequences:
+
+- a portal `confirm_existing` / `confirm_new` can apply the same enrichment twice and record duplicate `enrich` audit actions even though only one human action occurred;
+- `RenamerApplicationService.apply_enrichment()` always records an `enrich` review action, so this is not merely harmless duplicate computation;
+- more importantly, `apply_human_decision(action="defer")` changes the decision to `INSUFFICIENT_EVIDENCE` and sets `baserow_check_complete=False`, but does not clear a previously confirmed `result.renamer_enrichment`; because the R-013 auto-handoff condition is `result.renamer_enrichment.confirmed or result.baserow_check_complete`, a defer performed on a previously confirmed stored result can still reapply stale confirmed metadata after the decision has been deferred;
+- the Tool 2 portal always exposes a `Defer Decision` action, including when a stored result exists.
+
+Required correction:
+
+- establish one single enrichment-handoff owner for the portal path; do not call the bridge twice;
+- a deferred/unconfirmed Tool 2 decision must not trigger or preserve a newly applied confirmed handoff as though it were still confirmed;
+- define the safe state transition for deferring a previously confirmed association. At minimum the current action must not reapply stale confirmed enrichment. If rollback of already-applied automatic enrichment is intentionally out of scope, prevent/disable the contradictory defer transition after confirmed enrichment rather than silently producing inconsistent state;
+- add regressions proving one portal confirmation produces one enrichment audit event and that defer cannot trigger confirmed enrichment from stale stored result state;
+- retain the R-013 automatic CLI/batch behavior and live-revalidation semantics.
+
+### R-015 — Claimed walkthrough update is not present on the pushed PR
+
+Status: **OPEN — HANDOFF ACCURACY / documentation**
+
+The Builder handoff states that the detailed `walkthrough.md` artifact was updated. The pushed `tool-2-implementation` branch still contains the old **Tool 1 — Renamer Implementation Walkthrough**, including the historical 48-test / 250-file Tool 1 results. `walkthrough.md` is not changed by PR #19.
+
+Required correction:
+
+- update the committed walkthrough artifact to accurately document Tool 2 / R-013 current behavior and the verified 154-test + 260-file live end-to-end evidence, or create a clearly named Tool 2 walkthrough under `docs/` and reference it from status;
+- do not overwrite useful Tool 1 history without preserving it in an appropriate Tool 1-specific document;
+- ensure the final handoff names the actual committed artifact.
 
 ## Resolved findings
 
 - **R-001** — session/batch snapshot reuse removed; current decisions request live state per operation.
-- **R-002** — automatic-association predicates tightened to strict high-specificity exact evidence:
-  - Exact full date required for Rule 2 and Rule 3 (`len=10`, no `DD` wildcard, `local==db`, `AGREES`, no partial details). Compatible partial dates support ranking/probable state but never auto-confirm.
-  - Specific WHAT required for Rule 2 and Rule 3 (`is_specific_what`). Generic tokens (`Lecture`, `Class`, `Bhajan`, `Kirtan`, `Seminar`, etc.) are prohibited from auto-association.
-  - Exact normalized place and compatible country required for Rule 2 (`norm_lp == norm_dp`, no fuzzy/substring match).
-  - Genuine corroboration required for Rule 3: database title must genuinely match local WHAT, scripture reference, or filename stem; or database category must match local category/scripture; or category title context must match; or travel schedule must corroborate. Mere presence of a non-empty title (`bool(title)`) is rejected.
-  - Regressions 47–50 (negative) and 51 (positive).
+- **R-002** — automatic association requires strict high-specificity exact evidence; partial dates, fuzzy places, generic WHAT and unrelated populated titles cannot auto-confirm.
 - **R-003** — country contradictions are considered in WHERE comparison.
 - **R-004** — exact scripture identity/range grammar corrected.
 - **R-005** — compatible partial Tool 1 dates no longer become full-date conflicts.
@@ -43,28 +69,19 @@ None. All findings are resolved.
 - **R-009** — branch/PR/CI handoff is healthy.
 - **R-010** — portal tests are dependency-injectable and credential-independent.
 - **R-011** — explicit 404 is distinguished from database unavailability and transport failure cannot directly confirm new media.
-- **R-012** — targeted live candidate retrieval is pagination-complete, covers all necessary evidence routes, handles partial-date discrimination, and enforces mandatory `media_table_id`. Regressions 52–55.
-- **R-013** — Tool 1 ↔ Tool 2 confirmed-enrichment bridge wired into normal workflow:
-  - `MediaDatabaseReviewService.review_file()` and `review_batch()` automatically hand confirmed Tool 2 evidence to `RenamerApplicationService.apply_enrichment()` when `result.renamer_enrichment.confirmed` or `result.baserow_check_complete`.
-  - `compose_what_val` provides deterministic whole-token idempotency: preserves scripture prefixes (e.g. `BG-01-18`), incorporates database title, strips redundant repeated scripture prefixes from titles, and prevents re-duplication on subsequent reviews or compacted titles.
-  - Safe unconfirmed state isolation: `PROBABLE_EXISTING_MEDIA`, `MULTIPLE_CANDIDATES`, `CONFLICT_WITH_EXISTING`, `INSUFFICIENT_EVIDENCE`, `DATABASE_UNAVAILABLE` leave proposals untouched in `pending` state and never copy candidate titles.
-  - Completed live no-match (`NEW_MEDIA_CANDIDATE`) propagates `baserow_check_complete=True` (clearing `_edited` suffix) without inventing title or location values.
-  - CLI `media-archive media-db-review` supports `--no-enrich` (enabled by default) and prints enriched proposed filenames.
-  - Regressions 56–60.
+- **R-012** — targeted live candidate retrieval is pagination-complete, covers the evidence routes needed for no-match decisions, and `confirm_new` re-runs complete live reconciliation.
+- **R-013** — normal Tool 2 review/CLI/batch path automatically hands safe confirmed/completed evidence to Renamer Enrich; confirmed title rendering, no-match `_edited` lifecycle, unconfirmed isolation, CLI bridge, and filename idempotency are covered by regressions 56–60 and the live smoke test.
 
 ## Current verified tests / CI
 
-```text
-pytest: 154 passed, 2 warnings (60 tests in test_media_db_reviewer.py)
-helper shell validation: PASS (sh -n scripts/builder-start.sh scripts/review-tool-1.sh)
-```
+GitHub Actions run #55 on PR head `cb42ed8a2a72f92abee354cd80ae1a2e96efe862`:
 
-Passing test suite covers all requirements of R-013:
-1. Tool 1 initial proposal → Tool 2 live confirmed existing row with title → automatic Renamer proposal contains title and `baserow_check_complete=true`.
-2. Probable, multiple, conflicting, insufficient, and unavailable states do not alter Tool 1 proposal or insert candidate titles.
-3. Completed live no-match marks `baserow_check_complete=true` and clears `_edited` suffix without inventing title/location metadata.
-4. Supported CLI and batch review paths automatically exercise the enrichment bridge.
-5. Rerunning review multiple times is strictly idempotent and does not duplicate titles or scripture references.
+```text
+Python 3.12 tests: SUCCESS
+pytest: 154 passed, 2 warnings
+helper shell validation: PASS
+uv build: PASS
+```
 
 ## Last live sample evaluation
 
@@ -87,20 +104,21 @@ confirmed title/metadata enrichments: 1
 
 ### Confirmed Match End-to-End Enrichment Evidence
 
-- **Tracking ID**: `f7903be1`
-- **Current Filename**: `HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3`
-- **Before Tool 2 (Tool 1 Initial Proposed Filename)**: `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-f7903be1.mp3`
-- **Live Baserow Match**: Row ID `2335`, Date: `2015-08-27`, What: `SB 3.6.6`, Place: `Sweden`, Title: `SB 3.6.6 class`
-- **After Tool 2 Handoff (Enriched Proposed Filename)**: `2015-08-27_KKS_SB-3-6-6-class_Sweden-se_ID-f7903be1.mp3`
-- **Registry Record State**: `status = "enriched"`, `needs_review = False`, `baserow_check_complete = True`
-- **Unconfirmed Candidate Isolation**: Exactly 0 of the 220 unconfirmed files received candidate title or location metadata; all 220 remained `status = "pending"`.
-- **New Media Candidate Lifecycle**: Exactly 39 `NEW_MEDIA_CANDIDATE` files received `baserow_check_complete = True` with no invented title or location metadata.
+- Tracking ID: `f7903be1`
+- Current filename: `HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3`
+- Before Tool 2: `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-f7903be1.mp3`
+- Live Baserow match: row `2335`, date `2015-08-27`, WHAT `SB 3.6.6`, place `Sweden`, title `SB 3.6.6 class`
+- After Tool 2 handoff: `2015-08-27_KKS_SB-3-6-6-class_Sweden-se_ID-f7903be1.mp3`
+- Registry state: `status="enriched"`, `needs_review=False`, `baserow_check_complete=True`
+- Unconfirmed candidate isolation: 0 of 220 unconfirmed files received candidate title/location metadata.
+- New-media lifecycle: all 39 `NEW_MEDIA_CANDIDATE` rows propagated `baserow_check_complete=True` without invented title/location metadata.
 
 ## Open questions / contradictions
 
-None.
+None requiring user input. R-014 and R-015 are implementation/handoff corrections.
 
 ## Next milestone
 
-Orchestrator review of PR #19 after GitHub CI validates the pushed head.
+Builder addresses R-014 and R-015 on PR #19, adds the focused portal-state regressions, pushes the corrected head, and waits for required GitHub CI success before returning `READY_FOR_REVIEW`.
 
+Do not merge PR #19 or start Tool 3 implementation until these final corrections are independently verified.
