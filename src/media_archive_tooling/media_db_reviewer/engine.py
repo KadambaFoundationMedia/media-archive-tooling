@@ -1,5 +1,6 @@
 """Media Database Reconciliation Engine for Tool 2 (Build Plan Sections 10-15)."""
 from datetime import datetime
+from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,6 +24,42 @@ from .baserow_provider import (
     normalize_media_row,
     normalize_travel_schedule_row,
 )
+
+
+GENERIC_WHAT_TOKENS = {
+    "class", "classes", "lecture", "lectures", "lekce", "prednaska",
+    "bhajan", "bhajans", "bhajana", "bhajane",
+    "kirtan", "kirtans", "kirtana", "kirtany",
+    "chanting", "harinama", "maha mantra", "mahamantra", "japa",
+    "seminar", "seminars", "workshop", "retreat",
+    "talk", "talks", "speech", "general", "misc", "unknown",
+    "program", "programme", "event", "darshan", "meeting", "conversation",
+    "srimadbhagavatam", "bhagavadgita", "chaitanyacaritamrta", "chaitanyacharitamrita",
+    "sundayfeast", "sunday feast", "festival", "initiation", "vyasapuja", "vyasa puja",
+}
+
+
+def is_specific_what(val: Optional[str]) -> bool:
+    """Determine whether a WHAT string is sufficiently specific to participate in auto-association."""
+    if not val or not str(val).strip():
+        return False
+    clean = str(val).strip()
+    if parse_scripture_reference(clean) is not None:
+        return True
+    norm = _norm_token(clean)
+    if not norm or len(norm) < 4:
+        return False
+    if norm in GENERIC_WHAT_TOKENS:
+        return False
+    # Check if all constituent words are generic tokens or generic qualifiers
+    words = re.findall(r"[a-zA-Z0-9]+", clean.lower())
+    generic_qualifiers = {
+        "morning", "evening", "afternoon", "daily", "special", "intro", "introduction",
+        "part", "pt", "disc", "cd", "tape", "audio", "video", "track", "session",
+    }
+    if words and all(w in GENERIC_WHAT_TOKENS or w in generic_qualifiers or _norm_token(w) in GENERIC_WHAT_TOKENS for w in words):
+        return False
+    return True
 
 
 def _norm_token(text: Optional[str]) -> str:
@@ -504,21 +541,122 @@ class MediaDatabaseReconciliationEngine:
             w_comp = cand.field_comparisons.get("what")
             p_comp = cand.field_comparisons.get("place")
 
-            date_agrees = d_comp is not None and d_comp.state == FieldComparisonState.AGREES
-            what_agrees = w_comp is not None and w_comp.state == FieldComparisonState.AGREES
-            place_agrees = p_comp is not None and p_comp.state == FieldComparisonState.AGREES
+            # Exact full date (R-002): requires both dates present, 10 chars, no DD wildcard, equal, and AGREES
+            db_date = cand.normalized_row.get("date")
+            is_exact_full_date = (
+                bool(local_date)
+                and bool(db_date)
+                and len(local_date) == 10
+                and len(db_date) == 10
+                and not local_date.endswith("DD")
+                and not db_date.endswith("DD")
+                and local_date == db_date
+                and d_comp is not None
+                and d_comp.state == FieldComparisonState.AGREES
+                and (not d_comp.details or "Partial" not in d_comp.details)
+            )
 
-            # Rule 2: Unique High-Specificity Semantic Match (Date + WHAT + WHERE)
-            if date_agrees and what_agrees and place_agrees:
+            # Specific WHAT and exact WHAT match (R-002)
+            is_exact_what = False
+            if is_specific_what(local_what) and w_comp is not None and w_comp.state == FieldComparisonState.AGREES:
+                # Must not be a fuzzy match or category match
+                if not (w_comp.details and ("Fuzzy" in w_comp.details or "category" in w_comp.details)):
+                    local_scrip = parse_scripture_reference(local_what)
+                    if local_scrip:
+                        db_what = cand.normalized_row.get("what")
+                        db_title = cand.normalized_row.get("title")
+                        db_scrip = parse_scripture_reference(db_what) or parse_scripture_reference(db_title)
+                        if db_scrip:
+                            is_exact_what = (
+                                local_scrip["book"] == db_scrip["book"]
+                                and local_scrip["canto"] == db_scrip["canto"]
+                                and local_scrip["chapter"] == db_scrip["chapter"]
+                                and local_scrip["v_start"] == db_scrip["v_start"]
+                                and local_scrip["v_end"] == db_scrip["v_end"]
+                            )
+                        elif db_title:
+                            is_exact_what = _norm_token(local_what) in _norm_token(db_title)
+                    else:
+                        norm_lw = _norm_token(local_what)
+                        norm_dw = _norm_token(cand.normalized_row.get("what"))
+                        norm_dt = _norm_token(cand.normalized_row.get("title"))
+                        is_exact_what = (norm_lw == norm_dw) or (norm_lw == norm_dt)
+
+            # Exact normalized place and country (R-002)
+            is_exact_place = False
+            db_place = cand.normalized_row.get("place")
+            if local_place and db_place and p_comp is not None and p_comp.state == FieldComparisonState.AGREES:
+                # Must not be a fuzzy match
+                if not (p_comp.details and "Fuzzy" in p_comp.details):
+                    norm_lp = _norm_token(local_place)
+                    norm_dp = _norm_token(db_place)
+                    if norm_lp == norm_dp:
+                        nc_l = _norm_country(local_country)
+                        nc_d = _norm_country(cand.normalized_row.get("country"))
+                        if not (nc_l and nc_d and nc_l != nc_d):
+                            is_exact_place = True
+
+            # Rule 2: Unique High-Specificity Semantic Match (Exact Full Date + Specific WHAT + Exact Normalized WHERE)
+            if is_exact_full_date and is_exact_what and is_exact_place:
                 return True, "rule2_date_what_where"
 
-            # Rule 3: High-Specificity Semantic Match with Category/Title Corroboration
-            corroboration = (
-                bool(cand.normalized_row.get("title"))
-                or (cand.normalized_row.get("category") and cand.normalized_row.get("category") == local_what_category)
-                or bool(cand.category_title_context)
-            )
-            if date_agrees and what_agrees and corroboration:
+            # Rule 3: High-Specificity Semantic Match with Genuine Independent Corroboration (R-002)
+            corroboration = False
+            if is_exact_full_date and is_exact_what:
+                db_title = cand.normalized_row.get("title") or ""
+                db_cat = cand.normalized_row.get("category") or ""
+                norm_title = _norm_token(db_title)
+                norm_what = _norm_token(local_what)
+                norm_base_fn = _norm_token(Path(orig_filename).stem) if orig_filename else ""
+
+                # 1. Title corroboration: title genuinely matches local WHAT, scripture, or filename topic (not mere presence)
+                title_matches = False
+                if norm_title:
+                    if norm_what and (norm_what in norm_title or norm_title in norm_what):
+                        title_matches = True
+                    elif norm_base_fn and len(norm_base_fn) >= 5 and norm_base_fn in norm_title:
+                        title_matches = True
+                    elif w_comp.details == "Local what matches database title":
+                        title_matches = True
+                    elif local_scrip:
+                        b = local_scrip.get("book")
+                        book_terms = []
+                        if b == "SB":
+                            book_terms = ["sb", "srimadbhagavatam", "bhagavatam"]
+                        elif b == "BG":
+                            book_terms = ["bg", "bhagavadgita", "gita"]
+                        elif b == "CC":
+                            book_terms = ["cc", "caitanyacaritamrta", "chaitanyacharitamrita", "charitamrita"]
+                        for bt in book_terms:
+                            if bt in norm_title:
+                                title_matches = True
+                                break
+
+                # 2. Category corroboration: DB category genuinely matches local category or scripture
+                category_matches = False
+                if db_cat:
+                    norm_cat = _norm_token(db_cat)
+                    if local_what_category and norm_cat == _norm_token(local_what_category):
+                        category_matches = True
+                    elif local_scrip:
+                        b = local_scrip.get("book")
+                        if b == "SB" and "bhagavatam" in norm_cat:
+                            category_matches = True
+                        elif b == "BG" and "gita" in norm_cat:
+                            category_matches = True
+                        elif b == "CC" and ("caitanya" in norm_cat or "charitamrita" in norm_cat):
+                            category_matches = True
+
+                # 3. Category title context match
+                cat_context_matches = bool(cand.category_title_context)
+
+                # 4. Travel schedule corroboration: travel schedule explicitly corroborates place
+                travel_corroborates = any("corroborates place" in r for r in cand.retrieval_reasons)
+
+                if title_matches or category_matches or cat_context_matches or travel_corroborates:
+                    corroboration = True
+
+            if is_exact_full_date and is_exact_what and corroboration:
                 return True, "rule3_date_what_corroboration"
 
             return False, ""
@@ -659,7 +797,14 @@ class MediaDatabaseReconciliationEngine:
 
         else:
             # No candidate found
-            is_discriminating = bool(local_date and (local_what or local_place))
+            is_partial_date = bool(local_date and (local_date.endswith("DD") or len(local_date) < 10))
+            if is_partial_date:
+                # Partial date without a specific WHAT is NOT discriminating enough for NEW_MEDIA_CANDIDATE (R-012)
+                is_discriminating = bool(is_specific_what(local_what))
+            else:
+                # Full date: discriminating if specific WHAT or place
+                is_discriminating = bool(local_date and (is_specific_what(local_what) or local_place))
+
             if is_live and is_discriminating:
                 decision = ReviewDecision.NEW_MEDIA_CANDIDATE
                 decision_state = "No matching Media row found; input is discriminating"

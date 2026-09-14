@@ -1869,3 +1869,312 @@ def test_46_explicit_404_vs_database_unavailable_distinction(tmp_path):
         assert "live database is unavailable" in str(exc500.value)
 
 
+# ---------------------------------------------------------------------------
+# Test 47: Negative regression: Partial-date agreement does not auto-confirm (R-002)
+# ---------------------------------------------------------------------------
+def test_47_negative_partial_date_agreement_does_not_auto_confirm():
+    """Rule 2/3 require exact full date; compatible partial date (e.g. 2015-02-DD) cannot auto-confirm."""
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2015-02-DD",
+        what_val="BG-01-18",
+        place="Leipzig",
+    )
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 101,
+                "Date": "2015-02-15",
+                "What": "BG-01-18",
+                "Place": "Leipzig",
+            }
+        ],
+    )
+    res = engine.reconcile(parser_res, snapshot)
+    assert res.decision == ReviewDecision.PROBABLE_EXISTING_MEDIA
+    assert res.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert res.renamer_enrichment.confirmed is False
+
+
+# ---------------------------------------------------------------------------
+# Test 48: Negative regression: Fuzzy/substring location does not auto-confirm (R-002)
+# ---------------------------------------------------------------------------
+def test_48_negative_fuzzy_location_agreement_does_not_auto_confirm():
+    """Rule 2 requires exact normalized place; fuzzy/substring match cannot auto-confirm."""
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2015-02-15",
+        what_val="BG-01-18",
+        place="New York",
+    )
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 102,
+                "Date": "2015-02-15",
+                "What": "BG-01-18",
+                "Place": "New York City",
+            }
+        ],
+    )
+    res = engine.reconcile(parser_res, snapshot)
+    assert res.decision == ReviewDecision.PROBABLE_EXISTING_MEDIA
+    assert res.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert res.renamer_enrichment.confirmed is False
+
+
+# ---------------------------------------------------------------------------
+# Test 49: Negative regression: Generic WHAT does not auto-confirm (R-002)
+# ---------------------------------------------------------------------------
+def test_49_negative_generic_what_does_not_auto_confirm():
+    """Rule 2/3 require a specific WHAT; generic tokens (Lecture, Class, Bhajan) cannot auto-confirm."""
+    engine = MediaDatabaseReconciliationEngine()
+    for generic_token in ("Lecture", "Class", "Bhajan", "Kirtan", "Morning Lecture"):
+        parser_res = make_parser_result(
+            date_val="2015-02-15",
+            what_val=generic_token,
+            place="Leipzig",
+        )
+        snapshot = BaserowSnapshot(
+            snapshot_at="2026-09-14T00:00:00Z",
+            state="LIVE_CURRENT",
+            complete=True,
+            media_rows=[
+                {
+                    "id": 103,
+                    "Date": "2015-02-15",
+                    "What": generic_token,
+                    "Place": "Leipzig",
+                }
+            ],
+        )
+        res = engine.reconcile(parser_res, snapshot)
+        assert res.decision == ReviewDecision.PROBABLE_EXISTING_MEDIA, f"Token '{generic_token}' must not auto-confirm"
+        assert res.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+        assert res.renamer_enrichment.confirmed is False
+
+
+# ---------------------------------------------------------------------------
+# Test 50: Negative regression: Unrelated non-empty title does not corroborate (R-002)
+# ---------------------------------------------------------------------------
+def test_50_negative_unrelated_non_empty_title_does_not_corroborate():
+    """Rule 3 requires genuine corroboration; an unrelated non-empty title does not satisfy Rule 3."""
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2015-02-15",
+        what_val="BG-01-18",
+        what_category="Bhagavad-gita",
+        place=None,
+    )
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 104,
+                "Date": "2015-02-15",
+                "What": "BG-01-18",
+                "Title": "Morning Breakfast with Guests",
+                "Category": None,
+            }
+        ],
+    )
+    res = engine.reconcile(parser_res, snapshot)
+    assert res.decision == ReviewDecision.PROBABLE_EXISTING_MEDIA
+    assert res.decision != ReviewDecision.EXISTING_MEDIA_MATCH
+    assert res.renamer_enrichment.confirmed is False
+
+
+# ---------------------------------------------------------------------------
+# Test 51: Positive regression: Genuinely corroborated Rule 3 evidence confirms (R-002)
+# ---------------------------------------------------------------------------
+def test_51_positive_genuinely_corroborated_rule3_confirms():
+    """Rule 3 confirms when exact full date + specific WHAT is genuinely corroborated by title or category."""
+    engine = MediaDatabaseReconciliationEngine()
+
+    # Case A: Title mentions scripture/topic
+    p1 = make_parser_result(date_val="2015-02-15", what_val="BG-01-18", what_category="Bhagavad-gita", place=None)
+    s1 = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 105,
+                "Date": "2015-02-15",
+                "What": "BG-01-18",
+                "Title": "Discourse on Bhagavad Gita 1.18",
+            }
+        ],
+    )
+    res1 = engine.reconcile(p1, s1)
+    assert res1.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    assert res1.selected_media_row_id == 105
+    assert res1.renamer_enrichment.confirmed is True
+
+    # Case B: Category genuinely matches
+    p2 = make_parser_result(date_val="2015-02-15", what_val="BG-01-18", what_category="Bhagavad-gita", place=None)
+    s2 = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 106,
+                "Date": "2015-02-15",
+                "What": "BG-01-18",
+                "Category": "Bhagavad-gita",
+            }
+        ],
+    )
+    res2 = engine.reconcile(p2, s2)
+    assert res2.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    assert res2.selected_media_row_id == 106
+    assert res2.renamer_enrichment.confirmed is True
+
+
+# ---------------------------------------------------------------------------
+# Test 52: Pagination: candidate on page 2 of search results is discovered (R-012)
+# ---------------------------------------------------------------------------
+def test_52_pagination_candidate_on_page_2_is_discovered():
+    """Live candidate search must follow next URL and discover rows on page 2+."""
+    from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+
+    provider = BaserowSnapshotProvider(
+        api_url="https://api.baserow.io",
+        api_token="test_tok",
+        media_table_id="111",
+    )
+
+    page1_resp = MagicMock()
+    page1_resp.status_code = 200
+    page1_resp.json.return_value = {
+        "count": 2,
+        "next": "https://api.baserow.io/api/database/rows/table/111/?page=2",
+        "results": [{"id": 1, "Date": "2014-08-04", "What": "Other"}],
+    }
+
+    page2_resp = MagicMock()
+    page2_resp.status_code = 200
+    page2_resp.json.return_value = {
+        "count": 2,
+        "next": None,
+        "results": [{"id": 2, "Date": "2014-08-04", "What": "BG-01-18"}],
+    }
+
+    def side_effect(url, **kwargs):
+        if "page=2" in url:
+            return page2_resp
+        return page1_resp
+
+    with patch("httpx.Client.get", side_effect=side_effect):
+        results = provider.search_media_candidates_live("BG-01-18")
+        assert len(results) == 2
+        assert any(r["id"] == 2 for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Test 53: Candidate discoverable by date/place but not WHAT is retrieved (R-012)
+# ---------------------------------------------------------------------------
+def test_53_candidate_discoverable_by_date_and_place_without_what():
+    """Targeted querying must search by place and date so candidates without WHAT are retrieved."""
+    from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+
+    p = make_parser_result(
+        date_val="2015-02-15",
+        what_val=None,  # Unresolved WHAT
+        place="Leipzig",
+    )
+
+    provider = BaserowSnapshotProvider(
+        api_url="https://api.baserow.io",
+        api_token="test_tok",
+        media_table_id="111",
+    )
+
+    captured_urls = []
+
+    def mock_get(url, **kwargs):
+        captured_urls.append(url)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"next": None, "results": []}
+        return resp
+
+    with patch("httpx.Client.get", side_effect=mock_get):
+        with httpx.Client() as client:
+            provider._fetch_targeted_media_rows(client, p)
+
+    # Must have queried both 2015-02-15 and Leipzig
+    has_date_query = any("search=2015-02-15" in u for u in captured_urls)
+    has_place_query = any("search=Leipzig" in u for u in captured_urls)
+    assert has_date_query, f"Expected date search query in {captured_urls}"
+    assert has_place_query, f"Expected place search query in {captured_urls}"
+
+
+# ---------------------------------------------------------------------------
+# Test 54: Partial date + place without specific WHAT yields INSUFFICIENT_EVIDENCE (R-012)
+# ---------------------------------------------------------------------------
+def test_54_partial_date_and_place_without_specific_what_returns_insufficient_evidence():
+    """Partial date (e.g. 2015-02-DD) + place without specific WHAT cannot produce NEW_MEDIA_CANDIDATE."""
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        date_val="2015-02-DD",
+        what_val=None,  # No specific WHAT
+        place="Leipzig",
+    )
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-14T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[],
+    )
+    res = engine.reconcile(parser_res, snapshot)
+    assert res.decision == ReviewDecision.INSUFFICIENT_EVIDENCE
+    assert res.decision != ReviewDecision.NEW_MEDIA_CANDIDATE
+
+
+# ---------------------------------------------------------------------------
+# Test 55: Missing media_table_id yields DATABASE_UNAVAILABLE (R-012)
+# ---------------------------------------------------------------------------
+def test_55_missing_media_table_id_yields_database_unavailable(tmp_path):
+    """Missing media_table_id must yield DATABASE_UNAVAILABLE and reject confirm_new."""
+    from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+
+    reg_db = tmp_path / "registry.db"
+    registry = LocalRegistry(reg_db)
+
+    p = make_parser_result(tracking_id="notable01", date_val="2015-02-15", what_val="BG-01-18", place="Leipzig")
+    registry.save_proposal(RenameProposal(
+        tracking_id="notable01", original_path="p", current_filename="f", proposed_filename="f", proposed_path="p", mode=RenameMode.INITIAL, parser_result=p
+    ))
+
+    # Media table ID is missing, only category table ID configured
+    provider = BaserowSnapshotProvider(
+        api_token="valid_token",
+        media_table_id=None,
+        category_table_id="cat_123",
+    )
+
+    snap = provider.load_snapshot()
+    assert snap.state == "DATABASE_UNAVAILABLE"
+    assert snap.complete is False
+
+    service = MediaDatabaseReviewService(registry=registry, provider=provider)
+    rev_res = service.review_file("notable01")
+    assert rev_res.decision == ReviewDecision.DATABASE_UNAVAILABLE
+    assert rev_res.baserow_check_complete is False
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.confirm_new("notable01")
+    assert "live database search is unavailable" in str(exc_info.value)
+
+
+

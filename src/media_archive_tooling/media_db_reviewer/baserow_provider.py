@@ -188,8 +188,8 @@ class BaserowSnapshotProvider:
         if self._injected_snapshot is not None:
             return self._injected_snapshot
 
-        # Query live Baserow if credentials exist
-        if self.api_token and (self.media_table_id or self.category_table_id):
+        # Query live Baserow if credentials and media table ID exist
+        if self.api_token and self.media_table_id:
             try:
                 live_snapshot = self._fetch_live_snapshot(parser_result=parser_result)
                 self._save_audit_snapshot(live_snapshot)
@@ -259,14 +259,20 @@ class BaserowSnapshotProvider:
         url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100"
         if query_text:
             import urllib.parse
-            url += f"&search={urllib.parse.quote(query_text)}"
+            url += f"&search={urllib.parse.quote(str(query_text).strip())}"
 
         try:
             with httpx.Client(timeout=15.0, follow_redirects=True) as client:
-                resp = client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    return [normalize_media_row(r) for r in resp.json().get("results", [])]
-                raise BaserowUnavailableError(f"Baserow candidate search failed: HTTP {resp.status_code}")
+                results: List[Dict[str, Any]] = []
+                next_url: Optional[str] = url
+                while next_url:
+                    resp = client.get(next_url, headers=headers)
+                    if resp.status_code != 200:
+                        raise BaserowUnavailableError(f"Baserow candidate search failed: HTTP {resp.status_code}")
+                    data = resp.json()
+                    results.extend([normalize_media_row(r) for r in data.get("results", [])])
+                    next_url = data.get("next")
+                return results
         except BaserowUnavailableError:
             raise
         except Exception as e:
@@ -284,16 +290,22 @@ class BaserowSnapshotProvider:
             return self._fetch_table_rows(client, self.media_table_id)
 
         queries: List[str] = []
-        # 1. Source ID
+        # 1. Source ID & Tracking ID
         sid = getattr(getattr(parser_result, "file_metadata", None), "source_sequence_id", None)
         if sid:
             queries.append(str(sid))
+        tid = getattr(getattr(parser_result, "identity", None), "tracking_id", None)
+        if tid:
+            queries.append(str(tid))
 
-        # 2. Date
+        # 2. Date: full date or YYYY-MM prefix for partial date ending in DD (R-012)
         dt = getattr(getattr(parser_result, "when", None), "selected_value", None)
         if dt and str(dt) != "UNRESOLVED":
             clean_dt = str(dt).replace("/", "-").strip()
-            if not clean_dt.endswith("DD"):
+            if clean_dt.endswith("DD"):
+                if len(clean_dt) >= 7 and not clean_dt[:7].endswith("MM"):
+                    queries.append(clean_dt[:7])
+            else:
                 queries.append(clean_dt)
 
         # 3. WHAT
@@ -301,7 +313,12 @@ class BaserowSnapshotProvider:
         if what and str(what) != "UNRESOLVED":
             queries.append(str(what))
 
-        # 4. Filename
+        # 4. Place (R-012)
+        place = getattr(getattr(parser_result, "where", None), "place_location", None)
+        if place and str(place) != "UNRESOLVED":
+            queries.append(str(place))
+
+        # 5. Filename
         orig_fn = getattr(getattr(parser_result, "identity", None), "original_filename", None)
         if orig_fn:
             base_fn = Path(orig_fn).stem
@@ -313,17 +330,22 @@ class BaserowSnapshotProvider:
         import urllib.parse
 
         for q in queries:
-            if not q or len(str(q).strip()) < 3:
+            clean_q = str(q).strip()
+            if not clean_q or len(clean_q) < 3:
                 continue
-            url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100&search={urllib.parse.quote(str(q).strip())}"
-            resp = client.get(url, headers=headers)
-            if resp.status_code == 200:
-                for r in resp.json().get("results", []):
-                    rid = r.get("id")
-                    if rid and rid not in row_dict:
-                        row_dict[rid] = r
-            else:
-                raise RuntimeError(f"Baserow targeted query for '{q}' failed: HTTP {resp.status_code}")
+            url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100&search={urllib.parse.quote(clean_q)}"
+            next_url: Optional[str] = url
+            while next_url:
+                resp = client.get(next_url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for r in data.get("results", []):
+                        rid = r.get("id")
+                        if rid and rid not in row_dict:
+                            row_dict[rid] = r
+                    next_url = data.get("next")
+                else:
+                    raise RuntimeError(f"Baserow targeted query for '{clean_q}' failed: HTTP {resp.status_code}")
 
         return list(row_dict.values())
 
@@ -350,12 +372,21 @@ class BaserowSnapshotProvider:
         cat_rows: List[Dict[str, Any]] = []
         travel_rows: List[Dict[str, Any]] = []
 
+        if not self.media_table_id:
+            return BaserowSnapshot(
+                snapshot_at=now_str,
+                state="DATABASE_UNAVAILABLE",
+                complete=False,
+                media_rows=[],
+                category_title_rows=[],
+                travel_schedule_rows=[],
+            )
+
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-            if self.media_table_id:
-                if parser_result is not None:
-                    media_rows = self._fetch_targeted_media_rows(client, parser_result)
-                else:
-                    media_rows = self._fetch_table_rows(client, self.media_table_id)
+            if parser_result is not None:
+                media_rows = self._fetch_targeted_media_rows(client, parser_result)
+            else:
+                media_rows = self._fetch_table_rows(client, self.media_table_id)
             if self.category_table_id:
                 cat_rows = self._fetch_table_rows(client, self.category_table_id)
             if self.travel_schedule_table_id:

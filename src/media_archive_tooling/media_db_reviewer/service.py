@@ -14,6 +14,7 @@ from .engine import (
     _compare_what,
 )
 from .models import (
+    BaserowSnapshot,
     FieldComparisonState,
     MediaDatabaseReviewResult,
     RenamerEnrichment,
@@ -231,24 +232,53 @@ class MediaDatabaseReviewService:
             changes["selected_media_row_id"] = chosen_id
 
         elif action == "confirm_new":
-            # Revalidate live state before finalizing new media candidate
-            local_date = result.selected_field_evidence.get("local_date")
-            local_what = result.selected_field_evidence.get("local_what")
-            if not local_date or not local_what:
+            # Revalidate live state before finalizing new media candidate (R-012)
+            parser_res = None
+            record = self.registry.get_file(tracking_id)
+            if record and record.get("parser_result"):
+                parser_res = ParserResult.model_validate(record["parser_result"])
+            else:
                 prop = self.registry.get_proposal(tracking_id)
                 if prop and prop.parser_result:
-                    p = prop.parser_result
-                    local_date = local_date or (p.when.selected_value if p.when else None)
-                    local_what = local_what or (p.what.selected_value if p.what else None)
+                    parser_res = prop.parser_result
 
-            if not hasattr(self.provider, "search_media_candidates_live"):
-                if hasattr(self.provider, "load_snapshot"):
-                    snapshot = self.provider.load_snapshot()
-                    if getattr(snapshot, "state", None) in ("UNAVAILABLE", "DATABASE_UNAVAILABLE"):
-                        raise RuntimeError("Cannot confirm new media candidate: live database search is unavailable")
-                else:
-                    raise RuntimeError("Cannot confirm new media candidate: provider does not support live candidate search")
-            else:
+            if not parser_res:
+                raise RuntimeError(f"Cannot confirm new media candidate: no parser result found for tracking ID '{tracking_id}'")
+
+            # Check provider live query support
+            if not hasattr(self.provider, "load_snapshot") and not hasattr(self.provider, "search_media_candidates_live"):
+                raise RuntimeError("Cannot confirm new media candidate: provider does not support live search")
+
+            # 1. Full live candidate retrieval and reconciliation via provider snapshot
+            fresh_snapshot = None
+            if hasattr(self.provider, "load_snapshot"):
+                try:
+                    fresh_snapshot = _load_snapshot_for_parser_res(self.provider, parser_res)
+                except BaserowUnavailableError as e:
+                    raise RuntimeError(f"Cannot confirm new media candidate: live database search is unavailable: {e}") from e
+                except Exception as e:
+                    raise RuntimeError(f"Cannot confirm new media candidate: live database search failed: {e}") from e
+
+            if isinstance(fresh_snapshot, BaserowSnapshot):
+                if fresh_snapshot.state in ("UNAVAILABLE", "DATABASE_UNAVAILABLE") or not fresh_snapshot.complete:
+                    raise RuntimeError("Cannot confirm new media candidate: live database search is unavailable")
+
+                fresh_result = self.engine.reconcile(parser_res, fresh_snapshot)
+                if fresh_result.decision != ReviewDecision.NEW_MEDIA_CANDIDATE:
+                    if fresh_result.candidates:
+                        cand_id = fresh_result.candidates[0].media_row_id
+                        raise RuntimeError(
+                            f"Cannot confirm new media candidate: live search discovered matching row {cand_id} ({fresh_result.decision.value})"
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"Cannot confirm new media candidate: fresh review evaluated to {fresh_result.decision.value}"
+                        )
+
+            # 2. Fallback check for test doubles mocking search_media_candidates_live directly
+            elif hasattr(self.provider, "search_media_candidates_live"):
+                local_date = result.selected_field_evidence.get("local_date") or (parser_res.when.selected_value if parser_res.when else None)
+                local_what = result.selected_field_evidence.get("local_what") or (parser_res.what.selected_value if parser_res.what else None)
                 try:
                     fresh_candidates = self.provider.search_media_candidates_live(query_text=local_what or local_date or "")
                 except BaserowUnavailableError as e:
