@@ -187,25 +187,26 @@ class TravelScheduleReviewService:
                 results.append(r)
             except Exception as e:
                 logger.error(f"Batch travel review failed for tracking_id {tid}: {e}")
-                engine = self.get_engine()
-                if engine is None:
-                    err_res = TravelReviewResult(
-                        tracking_id=tid,
-                        decision=TravelReviewDecision.REFERENCE_UNAVAILABLE,
-                        diagnostic_notes=[f"Reference unavailable during batch processing: {e}"],
-                        review_required=True,
-                        review_reasons=[f"Reference unavailable: {e}"],
-                    )
-                else:
-                    err_res = TravelReviewResult(
-                        tracking_id=tid,
-                        decision=TravelReviewDecision.PROCESSING_ERROR,
-                        reference_checksum=engine.manifest.canonical_sha256,
-                        reference_row_count=engine.manifest.row_count,
-                        diagnostic_notes=[f"Batch item processing error for {tid}: {e}"],
-                        review_required=True,
-                        review_reasons=[f"Processing error: {e}"],
-                    )
+                ref_checksum = ""
+                ref_row_count = 0
+                try:
+                    engine = self.get_engine()
+                    if engine is not None:
+                        ref_checksum = engine.manifest.canonical_sha256
+                        ref_row_count = engine.manifest.row_count
+                except Exception:
+                    pass
+
+                err_res = TravelReviewResult(
+                    tracking_id=tid,
+                    decision=TravelReviewDecision.PROCESSING_ERROR,
+                    reference_checksum=ref_checksum,
+                    reference_row_count=ref_row_count,
+                    diagnostic_notes=[f"Batch item processing error for {tid}: {e}"],
+                    review_required=True,
+                    review_reasons=[f"Processing error: {e}"],
+                )
+                self._persist_review(err_res, applied_enrichment=False)
                 results.append(err_res)
         return results
 

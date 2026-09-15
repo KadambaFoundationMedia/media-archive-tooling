@@ -1741,7 +1741,68 @@ def test_r014_batch_processing_error_distinct_from_insufficient_evidence_and_ref
     assert err_res.review_required is True
     assert "Batch item processing error" in err_res.diagnostic_notes[0]
 
+    # Verify audit persistence in local registry
+    stored_err = service.get_stored_review("missing_item")
+    assert stored_err is not None
+    assert stored_err["decision"] == TravelReviewDecision.PROCESSING_ERROR.value
+    assert stored_err["reference_checksum"] == manifest.canonical_sha256
+
     # Second item must succeed, showing batch isolation
     good_res = results[1]
     assert good_res.decision == TravelReviewDecision.CORROBORATED
+
+
+def test_r015_batch_processing_error_when_reference_also_unavailable_and_persisted_to_registry(tmp_path):
+    """R-015: batch exception is classified as PROCESSING_ERROR even when reference is unavailable, and is persisted."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    # Reference store pointing to nonexistent file
+    ref_file = tmp_path / "nonexistent_travel_schedule.json"
+    store = TravelReferenceStore(reference_path=ref_file)
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Calling review_batch on a missing item (which causes an exception during review_file lookup)
+    results = service.review_batch(tracking_ids=["missing_err_item"])
+    assert len(results) == 1
+    err_res = results[0]
+
+    # Must be PROCESSING_ERROR, NOT REFERENCE_UNAVAILABLE
+    assert err_res.decision == TravelReviewDecision.PROCESSING_ERROR
+    assert err_res.decision != TravelReviewDecision.REFERENCE_UNAVAILABLE
+    assert err_res.reference_checksum == ""
+    assert err_res.reference_row_count == 0
+    assert err_res.review_required is True
+
+    # Audit persistence: must be retrievable from the registry
+    stored = service.get_stored_review("missing_err_item")
+    assert stored is not None
+    assert stored["decision"] == TravelReviewDecision.PROCESSING_ERROR.value
+    assert stored["tracking_id"] == "missing_err_item"
+
+
+def test_r016_tool3_suffix_safety_independent_of_tool2_country_normalization_semantics():
+    """R-016: Tool 3 WHERE suffix safety is local and does not alter accepted Tool 2 country normalization."""
+    from media_archive_tooling.media_db_reviewer.engine import _norm_country
+    from media_archive_tooling.travel_reviewer.engine import parse_structured_where
+
+    # Tool 2 country normalization semantics preserved from main:
+    # 2-letter alpha tokens are uppercase preserved; unmapped countries fall back to uppercase
+    assert _norm_country("KD") == "KD"
+    assert _norm_country("XY") == "XY"
+    assert _norm_country("NonexistentCountry") == "NONEXISTENTCOUNTRY"
+    assert _norm_country("Germany") == "DE"
+    assert _norm_country("Australia") == "AU"
+
+    # Tool 3 parse_structured_where strictly validates against ISO-2 codes locally
+    place, iso = parse_structured_where("Farma-KD")
+    assert place == "Farma-KD"
+    assert iso is None
+
+    place, iso = parse_structured_where("Temple-XY")
+    assert place == "Temple-XY"
+    assert iso is None
+
+    place, iso = parse_structured_where("Villa-Vrindavan-IT")
+    assert place == "Villa-Vrindavan"
+    assert iso == "it"
+
 

@@ -75,7 +75,7 @@ Tool 3 provides supporting and contextual evidence by evaluating planned travel 
 
 ---
 
-## 2. Review Findings Addressed (R-001 through R-014)
+## 2. Review Findings Addressed (R-001 through R-016)
 
 ### Round 1 Corrections (R-001 through R-007)
 - **R-001 (Confirmed Tool 2 Media Authority)**: Incorporated confirmed Tool 2 Media WHEN/WHERE values as authoritative recording evidence in `TravelScheduleEngine.evaluate()`. Added `_apply_media_authority_guard()` preventing schedule evidence from contradicting, overwriting, or downgrading confirmed Media dates/locations. Wired `TravelScheduleReviewService` to obtain live Tool 2 context via `MediaDatabaseReviewService`. Added regressions `test_r001_local_date_missing_confirmed_media_date_no_contradictory_when_enrichment` and `test_r001_local_place_missing_confirmed_media_where_no_contradictory_where_enrichment`.
@@ -107,6 +107,17 @@ Tool 3 provides supporting and contextual evidence by evaluating planned travel 
   - Updated test 40 and `test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_healthy` to assert `PROCESSING_ERROR`.
   - Added regression `test_r014_batch_processing_error_distinct_from_insufficient_evidence_and_reference_unavailable`.
 
+### Round 4 Corrections (R-015 through R-016)
+- **R-015 (Batch Operational Error Truthfulness & Audit Persistence)**:
+  - Updated `TravelScheduleReviewService.review_batch()` to classify all per-item operational exceptions as `PROCESSING_ERROR` regardless of reference availability; secondary failures in `get_engine()` no longer relabel the caught item exception as `REFERENCE_UNAVAILABLE`.
+  - Attaches healthy reference checksum and row count on a best-effort basis without altering the processing-error decision.
+  - Persists the `PROCESSING_ERROR` review to the registry via `_persist_review()` before continuing to the next batch item, satisfying the Tool 3 audit contract.
+  - Added regression `test_r015_batch_processing_error_when_reference_also_unavailable_and_persisted_to_registry` and verified audit persistence in `test_r014`.
+- **R-016 (Preservation of Tool 2 Country Normalization Semantics)**:
+  - Restored accepted Tool 2 `_norm_country()` behavior from `main` in `media_db_reviewer/engine.py` (preserving 2-letter alphabetic tokens and falling back to uppercase for unmapped country strings).
+  - Kept strict recognized-ISO suffix validation local to Tool 3's `parse_structured_where()`, preserving non-ISO suffixes like `Farma-KD` without altering shared Tool 2 country normalization.
+  - Added regression `test_r016_tool3_suffix_safety_independent_of_tool2_country_normalization_semantics`.
+
 ---
 
 ## 3. Test Suite & Verification Results
@@ -115,8 +126,8 @@ Tool 3 provides supporting and contextual evidence by evaluating planned travel 
 ```bash
 .venv/bin/pytest -q
 ```
-**Result**: **219 passed, 2 warnings** across the entire project:
-- `tests/test_travel_reviewer.py`: **62/62 passed** (40 required base tests + 7 Round 1 regression tests + 10 Round 2 regression tests + 5 Round 3 regression tests)
+**Result**: **221 passed, 2 warnings** across the entire project:
+- `tests/test_travel_reviewer.py`: **64/64 passed** (40 required base tests + 7 Round 1 regression tests + 10 Round 2 regression tests + 5 Round 3 regression tests + 2 Round 4 regression tests)
 - `tests/test_media_db_reviewer.py`: **63/63 passed** (Tool 2 regression suite)
 - `tests/test_renamer.py`: **88/88 passed** (Tool 1 regression suite)
 - `tests/test_cli.py`: **6/6 passed**
