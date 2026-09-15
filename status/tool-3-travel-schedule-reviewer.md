@@ -8,74 +8,99 @@ Implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-3-implementation`  
 Implementation PR: #26 — `Tool 3 — Travel Schedule Reviewer implementation`  
-Correction implementation commit: `0ef377fb8cad3ba3ebcb30443bfc6259b31daee8`  
+Builder handoff head reviewed: `ff9af4a26142954b4adea2083f56bf04739e957f`  
+Second-round correction implementation commit: `0ef377fb8cad3ba3ebcb30443bfc6259b31daee8`  
 Current `main` at review: `8c29fd76bf20838918823b30c9ed4c1279680d0f`  
 Last planning/review update: 2026-09-15
 
 ## Review checkpoint
 
-Second-round independent review findings R-008 through R-012 have been resolved in full:
+The Builder substantially resolved R-008 through R-012. The following corrections were independently confirmed in the branch:
 
-1. **R-008 (Media WHERE Authority & Structured Location Parsing)**:
-   - Added `parse_structured_where()` to extract trailing 2-letter ISO country codes while preserving hyphenated places (e.g. `Villa-Vrindavan`, `Serbia-summer-camp`, `New-York`, `Krsna-Dvur`).
-   - Extended `_apply_media_authority_guard()` to parse structured locations and protect both canonical place and country from contradictory schedule enrichment.
-   - Derived `confirmed_media_country_iso` from confirmed Media WHERE.
-   - Supported boundary case where confirmed Media WHERE acts as Case-B anchor without provisional WHERE enrichment when local lacks anchors.
-   - Regression tests: `test_r008_hyphenated_confirmed_place_not_truncated`, `test_r008_same_place_different_country_media_guard_suppresses_enrichment`, `test_r008_confirmed_media_where_only_acts_as_case_b_anchor_without_provisional_where`.
+- structured confirmed-Media WHERE parsing now preserves normal hyphenated places;
+- Case C uses place + country ambiguity checks and candidate grouping/provenance is deterministic;
+- `country_iso2` is covered by reference integrity validation;
+- Tool 2 decision is snapshotted in Tool 3 audit data and Case B/C explainability was expanded;
+- the representative evaluation now separately checks confirmed-Media authority and reports zero overwrites;
+- committed walkthrough/CLI documentation was corrected.
 
-2. **R-009 (Structured-Location Identity, Provenance, & Deterministic Grouping)**:
-   - Used structured location identity `(canonical_place, country_iso)` in Case C; same place in different countries remains `MULTIPLE_SCHEDULE_CANDIDATES` and avoids auto-enrichment.
-   - Preserved union of all contributing row IDs and texts across semantic candidates for the selected candidate.
-   - Implemented deterministic candidate and group output with multi-key sorting independent of input iteration order.
-   - Passed engine index to `search_by_when()` and `search_by_where()` service helpers for consistent alias grouping.
-   - Regression tests: `test_r009_same_place_different_country_multiple_candidates_in_case_c`, `test_r009_reversed_input_order_deterministic_grouping_and_provenance`, `test_r009_union_of_row_ids_and_texts_preserved_for_selected_candidate`.
+Required CI run #71 (`Python 3.12 tests`) succeeded on PR merge ref `fe78028619c5123c9c4aedae05364c6e0aca0afc` with **214 passed, 2 warnings**; helper shell validation and package build also passed.
 
-3. **R-010 (Canonical Checksum Inclusion & Validation of `country_iso2`)**:
-   - Included `country_iso2` in `compute_canonical_sha256()` hashing.
-   - Added deterministic recomputation and validation of `country_iso2` from `country` during reference loading, rejecting tampered references.
-   - Updated `.renamer/reference/travel_schedule.json` canonical checksum to match the new definition.
-   - Regression test: `test_r010_tampered_country_iso2_rejected_by_load_reference`.
+Acceptance remains blocked by two targeted correctness findings below. No user policy decision is required.
 
-4. **R-011 (Tool 2 Decision Snapshot & Candidate Explainability Contract)**:
-   - Added `tool2_decision` snapshot to `TravelReviewResult` and SQLite schema migration in `registry.py`.
-   - Populated candidate comparison states (`date_comparison`, `place_comparison`, `country_comparison`) and `match_reasons` for Cases B and C.
-   - Displayed `tool2_decision` and candidate comparison states in detail portal template (`templates/detail.html`).
-   - Regression tests: `test_r011_tool2_decision_snapshotted_in_result_and_registry`, `test_r011_candidate_comparison_states_populated_in_cases_b_and_c`.
+## Third-round independent review findings
 
-5. **R-012 (Truthful Failure Classification & Live Evaluation Metrics)**:
-   - Reclassified per-file batch errors in `review_batch()` as `INSUFFICIENT_EVIDENCE` with distinct diagnostics when reference is healthy (never misclassified as `REFERENCE_UNAVAILABLE`).
-   - Extended representative 260-file acceptance evaluation to compare final state against both local high-authority values and confirmed Tool 2 Media values (`overwritten_high_authority = 0`, `overwritten_confirmed_media_authority = 0`).
-   - Updated committed walkthroughs (`docs/tool-3-travel-schedule-reviewer-walkthrough.md`, `walkthrough.md`) to reflect correct CLI syntax (`--registry-path`, `--reference-path`, positional `TRACKING_ID`), remove candidate "score" references, align representative tracking IDs with current evaluation output, and clarify verification protocol wording.
-   - Regression test: `test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_healthy`.
+### R-013 — Confirmed Media WHERE can still be downgraded to provisional or a real country conflict can be mislabeled as corroboration
 
-## Test & Verification Evidence
+Confirmed Media values are authoritative and Tool 3 must not redundantly apply the same value as provisional schedule evidence. A remaining Case-A path violates that rule when Tool 1 already knows the place but is missing the country.
 
-- **Test Suite**: `.venv/bin/pytest -q` -> **214 passed, 2 warnings in 1.87s**
-  - `tests/test_travel_reviewer.py`: **57/57 passed** (40 base + 7 Round 1 + 10 Round 2 regressions)
-  - `tests/test_media_db_reviewer.py`: **63/63 passed**
-  - `tests/test_renamer.py`: **88/88 passed**
-  - `tests/test_cli.py`: **6/6 passed**
-- **Shell Scripts**: `sh -n scripts/builder-start.sh scripts/review-tool-1.sh` -> **PASS**
-- **Package Build**: `uv build --offline` -> **PASS**
-- **Representative 260-File Evaluation**:
-  - Total files reviewed: 260
-  - Files entering from Tool 2 routing: 133
-  - CORROBORATED count: 36
-  - PROVISIONAL_ENRICHMENT count: 44 (WHEN: 19, WHERE: 25)
-  - MULTIPLE_SCHEDULE_CANDIDATES count: 2
-  - SCHEDULE_CONFLICT count: 67
-  - NO_SCHEDULE_SUPPORT count: 54
-  - INSUFFICIENT_EVIDENCE count: 57
-  - REFERENCE_UNAVAILABLE count: 0
-  - Media-context-unavailable count: 0
-  - Schedule enrichments applied to Tool 1: 44
-  - High-priority local values overwritten: 0
-  - Confirmed-Media values overwritten: 0
+Concrete case:
+
+```text
+Tool 1: exact date + Springfield, country missing
+Tool 2: EXISTING_MEDIA_MATCH, confirmed WHERE Springfield-AU
+schedule: Springfield-AU
+```
+
+Current behavior can let Case A create provisional `Springfield-au`; `_apply_media_authority_guard()` permits it because it equals the confirmed Media value, and Tool 3 can then apply the country to Tool 1 as `PROVISIONAL`. The build plan requires Tool 2/Tool 1 to remain the owner of applying the authoritative Media value; Tool 3 should only record schedule corroboration.
+
+A second variant is also wrong:
+
+```text
+Tool 1: exact date + Springfield, country missing
+Tool 2: confirmed WHERE Springfield-AU
+schedule: Springfield-US
+```
+
+Case A can first create provisional `Springfield-us`; the Media guard suppresses that value, but because Case A did not record a conflict, the guard converts the result to `CORROBORATED`. This hides a real schedule-vs-confirmed-Media country conflict.
+
+There are two related structured-location correctness details to fix at the same time:
+
+- Case A currently marks `place_comparison=CONFLICT` for a country-only disagreement even when the canonical place agrees, and can leave `country_comparison` unset. Field comparison states must be computed independently so same-place/different-country evidence is represented as place `AGREES`, country `CONFLICT`.
+- `parse_structured_where()` describes its suffix as an ISO country code, but currently `_norm_country()` accepts any two alphabetic letters. Use the existing recognized ISO validation/reference so a hyphenated place ending in an arbitrary two-letter token is not accidentally truncated as a country suffix.
+
+Required correction:
+
+- treat confirmed Media WHERE/country as an effective higher-authority constraint whenever the corresponding local dimension is missing;
+- if schedule agrees with an already-confirmed Media value, record corroboration but do not emit/apply redundant provisional enrichment for that dimension;
+- if schedule disagrees with confirmed Media, return/preserve `SCHEDULE_CONFLICT` with explicit provenance instead of converting the result to `CORROBORATED`;
+- compute Case-A place/country comparison states independently;
+- validate trailing country suffixes against recognized ISO-2 codes;
+- add regressions for confirmed country missing locally + agreeing schedule, confirmed country missing locally + conflicting schedule, Case-A country-only conflict comparison states, and a non-ISO two-letter place suffix.
+
+### R-014 — Arbitrary batch processing errors are still classified as `INSUFFICIENT_EVIDENCE`
+
+R-012 required a truthful distinct failure state for a per-file processing error when the schedule reference itself is healthy. The implementation correctly stopped returning `REFERENCE_UNAVAILABLE`, but now maps the same operational error to `INSUFFICIENT_EVIDENCE`.
+
+That decision has a specific semantic meaning in the build plan: neither WHEN nor WHERE provides enough information for a bounded schedule query. A missing registry record, unexpected application exception, or other processing failure is not evidence insufficiency. The current regression `test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_healthy` explicitly asserts `INSUFFICIENT_EVIDENCE`, so it currently locks in the wrong classification.
+
+Required correction:
+
+- introduce/use a truthful distinct processing-error outcome or equivalent structured batch-error representation that cannot be confused with `INSUFFICIENT_EVIDENCE`, `REFERENCE_UNAVAILABLE`, or `NO_SCHEDULE_SUPPORT`;
+- keep the healthy reference checksum/provenance when available;
+- preserve batch isolation so later files continue;
+- update the regression to assert the distinct processing-error semantics;
+- ensure CLI/portal rendering remains safe for the new outcome if an enum state is added.
+
+## Evidence already verified
+
+The following should be preserved while correcting R-013/R-014:
+
+- R-001 through R-012 are otherwise substantially resolved;
+- current branch is based on the current `main` used by PR #26;
+- PR #26 is open and mergeable;
+- CI #71 is green with 214 tests;
+- Tool 1 and Tool 2 accepted regression suites remain green;
+- 260-file live Tool 2 → Tool 3 evaluation reports 44 provisional enrichments, zero local high-authority overwrites, and zero confirmed-Media overwrites.
+
+## Open questions / contradictions
+
+None requiring user input.
 
 ## Next milestone
 
-Independent review and verification of PR #26 for Tool 3 acceptance and merge into `main`.
+Builder addresses R-013 and R-014 on the existing `tool-3-implementation` branch / PR #26, adds the targeted regressions, updates this status with the actual final branch head, obtains green required CI, and returns `READY_FOR_REVIEW` for the final independent review pass.
