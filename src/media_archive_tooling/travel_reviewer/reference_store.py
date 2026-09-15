@@ -31,6 +31,7 @@ def compute_canonical_sha256(rows: List[NormalizedTravelRow]) -> str:
             "end_date": r.end_date,
             "place": r.place,
             "country": r.country,
+            "country_iso2": r.country_iso2,
             "schedule_text": r.schedule_text,
         }
         for r in sorted_rows
@@ -91,6 +92,17 @@ class TravelReferenceStore:
                     f"stored {manifest.canonical_sha256} != computed {calculated_sha}"
                 )
                 return None
+
+            # Validate that country_iso2 is consistent with deterministic recomputation from country (R-010)
+            for r in manifest.normalized_rows:
+                expected_iso = _norm_country(r.country) if r.country else None
+                expected_iso_lower = expected_iso.lower() if expected_iso and len(expected_iso) == 2 else None
+                if r.country_iso2 != expected_iso_lower:
+                    logger.warning(
+                        f"Integrity check failed for {self.reference_path}: "
+                        f"row {r.id} country_iso2 '{r.country_iso2}' != expected '{expected_iso_lower}'"
+                    )
+                    return None
 
             if len(manifest.normalized_rows) != manifest.row_count:
                 logger.warning(

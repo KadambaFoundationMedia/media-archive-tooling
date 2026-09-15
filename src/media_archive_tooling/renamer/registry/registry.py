@@ -89,10 +89,15 @@ class LocalRegistry:
                 selected_row_ids TEXT,
                 result_json TEXT NOT NULL,
                 applied_enrichment INTEGER NOT NULL DEFAULT 0,
+                tool2_decision TEXT,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            try:
+                cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
+            except Exception:
+                pass
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(original_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_current_path ON files(current_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_decision ON media_db_reviews(decision)")
@@ -407,6 +412,7 @@ class LocalRegistry:
         result_json: str,
         selected_row_ids: Optional[List[int]] = None,
         applied_enrichment: bool = False,
+        tool2_decision: Optional[str] = None,
     ):
         now = datetime.now(timezone.utc).isoformat()
         sel_ids_str = json.dumps(selected_row_ids) if selected_row_ids else "[]"
@@ -415,8 +421,8 @@ class LocalRegistry:
             cursor.execute("""
             INSERT INTO travel_reviews (
                 tracking_id, decision, reference_checksum, reference_row_count,
-                selected_row_ids, result_json, applied_enrichment, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                selected_row_ids, result_json, applied_enrichment, tool2_decision, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tracking_id) DO UPDATE SET
                 decision = excluded.decision,
                 reference_checksum = excluded.reference_checksum,
@@ -424,6 +430,7 @@ class LocalRegistry:
                 selected_row_ids = excluded.selected_row_ids,
                 result_json = excluded.result_json,
                 applied_enrichment = excluded.applied_enrichment,
+                tool2_decision = excluded.tool2_decision,
                 updated_at = excluded.updated_at
             """, (
                 tracking_id,
@@ -433,6 +440,7 @@ class LocalRegistry:
                 sel_ids_str,
                 result_json,
                 1 if applied_enrichment else 0,
+                tool2_decision,
                 now,
             ))
             conn.commit()

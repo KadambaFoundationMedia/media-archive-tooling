@@ -96,6 +96,7 @@ class TravelReviewResult(BaseModel):
     input_where_val: Optional[str] = None
     input_where_state: Optional[str] = None
 
+    tool2_decision: Optional[str] = None
     tool2_context_state: Optional[str] = None
     selected_media_row_id: Optional[int] = None
 

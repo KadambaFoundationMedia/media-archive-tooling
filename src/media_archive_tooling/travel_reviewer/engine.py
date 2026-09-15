@@ -63,6 +63,27 @@ def parse_partial_when(when_val: Optional[str]) -> Tuple[Optional[int], Optional
     return y, m, d
 
 
+def parse_structured_where(val: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Parse structured WHERE string into (place, country_iso2).
+
+    Robustly preserves hyphenated place names (e.g. 'Villa-Vrindavan', 'New-York',
+    'Serbia-summer-camp', 'Krsna-Dvur') while extracting trailing 2-letter ISO
+    country code suffixes (e.g. '-IT', '-US', '-RS', '-CZ', '-DE') if present.
+    """
+    if not val:
+        return None, None
+    clean = val.strip()
+    if not clean:
+        return None, None
+    if "-" in clean:
+        parts = clean.rsplit("-", 1)
+        place_part, cand_country = parts[0].strip(), parts[1].strip()
+        norm_c = _norm_country(cand_country)
+        if norm_c and len(norm_c) == 2 and norm_c.isalpha():
+            return place_part, norm_c.lower()
+    return clean, None
+
+
 class TravelScheduleIndex:
     """In-memory multi-key index for fast, bounded travel schedule queries."""
 
@@ -206,7 +227,8 @@ def group_candidates_semantically(
 ) -> List[TravelCandidate]:
     """Group rows that represent the exact same semantic visit interval and canonical place.
 
-    Preserves every source row ID and original text in provenance.
+    Preserves every source row ID and original text in provenance, with deterministic
+    ordering independent of input iteration order.
     """
     grouped: Dict[Tuple[str, str, str, Optional[str]], List[NormalizedTravelRow]] = {}
     for r in rows:
@@ -218,21 +240,33 @@ def group_candidates_semantically(
 
     candidates = []
     for key, row_group in grouped.items():
-        first = row_group[0]
-        row_ids = [r.id for r in row_group]
-        all_texts = [r.schedule_text for r in row_group if r.schedule_text]
-        combined_text = "; ".join(dict.fromkeys(all_texts))
+        # Deterministically choose representative row by lowest row ID
+        rep = min(row_group, key=lambda r: r.id)
+        row_ids = sorted(list(set(r.id for r in row_group)))
+        all_texts = sorted(list(set(r.schedule_text for r in row_group if r.schedule_text)))
+        combined_text = "; ".join(all_texts)
 
         cand = TravelCandidate(
             schedule_row_ids=row_ids,
-            start_date=first.start_date,
+            start_date=rep.start_date,
             end_date=key[1],
-            place=first.place,
-            country=first.country,
-            country_iso2=first.country_iso2,
+            place=rep.place,
+            country=rep.country,
+            country_iso2=rep.country_iso2,
             schedule_text=combined_text,
         )
         candidates.append(cand)
+
+    # Sort candidates deterministically
+    candidates.sort(
+        key=lambda c: (
+            c.start_date,
+            c.end_date,
+            (index.canonical_place(c.place) if index else _norm_place_token(c.place)),
+            c.country_iso2 or "",
+            c.schedule_row_ids[0] if c.schedule_row_ids else 0,
+        )
+    )
     return candidates
 
 
@@ -272,6 +306,7 @@ class TravelScheduleEngine:
                     pass
 
         if t2_res:
+            res.tool2_decision = t2_res.decision.value if hasattr(t2_res.decision, "value") else str(t2_res.decision)
             res.tool2_context_state = t2_res.database_state
             res.selected_media_row_id = t2_res.selected_media_row_id
         else:
@@ -305,6 +340,11 @@ class TravelScheduleEngine:
                     if c_iso:
                         confirmed_media_country_iso = c_iso.lower()
 
+            if confirmed_media_where and not confirmed_media_country_iso:
+                _, parsed_cm_iso = parse_structured_where(confirmed_media_where)
+                if parsed_cm_iso:
+                    confirmed_media_country_iso = parsed_cm_iso
+
             if t2_res.conflicts:
                 res.conflicts.extend(t2_res.conflicts)
                 res.diagnostic_notes.append("Preserving high-authority conflict between local and confirmed Media row")
@@ -325,13 +365,16 @@ class TravelScheduleEngine:
         has_country_only = bool(local_iso and not has_place)
 
         # Incorporate confirmed Media authority for missing local dimensions
+        cm_p, cm_p_iso = parse_structured_where(confirmed_media_where) if confirmed_media_where else (None, None)
+        cm_country = confirmed_media_country_iso or cm_p_iso
+
         # 1. Authoritative date from confirmed Media when local lacks full date
         if not has_full_date and confirmed_media_when:
             cm_y, cm_m, cm_d = parse_partial_when(confirmed_media_when)
             if cm_y and cm_m and cm_d:
                 auth_date = f"{cm_y:04d}-{cm_m:02d}-{cm_d:02d}"
-                eff_place = local_place or (confirmed_media_where.split("-")[0] if confirmed_media_where else None)
-                eff_iso = local_iso or confirmed_media_country_iso
+                eff_place = local_place or cm_p
+                eff_iso = local_iso or cm_country
                 if eff_place:
                     eval_res = self._evaluate_case_a(
                         parser_result=parser_result,
@@ -355,9 +398,9 @@ class TravelScheduleEngine:
                     return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
 
         # 2. Authoritative place from confirmed Media when local lacks place but has full date
-        if has_full_date and not has_place and confirmed_media_where:
-            eff_place = confirmed_media_where.split("-")[0]
-            eff_iso = local_iso or confirmed_media_country_iso
+        if has_full_date and not has_place and cm_p:
+            eff_place = cm_p
+            eff_iso = local_iso or cm_country
             eval_res = self._evaluate_case_a(
                 parser_result=parser_result,
                 res=res,
@@ -367,6 +410,28 @@ class TravelScheduleEngine:
                 is_confirmed_media=is_confirmed_media,
                 t2_res=t2_res,
             )
+            return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
+
+        # 3. Authoritative place from confirmed Media when local lacks date and place (R-008 boundary case)
+        if not has_full_date and not has_place and cm_p and not confirmed_media_when:
+            eff_iso = local_iso or cm_country
+            eval_res = self._evaluate_case_b(
+                parser_result=parser_result,
+                res=res,
+                place=cm_p,
+                country_iso=eff_iso,
+                year=y,
+                month=m,
+                is_confirmed_media=is_confirmed_media,
+                t2_res=t2_res,
+            )
+            # Crucial: confirmed Media WHERE was used as anchor; do not emit it as provisional Tool 3 evidence
+            if eval_res.provisional_enrichment:
+                eval_res.provisional_enrichment.where_val = None
+                if not eval_res.provisional_enrichment.when_val:
+                    eval_res.provisional_enrichment = None
+                    if eval_res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT:
+                        eval_res.decision = TravelReviewDecision.CORROBORATED
             return self._apply_media_authority_guard(eval_res, confirmed_media_when, confirmed_media_where)
 
         # Case D: neither date nor location usable
@@ -442,9 +507,19 @@ class TravelScheduleEngine:
                 res.diagnostic_notes.append("Suppressed provisional WHEN enrichment: contradicts confirmed Media date")
 
         if confirmed_media_where and res.provisional_enrichment.where_val:
-            cand_p = res.provisional_enrichment.where_val.split("-")[0]
-            cm_p = confirmed_media_where.split("-")[0]
-            if self.index.canonical_place(cand_p) != self.index.canonical_place(cm_p):
+            cand_p, cand_iso = parse_structured_where(res.provisional_enrichment.where_val)
+            cm_p, cm_iso = parse_structured_where(confirmed_media_where)
+            place_diff = (
+                cand_p is not None
+                and cm_p is not None
+                and self.index.canonical_place(cand_p) != self.index.canonical_place(cm_p)
+            )
+            country_diff = (
+                cand_iso is not None
+                and cm_iso is not None
+                and cand_iso.lower() != cm_iso.lower()
+            )
+            if place_diff or country_diff:
                 res.provisional_enrichment.where_val = None
                 res.diagnostic_notes.append("Suppressed provisional WHERE enrichment: contradicts confirmed Media location")
 
@@ -609,6 +684,28 @@ class TravelScheduleEngine:
         candidates = group_candidates_semantically(matching_rows, index=self.index)
         res.candidates = candidates
 
+        # Populate candidate comparison states & match reasons (R-011)
+        for c in candidates:
+            c.place_comparison = FieldComparisonState.AGREES.value
+            c_iso = c.country_iso2.lower() if c.country_iso2 else None
+            if country_iso and c_iso:
+                c.country_comparison = FieldComparisonState.AGREES.value if country_iso == c_iso else FieldComparisonState.CONFLICT.value
+            elif not country_iso and c_iso:
+                c.country_comparison = FieldComparisonState.LOCAL_MISSING.value
+            elif country_iso and not c_iso:
+                c.country_comparison = FieldComparisonState.SCHEDULE_MISSING.value
+            else:
+                c.country_comparison = FieldComparisonState.NOT_COMPARABLE.value
+
+            if year is None:
+                c.date_comparison = FieldComparisonState.LOCAL_MISSING.value
+            else:
+                c.date_comparison = FieldComparisonState.AGREES.value
+
+            c.match_reasons.append(
+                f"Schedule visit to {c.place} ({c.start_date}..{c.end_date}) matches location constraint"
+            )
+
         # Check distinct visit intervals
         distinct_intervals = set((c.start_date, c.end_date) for c in candidates)
 
@@ -622,7 +719,17 @@ class TravelScheduleEngine:
             return res
 
         # Exactly 1 distinct visit interval
+        # Preserve the union of all contributing row IDs across matching candidates (R-009)
+        union_row_ids = sorted(list(set(rid for c in candidates for rid in c.schedule_row_ids)))
+        all_cand_texts = [c.schedule_text for c in candidates if c.schedule_text]
+        combined_cand_text = "; ".join(dict.fromkeys(all_cand_texts))
+
         cand = candidates[0]
+        cand.schedule_row_ids = union_row_ids
+        if combined_cand_text:
+            cand.schedule_text = combined_cand_text
+        res.selected_schedule_row_ids = union_row_ids
+
         d_s = parse_iso_date(cand.start_date)
         d_e = parse_iso_date(cand.end_date) if cand.end_date else d_s
 
@@ -636,14 +743,13 @@ class TravelScheduleEngine:
         if d_s == eff_e:
             selected_when = d_s.isoformat()
             res.decision = TravelReviewDecision.PROVISIONAL_ENRICHMENT
-            res.selected_schedule_row_ids = cand.schedule_row_ids
             cand.possible_when = selected_when
             res.provisional_enrichment = TravelRenamerEnrichment(
                 confirmed=False,
                 source_tool="tool_3_travel_schedule_review",
                 when_val=selected_when,
                 when_state=ResolutionState.PROVISIONAL,
-                schedule_row_ids=cand.schedule_row_ids,
+                schedule_row_ids=union_row_ids,
                 reference_checksum=self.manifest.canonical_sha256,
                 evidence=[f"Single-day travel schedule visit to {place} on {selected_when}"],
             )
@@ -657,19 +763,17 @@ class TravelScheduleEngine:
             # If local already had this exact month precision, it is corroborated
             if parser_result.when and parser_result.when.selected_value == month_precision:
                 res.decision = TravelReviewDecision.CORROBORATED
-                res.selected_schedule_row_ids = cand.schedule_row_ids
                 res.diagnostic_notes.append(f"Schedule range corroborates existing partial date {month_precision}")
                 return res
 
             res.decision = TravelReviewDecision.PROVISIONAL_ENRICHMENT
-            res.selected_schedule_row_ids = cand.schedule_row_ids
             cand.possible_when = month_precision
             res.provisional_enrichment = TravelRenamerEnrichment(
                 confirmed=False,
                 source_tool="tool_3_travel_schedule_review",
                 when_val=month_precision,
                 when_state=ResolutionState.PROVISIONAL,
-                schedule_row_ids=cand.schedule_row_ids,
+                schedule_row_ids=union_row_ids,
                 reference_checksum=self.manifest.canonical_sha256,
                 evidence=[f"Multi-day visit to {place} ({cand.start_date}..{cand.end_date}) authorizes month precision {month_precision}"],
             )
@@ -681,19 +785,17 @@ class TravelScheduleEngine:
             year_precision = f"{d_s.year:04d}-MM-DD"
             if parser_result.when and parser_result.when.selected_value == year_precision:
                 res.decision = TravelReviewDecision.CORROBORATED
-                res.selected_schedule_row_ids = cand.schedule_row_ids
                 res.diagnostic_notes.append(f"Schedule range corroborates existing partial date {year_precision}")
                 return res
 
             res.decision = TravelReviewDecision.PROVISIONAL_ENRICHMENT
-            res.selected_schedule_row_ids = cand.schedule_row_ids
             cand.possible_when = year_precision
             res.provisional_enrichment = TravelRenamerEnrichment(
                 confirmed=False,
                 source_tool="tool_3_travel_schedule_review",
                 when_val=year_precision,
                 when_state=ResolutionState.PROVISIONAL,
-                schedule_row_ids=cand.schedule_row_ids,
+                schedule_row_ids=union_row_ids,
                 reference_checksum=self.manifest.canonical_sha256,
                 evidence=[f"Visit to {place} spans months ({cand.start_date}..{cand.end_date}); authorizes year precision {year_precision}"],
             )
@@ -727,6 +829,32 @@ class TravelScheduleEngine:
         candidates = group_candidates_semantically(matching_rows, index=self.index)
         res.candidates = candidates
 
+        # Populate candidate comparison states & match reasons (R-011)
+        for c in candidates:
+            c.date_comparison = FieldComparisonState.AGREES.value
+            local_p = parser_result.where.place_location if parser_result.where else ""
+            if local_p:
+                if self.index.canonical_place(local_p) == self.index.canonical_place(c.place):
+                    c.place_comparison = FieldComparisonState.AGREES.value
+                else:
+                    c.place_comparison = FieldComparisonState.CONFLICT.value
+            else:
+                c.place_comparison = FieldComparisonState.LOCAL_MISSING.value
+
+            c_iso = c.country_iso2.lower() if c.country_iso2 else None
+            if country_iso and c_iso:
+                c.country_comparison = FieldComparisonState.AGREES.value if country_iso == c_iso else FieldComparisonState.CONFLICT.value
+            elif not country_iso and c_iso:
+                c.country_comparison = FieldComparisonState.LOCAL_MISSING.value
+            elif country_iso and not c_iso:
+                c.country_comparison = FieldComparisonState.SCHEDULE_MISSING.value
+            else:
+                c.country_comparison = FieldComparisonState.NOT_COMPARABLE.value
+
+            c.match_reasons.append(
+                f"Schedule places speaker in {c.place} ({c.country or 'country unknown'}) on {exact_date}"
+            )
+
         # Check for country contradiction if country is known locally
         if country_iso:
             compatible = []
@@ -753,13 +881,26 @@ class TravelScheduleEngine:
             res.decision = TravelReviewDecision.NO_SCHEDULE_SUPPORT
             return res
 
-        # Check distinct structured places
+        # Check distinct structured locations (canonical_place, country_iso) (R-009)
         distinct_places = set(self.index.canonical_place(c.place) for c in candidates if c.place and c.place.strip())
 
-        if len(distinct_places) > 1:
+        # Check for multiple distinct canonical places or same place in different countries
+        distinct_countries_by_place: Dict[str, Set[str]] = {}
+        for c in candidates:
+            if c.place and c.place.strip():
+                cp = self.index.canonical_place(c.place)
+                c_iso = c.country_iso2.lower() if c.country_iso2 else ""
+                distinct_countries_by_place.setdefault(cp, set()).add(c_iso)
+
+        has_multi_country_conflict = any(
+            len([iso for iso in isos if iso]) > 1
+            for isos in distinct_countries_by_place.values()
+        )
+
+        if len(distinct_places) > 1 or has_multi_country_conflict:
             res.decision = TravelReviewDecision.MULTIPLE_SCHEDULE_CANDIDATES
             res.diagnostic_notes.append(
-                f"Multiple distinct schedule locations ({len(distinct_places)}) found for date {exact_date}"
+                f"Multiple distinct schedule locations found for date {exact_date}"
             )
             for c in candidates:
                 c_iso = c.country_iso2.lower() if c.country_iso2 else ""
@@ -772,30 +913,42 @@ class TravelScheduleEngine:
             res.diagnostic_notes.append(f"Schedule for {exact_date} contains no usable place name")
             return res
 
-        # Exactly 1 unique place
+        # Exactly 1 unique structured location
+        # Preserve the union of all contributing row IDs across matching candidates (R-009)
+        union_row_ids = sorted(list(set(rid for c in candidates for rid in c.schedule_row_ids)))
+        all_cand_texts = [c.schedule_text for c in candidates if c.schedule_text]
+        combined_cand_text = "; ".join(dict.fromkeys(all_cand_texts))
+
         cand = candidates[0]
+        cand.schedule_row_ids = union_row_ids
+        if combined_cand_text:
+            cand.schedule_text = combined_cand_text
+
+        # Determine country: pick known candidate country or local country
+        cand_with_iso = next((c for c in candidates if c.country_iso2), None)
+        best_iso = cand_with_iso.country_iso2.lower() if cand_with_iso else (country_iso or "")
+
         clean_place = cand.place.strip().replace(" ", "-")
-        iso_suffix = cand.country_iso2.lower() if cand.country_iso2 else (country_iso or "")
-        selected_where = f"{clean_place}-{iso_suffix}".strip("-")
+        selected_where = f"{clean_place}-{best_iso}".strip("-")
 
         # Check if local already had this exact place (missing country only)
         local_p = parser_result.where.place_location if parser_result.where else ""
         if local_p and self.index.canonical_place(local_p) == self.index.canonical_place(cand.place):
             # Known place missing country: provisionally fill country without replacing place
-            selected_where = f"{local_p}-{iso_suffix}".strip("-")
-            evidence_str = f"Unique schedule match provisionally supplies country {iso_suffix.upper()} for known place {local_p}"
+            selected_where = f"{local_p}-{best_iso}".strip("-")
+            evidence_str = f"Unique schedule match provisionally supplies country {best_iso.upper()} for known place {local_p}"
         else:
             evidence_str = f"Unique schedule entry on {exact_date} provisionally enriches location to {selected_where}"
 
         res.decision = TravelReviewDecision.PROVISIONAL_ENRICHMENT
-        res.selected_schedule_row_ids = cand.schedule_row_ids
+        res.selected_schedule_row_ids = union_row_ids
         cand.possible_where = selected_where
         res.provisional_enrichment = TravelRenamerEnrichment(
             confirmed=False,
             source_tool="tool_3_travel_schedule_review",
             where_val=selected_where,
             where_state=ResolutionState.PROVISIONAL,
-            schedule_row_ids=cand.schedule_row_ids,
+            schedule_row_ids=union_row_ids,
             reference_checksum=self.manifest.canonical_sha256,
             evidence=[evidence_str],
         )

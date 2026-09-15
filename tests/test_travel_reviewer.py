@@ -35,6 +35,11 @@ from media_archive_tooling.renamer.models import (
 )
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.renamer.service import RenamerApplicationService
+from media_archive_tooling.media_db_reviewer.models import (
+    MediaCandidate,
+    MediaDatabaseReviewResult,
+    ReviewDecision,
+)
 from media_archive_tooling.review_portal.app import app, configure_review_context
 from media_archive_tooling.travel_reviewer.engine import (
     TravelScheduleEngine,
@@ -42,6 +47,7 @@ from media_archive_tooling.travel_reviewer.engine import (
     _norm_place_token,
     group_candidates_semantically,
     parse_iso_date,
+    parse_structured_where,
 )
 from media_archive_tooling.travel_reviewer.models import (
     NormalizedTravelRow,
@@ -1073,8 +1079,8 @@ def test_40_batch_isolates_one_file_errors_and_continues(tmp_path):
     # Review batch containing a non-existent tracking ID and the good tracking ID
     results = service.review_batch(tracking_ids=["nonexistent_id", "good0001"])
     assert len(results) == 2
-    assert results[0].decision == TravelReviewDecision.REFERENCE_UNAVAILABLE
-    assert "Batch processing error" in results[0].diagnostic_notes[0]
+    assert results[0].decision == TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    assert "Batch item processing error" in results[0].diagnostic_notes[0]
     assert results[1].decision == TravelReviewDecision.CORROBORATED
 
 
@@ -1296,3 +1302,273 @@ def test_r006_valid_explicit_range_longer_than_366_days_indexed_and_found():
     p = create_sample_parser_result(when_val="2018-06-15", place="Mayapur", country="India", country_iso2="in")
     res = engine.evaluate(p)
     assert res.decision == TravelReviewDecision.CORROBORATED
+
+
+def test_r008_hyphenated_confirmed_place_not_truncated():
+    """R-008: hyphenated places (e.g. Villa-Vrindavan, Serbia-summer-camp) are preserved, not truncated."""
+    place, iso = parse_structured_where("Villa-Vrindavan-IT")
+    assert place == "Villa-Vrindavan"
+    assert iso == "it"
+
+    place2, iso2 = parse_structured_where("Serbia-summer-camp-RS")
+    assert place2 == "Serbia-summer-camp"
+    assert iso2 == "rs"
+
+    place3, iso3 = parse_structured_where("New-York-US")
+    assert place3 == "New-York"
+    assert iso3 == "us"
+
+    # No country suffix
+    place4, iso4 = parse_structured_where("Serbia-summer-camp")
+    assert place4 == "Serbia-summer-camp"
+    assert iso4 is None
+
+
+def test_r008_same_place_different_country_media_guard_suppresses_enrichment():
+    """R-008: media authority guard suppresses schedule WHERE enrichment if country contradicts confirmed Media country."""
+    row = normalize_to_travel_row(make_raw_schedule_row(401, "2020-05-10", place="Springfield", country="USA"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    res = TravelReviewResult(
+        tracking_id="sp01",
+        decision=TravelReviewDecision.PROVISIONAL_ENRICHMENT,
+        provisional_enrichment=TravelRenamerEnrichment(
+            where_val="Springfield-US",
+            where_state=ResolutionState.PROVISIONAL,
+        ),
+    )
+    guarded = engine._apply_media_authority_guard(
+        res,
+        confirmed_media_when=None,
+        confirmed_media_where="Springfield-AU",
+    )
+    # The guard must suppress provisional enrichment for Springfield-US because confirmed Media has country AU
+    assert guarded.provisional_enrichment is None
+    assert any("Suppressed provisional WHERE enrichment" in n for n in guarded.diagnostic_notes)
+
+
+def test_r008_confirmed_media_where_only_acts_as_case_b_anchor_without_provisional_where():
+    """R-008: when local has no anchor and confirmed Media provides WHERE (no WHEN), WHERE anchors Case B without becoming provisional evidence."""
+    row = normalize_to_travel_row(make_raw_schedule_row(501, "2019-06-15", place="Villa-Vrindavan", country="Italy"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    # Local has no date anchor and no place anchor
+    p = create_sample_parser_result(when_val="YYYY-MM-DD", place="", country=None, country_iso2=None)
+    # Confirmed Media has WHERE Villa-Vrindavan-IT, but NO when_val
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id=p.identity.tracking_id,
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=888,
+        candidates=[
+            MediaCandidate(
+                media_row_id=888,
+                normalized_row={"place": "Villa-Vrindavan", "country": "Italy"},
+            )
+        ],
+    )
+    res = engine.evaluate(p, tool2_context=t2_res)
+    # Case B should find the unique visit on 2019-06-15 and provisionally enrich WHEN, but NOT WHERE
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.provisional_enrichment is not None
+    assert res.provisional_enrichment.when_val == "2019-06-15"
+    assert res.provisional_enrichment.where_val is None
+
+
+def test_r009_same_place_different_country_multiple_candidates_in_case_c():
+    """R-009: same place in different countries on same date must be MULTIPLE_SCHEDULE_CANDIDATES in Case C."""
+    row1 = normalize_to_travel_row(make_raw_schedule_row(601, "2020-08-01", place="Springfield", country="United States"))
+    row2 = normalize_to_travel_row(make_raw_schedule_row(602, "2020-08-01", place="Springfield", country="Australia"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=2,
+        canonical_sha256=compute_canonical_sha256([row1, row2]),
+        normalized_rows=[row1, row2],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    p = create_sample_parser_result(when_val="2020-08-01", place="", country=None, country_iso2=None)
+    res = engine.evaluate(p)
+    assert res.decision == TravelReviewDecision.MULTIPLE_SCHEDULE_CANDIDATES
+    assert res.provisional_enrichment is None
+
+
+def test_r009_reversed_input_order_deterministic_grouping_and_provenance():
+    """R-009: candidate grouping and provenance are deterministic independent of input row order."""
+    row1 = normalize_to_travel_row(make_raw_schedule_row(10, "2019-05-01", place="Berlin", text="First text"))
+    row2 = normalize_to_travel_row(make_raw_schedule_row(20, "2019-05-01", place="Berlin", text="Second text"))
+
+    cands_forward = group_candidates_semantically([row1, row2])
+    cands_reversed = group_candidates_semantically([row2, row1])
+
+    assert len(cands_forward) == 1
+    assert len(cands_reversed) == 1
+    assert cands_forward[0].schedule_row_ids == [10, 20]
+    assert cands_reversed[0].schedule_row_ids == [10, 20]
+    assert cands_forward[0].schedule_text == cands_reversed[0].schedule_text
+
+
+def test_r009_union_of_row_ids_and_texts_preserved_for_selected_candidate():
+    """R-009: union of contributing row IDs and texts preserved when selecting candidate."""
+    row1 = normalize_to_travel_row(make_raw_schedule_row(50, "2021-04-05", place="Mayapur", country="India", text="Morning darshan"))
+    row2 = normalize_to_travel_row(make_raw_schedule_row(51, "2021-04-05", place="Mayapur", country="India", text="Evening class"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=2,
+        canonical_sha256=compute_canonical_sha256([row1, row2]),
+        normalized_rows=[row1, row2],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    p = create_sample_parser_result(when_val="2021-04-05", place="", country=None, country_iso2=None)
+    res = engine.evaluate(p)
+    assert res.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+    assert res.selected_schedule_row_ids == [50, 51]
+    assert res.provisional_enrichment.schedule_row_ids == [50, 51]
+
+
+def test_r010_tampered_country_iso2_rejected_by_load_reference(tmp_path):
+    """R-010: tampered country_iso2 cannot pass reference loading integrity check."""
+    row = normalize_to_travel_row(make_raw_schedule_row(701, "2020-01-01", place="Berlin", country="Germany"))
+    ref_file = tmp_path / "travel_schedule.json"
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    store = TravelReferenceStore(reference_path=ref_file)
+    store.save_reference(manifest)
+
+    # Tamper with stored country_iso2 in the JSON file
+    import json
+    with open(ref_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data["normalized_rows"][0]["country_iso2"] = "fr"  # Germany should be 'de'
+    with open(ref_file, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    # Loading the tampered file must fail (return None)
+    loaded = store.load_reference()
+    assert loaded is None
+
+
+def test_r011_tool2_decision_snapshotted_in_result_and_registry(tmp_path):
+    """R-011: tool2_decision is snapshotted in TravelReviewResult and registry."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    row = normalize_to_travel_row(make_raw_schedule_row(801, "2020-03-01", place="Berlin", country="Germany"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    ref_file = tmp_path / "travel_schedule.json"
+    store = TravelReferenceStore(reference_path=ref_file)
+    store.save_reference(manifest)
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    p = create_sample_parser_result(tracking_id="t2snap01", when_val="2020-03-01", place="Berlin", country="Germany", country_iso2="de")
+    register_file(reg, p)
+
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id=p.identity.tracking_id,
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=801,
+    )
+    res = service.review_file(target="t2snap01", tool2_context=t2_res)
+    assert res.tool2_decision == "EXISTING_MEDIA_MATCH"
+
+    stored = reg.get_travel_review("t2snap01")
+    assert stored is not None
+    assert stored.get("tool2_decision") == "EXISTING_MEDIA_MATCH"
+    assert stored["result"].get("tool2_decision") == "EXISTING_MEDIA_MATCH"
+
+
+def test_r011_candidate_comparison_states_populated_in_cases_b_and_c(tmp_path):
+    """R-011: candidate comparison states are populated in Case B and Case C."""
+    row1 = normalize_to_travel_row(make_raw_schedule_row(901, "2020-07-15", place="Berlin", country="Germany"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row1]),
+        normalized_rows=[row1],
+    )
+    engine = TravelScheduleEngine(manifest)
+
+    # Case B test (place known, date missing)
+    pb = create_sample_parser_result(when_val="YYYY-MM-DD", place="Berlin", country="Germany", country_iso2="de")
+    res_b = engine.evaluate(pb)
+    assert len(res_b.candidates) == 1
+    cand_b = res_b.candidates[0]
+    assert cand_b.place_comparison == "AGREES"
+    assert cand_b.country_comparison == "AGREES"
+    assert cand_b.date_comparison == "LOCAL_MISSING"
+    assert len(cand_b.match_reasons) > 0
+
+    # Case C test (date known, place missing)
+    pc = create_sample_parser_result(when_val="2020-07-15", place="", country="")
+    res_c = engine.evaluate(pc)
+    assert len(res_c.candidates) == 1
+    cand_c = res_c.candidates[0]
+    assert cand_c.date_comparison == "AGREES"
+    assert cand_c.place_comparison == "LOCAL_MISSING"
+    assert len(cand_c.match_reasons) > 0
+
+
+def test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_healthy(tmp_path):
+    """R-012: per-file error in batch does not return REFERENCE_UNAVAILABLE when reference is healthy."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    row = normalize_to_travel_row(make_raw_schedule_row(999, "2020-01-01", place="Berlin", country="Germany"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    ref_file = tmp_path / "travel_schedule.json"
+    store = TravelReferenceStore(reference_path=ref_file)
+    store.save_reference(manifest)
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    results = service.review_batch(tracking_ids=["missing_from_registry"])
+    assert len(results) == 1
+    # Must NOT be REFERENCE_UNAVAILABLE
+    assert results[0].decision == TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    assert "Batch item processing error" in results[0].diagnostic_notes[0]
+

@@ -187,11 +187,21 @@ class TravelScheduleReviewService:
                 results.append(r)
             except Exception as e:
                 logger.error(f"Batch travel review failed for tracking_id {tid}: {e}")
-                err_res = TravelReviewResult(
-                    tracking_id=tid,
-                    decision=TravelReviewDecision.REFERENCE_UNAVAILABLE,
-                    diagnostic_notes=[f"Batch processing error: {e}"],
-                )
+                engine = self.get_engine()
+                if engine is None:
+                    err_res = TravelReviewResult(
+                        tracking_id=tid,
+                        decision=TravelReviewDecision.REFERENCE_UNAVAILABLE,
+                        diagnostic_notes=[f"Reference unavailable during batch processing: {e}"],
+                    )
+                else:
+                    err_res = TravelReviewResult(
+                        tracking_id=tid,
+                        decision=TravelReviewDecision.INSUFFICIENT_EVIDENCE,
+                        reference_checksum=engine.manifest.canonical_sha256,
+                        reference_row_count=engine.manifest.row_count,
+                        diagnostic_notes=[f"Batch item processing error for {tid}: {e}"],
+                    )
                 results.append(err_res)
         return results
 
@@ -202,7 +212,7 @@ class TravelScheduleReviewService:
             return []
         rows = engine.index.get_rows_by_date(date_str)
         from .engine import group_candidates_semantically
-        return group_candidates_semantically(rows)
+        return group_candidates_semantically(rows, index=engine.index)
 
     def search_by_where(self, place_str: str) -> List[TravelCandidate]:
         """Diagnostic helper to search schedule candidates by place."""
@@ -211,7 +221,7 @@ class TravelScheduleReviewService:
             return []
         rows = engine.index.get_rows_by_place(place_str)
         from .engine import group_candidates_semantically
-        return group_candidates_semantically(rows)
+        return group_candidates_semantically(rows, index=engine.index)
 
     def get_stored_review(self, tracking_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve previously persisted Tool 3 review from local registry."""
@@ -227,6 +237,7 @@ class TravelScheduleReviewService:
                 selected_row_ids=res.selected_schedule_row_ids,
                 result_json=res.model_dump_json(),
                 applied_enrichment=applied_enrichment,
+                tool2_decision=res.tool2_decision,
             )
         except Exception as e:
             logger.warning(f"Could not persist travel review for {res.tracking_id}: {e}")

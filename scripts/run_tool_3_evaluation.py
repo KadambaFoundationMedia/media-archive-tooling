@@ -5,12 +5,14 @@ from pathlib import Path
 from media_archive_tooling.adapters.baserow import BaserowReferenceProvider
 from media_archive_tooling.config import load_config
 from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+from media_archive_tooling.media_db_reviewer.models import ReviewDecision
 from media_archive_tooling.media_db_reviewer.service import MediaDatabaseReviewService
 from media_archive_tooling.renamer.logging.logger import RenamerLogger
 from media_archive_tooling.renamer.models import RenameMode, ResolutionState
 from media_archive_tooling.renamer.planner.executor import BatchExecutor
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.renamer.service import RenamerApplicationService
+from media_archive_tooling.travel_reviewer.engine import parse_structured_where
 from media_archive_tooling.travel_reviewer.models import TravelReviewDecision
 from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore
 from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
@@ -80,6 +82,7 @@ def run_evaluation():
     t3_results = []
     downstream_from_t2 = 0
     overwritten_high_authority = 0
+    overwritten_confirmed_media_authority = 0
 
     for p in proposals:
         tid = p.tracking_id
@@ -108,6 +111,25 @@ def run_evaluation():
             curr_where = updated_rec["where_val"].lower()
             if curr_where != init_where:
                 overwritten_high_authority += 1
+
+        # Confirmed Tool 2 Media authoritative WHEN / WHERE check (R-012):
+        if t2_res and t2_res.decision == ReviewDecision.EXISTING_MEDIA_MATCH:
+            enrich = getattr(t2_res, "renamer_enrichment", None)
+            if enrich and getattr(enrich, "confirmed", False):
+                # Authoritative confirmed WHEN: full exact date
+                if getattr(enrich, "when_val", None):
+                    t2_when = str(enrich.when_val).strip()
+                    if len(t2_when) == 10 and "DD" not in t2_when and "MM" not in t2_when:
+                        if updated_rec["when_val"] != t2_when:
+                            overwritten_confirmed_media_authority += 1
+                # Authoritative confirmed WHERE: place and/or country
+                if getattr(enrich, "where_val", None):
+                    c_place, c_iso = parse_structured_where(str(enrich.where_val).strip())
+                    u_place, u_iso = parse_structured_where(updated_rec["where_val"])
+                    if c_place and u_place and c_place.lower() != u_place.lower():
+                        overwritten_confirmed_media_authority += 1
+                    elif c_iso and u_iso and c_iso.lower() != u_iso.lower():
+                        overwritten_confirmed_media_authority += 1
 
     # Count decisions
     counts = {
@@ -176,7 +198,10 @@ def run_evaluation():
     print(f"REFERENCE_UNAVAILABLE count: {counts['REFERENCE_UNAVAILABLE']}")
     print(f"Media-context-unavailable count: {sum(1 for r in t3_results if r.tool2_context_state in ('UNAVAILABLE', 'DATABASE_UNAVAILABLE'))}")
     print(f"number of schedule enrichments applied to Tool 1: {len(enriched_examples)}")
-    print(f"number of high-priority local/confirmed-Media values overwritten: {overwritten_high_authority}")
+    print(f"number of high-priority local values overwritten: {overwritten_high_authority}")
+    print(f"number of confirmed-Media values overwritten: {overwritten_confirmed_media_authority}")
+    assert overwritten_high_authority == 0, f"Local high-authority values overwritten: {overwritten_high_authority}"
+    assert overwritten_confirmed_media_authority == 0, f"Confirmed-Media values overwritten: {overwritten_confirmed_media_authority}"
 
     # Output JSON summary for walkthrough documentation
     summary_data = {
@@ -187,6 +212,7 @@ def run_evaluation():
         "when_enrichments": when_enrichments,
         "where_enrichments": where_enrichments,
         "overwritten_high_authority": overwritten_high_authority,
+        "overwritten_confirmed_media_authority": overwritten_confirmed_media_authority,
         "enriched_examples": enriched_examples[:10],
         "category_examples": category_examples,
     }
