@@ -8,69 +8,26 @@ Implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `ACCEPTED`
 
-Planned implementation branch: `tool-3-implementation`  
-Planned implementation PR: not opened yet  
-Last planning update: 2026-09-14
+Implementation branch: `tool-3-implementation`  
+Implementation PR: #26 — `Tool 3 — Travel Schedule Reviewer implementation`  
+Accepted implementation code/docs commit: `a7184b97f4543defe59274c5ad5d2b9496276d37`  
+Builder handoff head reviewed: `749a421e887686ad4dfbe23addb986221556eb98`  
+Final planning/review date: 2026-09-15
 
-## Planning decisions
+## Acceptance record
 
-- Tool 3 is a read-only Travel Schedule Reviewer used primarily by Tool 1 and potentially later tools.
-- It consumes Tool 1 structured WHEN/WHERE/path evidence and Tool 2 Media context; it does not reparse filenames or reimplement Tool 2 Media reconciliation.
-- The Baserow `travel_schedule` table is user-declared static/immutable and may be bootstrapped once into a verified local reference dataset for reuse across batches, sessions, and offline runs.
-- Mutable Media rows remain under Tool 2 live-current rules; the static exception applies only to `travel_schedule`.
-- Travel schedule records planned travel, not guaranteed actual presence. Schedule-only evidence is supporting/provisional and never absolute proof.
-- Filename/path evidence and confirmed Media evidence are never silently overwritten by travel-schedule evidence.
-- A confirmed Tool 2 Media association is authoritative for that logical recording. If explicit local filename/path evidence materially conflicts with confirmed Media evidence, Tool 3 does not adjudicate the high-authority conflict automatically.
-- Schedule absence is not proof of absence.
-- Known location + missing date can yield possible dates; known date + missing location can yield possible locations.
-- When both date and location are missing, Tool 3 must not make an unconstrained guess; later tools may add evidence and Tool 3 can be rerun.
-- A safe unique schedule-derived WHEN/WHERE may automatically enrich the Tool 1 proposal, but the stored Tool 1 field state must remain `PROVISIONAL`.
-- Multiple schedule candidates, schedule conflicts, no-support, insufficient-evidence, or unavailable-reference states do not auto-change Tool 1 selected fields.
-- Tool 1 remains responsible for canonical filename rendering and filesystem renames.
+All independent review findings R-001 through R-016 are resolved. The final review verified R-015 batch processing-error classification and audit persistence, and R-016 restoration of accepted Tool 2 country-normalization behavior while keeping strict Tool 3 ISO-suffix parsing local to Tool 3.
 
-## Active questions / contradictions
+Required CI run #75 passed on the final Builder handoff with **221 passed, 2 warnings**, helper-script validation PASS, and package build PASS. The representative 260-file Tool 1 → live Tool 2 → Tool 3 evaluation reports 133 Tool 2 downstream routes, 44 provisional enrichments, zero high-priority local overwrites, zero confirmed-Media authority overwrites, zero `REFERENCE_UNAVAILABLE`, and zero `PROCESSING_ERROR` results.
 
-None requiring user input at planning handoff.
+Tool 3 is accepted as a read-only Travel Schedule Reviewer. It uses a verified immutable schedule reference, treats schedule evidence as contextual/provisional, preserves stronger Tool 1 and confirmed Tool 2 evidence, and never performs Baserow writes or physical file renames.
 
-If implementation discovers an actual contradiction, record it here as `Q-###` according to `docs/implementation-protocol.md`; do not edit the finalized build plan.
+## Open questions / contradictions
 
-## Builder implementation requirements
-
-Start with:
-
-```sh
-./scripts/builder-start.sh 3
-```
-
-The Builder must:
-
-1. implement on `tool-3-implementation`, not protected `main`;
-2. reuse the accepted Tool 2/shared Baserow provider for complete schedule bootstrap;
-3. preserve accepted Tool 1 and Tool 2 behavior and regression tests;
-4. implement verified static-reference bootstrap/load/checksum/offline semantics;
-5. implement the decision/candidate/enrichment contracts in the finalized plan;
-6. extend the Renamer enrichment boundary minimally so Tool 3 values remain provisional;
-7. add CLI, portal, registry/audit integration and required tests;
-8. run the full project test/build/helper checks;
-9. run and document the safe 260-file Tool 1 → Tool 2 → Tool 3 representative evaluation;
-10. commit and push all work, open/update the Tool 3 PR, wait for required GitHub CI success, then set this status to `READY_FOR_REVIEW`.
-
-## Review baseline
-
-Orchestrator review will independently inspect:
-
-- actual PR diff and reachable commits;
-- static-reference integrity and zero-network normal reuse;
-- schedule matching/range/location semantics;
-- no overstatement of schedule authority;
-- Tool 2 current Media boundary;
-- Tool 1 provisional enrichment state preservation;
-- candidate isolation / no first-match-wins;
-- registry/audit and portal/CLI service boundaries;
-- full tests, 260-file evaluation, and GitHub CI.
+None.
 
 ## Next milestone
 
-Builder implements Tool 3 from the finalized plan and returns `READY_FOR_REVIEW` with a pushed PR and green required CI.
+Merge PR #26 into protected `main`, close issue #22 as completed, and proceed to Tool 4 implementation when requested.

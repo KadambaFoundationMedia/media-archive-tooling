@@ -80,9 +80,28 @@ class LocalRegistry:
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS travel_reviews (
+                tracking_id TEXT PRIMARY KEY,
+                decision TEXT NOT NULL,
+                reference_checksum TEXT NOT NULL,
+                reference_row_count INTEGER NOT NULL,
+                selected_row_ids TEXT,
+                result_json TEXT NOT NULL,
+                applied_enrichment INTEGER NOT NULL DEFAULT 0,
+                tool2_decision TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
+            try:
+                cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
+            except Exception:
+                pass
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(original_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_current_path ON files(current_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_decision ON media_db_reviews(decision)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_travel_reviews_decision ON travel_reviews(decision)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -381,6 +400,87 @@ class LocalRegistry:
             for r in rows:
                 d = dict(r)
                 d["result"] = json.loads(d["result_json"])
+                results.append(d)
+            return results
+
+    def save_travel_review(
+        self,
+        tracking_id: str,
+        decision: str,
+        reference_checksum: str,
+        reference_row_count: int,
+        result_json: str,
+        selected_row_ids: Optional[List[int]] = None,
+        applied_enrichment: bool = False,
+        tool2_decision: Optional[str] = None,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        sel_ids_str = json.dumps(selected_row_ids) if selected_row_ids else "[]"
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO travel_reviews (
+                tracking_id, decision, reference_checksum, reference_row_count,
+                selected_row_ids, result_json, applied_enrichment, tool2_decision, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id) DO UPDATE SET
+                decision = excluded.decision,
+                reference_checksum = excluded.reference_checksum,
+                reference_row_count = excluded.reference_row_count,
+                selected_row_ids = excluded.selected_row_ids,
+                result_json = excluded.result_json,
+                applied_enrichment = excluded.applied_enrichment,
+                tool2_decision = excluded.tool2_decision,
+                updated_at = excluded.updated_at
+            """, (
+                tracking_id,
+                decision,
+                reference_checksum,
+                reference_row_count,
+                sel_ids_str,
+                result_json,
+                1 if applied_enrichment else 0,
+                tool2_decision,
+                now,
+            ))
+            conn.commit()
+
+    def get_travel_review(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM travel_reviews WHERE tracking_id = ?", (tracking_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["result"] = json.loads(d["result_json"])
+                d["selected_row_ids"] = json.loads(d["selected_row_ids"]) if d.get("selected_row_ids") else []
+                return d
+        return None
+
+    def list_travel_reviews(
+        self,
+        decision: Optional[str] = None,
+        applied_enrichment: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM travel_reviews WHERE 1=1"
+        params = []
+        if decision:
+            query += " AND decision = ?"
+            params.append(decision)
+        if applied_enrichment is not None:
+            query += " AND applied_enrichment = ?"
+            params.append(1 if applied_enrichment else 0)
+        query += " ORDER BY updated_at DESC"
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["result"] = json.loads(d["result_json"])
+                d["selected_row_ids"] = json.loads(d["selected_row_ids"]) if d.get("selected_row_ids") else []
                 results.append(d)
             return results
 

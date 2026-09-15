@@ -199,9 +199,187 @@ def run_media_db_review(args):
     print(f"confirmed title/metadata enrichments: {sum(1 for r in results if r.renamer_enrichment.confirmed)}")
 
 
+def run_travel_review(args):
+    from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+    from .travel_reviewer.reference_store import TravelReferenceStore
+    from .travel_reviewer.service import TravelScheduleReviewService
+
+    config = load_config()
+    reg_path = Path(args.registry_path) if getattr(args, "registry_path", None) else config.registry_path
+    registry = LocalRegistry(reg_path)
+    ref_path = Path(args.reference_path) if getattr(args, "reference_path", None) else None
+
+    provider = BaserowSnapshotProvider(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
+        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
+    )
+    store = TravelReferenceStore(reference_path=ref_path, provider=provider)
+    service = TravelScheduleReviewService(registry=registry, reference_store=store)
+
+    auto_enrich = getattr(args, "auto_enrich", True)
+
+    if getattr(args, "tracking_id", None):
+        result = service.review_file(args.tracking_id, auto_enrich=auto_enrich)
+        results = [result]
+    else:
+        results = service.review_batch(auto_enrich=auto_enrich)
+
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps([r.model_dump() for r in results], indent=2))
+        return
+
+    print(f"=== Tool 3: Travel Schedule Review ({len(results)} files evaluated) ===")
+    for r in results[:15]:
+        print(f"[{r.tracking_id}] Decision: {r.decision.value}")
+        if r.provisional_enrichment:
+            if r.provisional_enrichment.when_val:
+                print(f"  Provisional WHEN: {r.provisional_enrichment.when_val}")
+            if r.provisional_enrichment.where_val:
+                print(f"  Provisional WHERE: {r.provisional_enrichment.where_val}")
+        if r.conflicts:
+            print(f"  Conflicts: {', '.join(r.conflicts)}")
+        if r.diagnostic_notes:
+            print(f"  Notes: {'; '.join(r.diagnostic_notes)}")
+    if len(results) > 15:
+        print(f"  ... and {len(results) - 15} more.")
+
+    print("\n--- Evaluation Summary ---")
+    print(f"total files: {len(results)}")
+    print(f"corroborated: {sum(1 for r in results if r.decision.value == 'CORROBORATED')}")
+    print(f"provisional enrichments: {sum(1 for r in results if r.decision.value == 'PROVISIONAL_ENRICHMENT')}")
+    when_enrich = sum(1 for r in results if r.provisional_enrichment and r.provisional_enrichment.when_val)
+    where_enrich = sum(1 for r in results if r.provisional_enrichment and r.provisional_enrichment.where_val)
+    print(f"  when enrichments: {when_enrich}")
+    print(f"  where enrichments: {where_enrich}")
+    print(f"multiple candidates: {sum(1 for r in results if r.decision.value == 'MULTIPLE_SCHEDULE_CANDIDATES')}")
+    print(f"schedule conflicts: {sum(1 for r in results if r.decision.value == 'SCHEDULE_CONFLICT')}")
+    print(f"no schedule support: {sum(1 for r in results if r.decision.value == 'NO_SCHEDULE_SUPPORT')}")
+    print(f"insufficient evidence: {sum(1 for r in results if r.decision.value == 'INSUFFICIENT_EVIDENCE')}")
+    print(f"reference unavailable: {sum(1 for r in results if r.decision.value == 'REFERENCE_UNAVAILABLE')}")
+    print(f"processing errors: {sum(1 for r in results if r.decision.value == 'PROCESSING_ERROR')}")
+
+
+def run_travel_reference(args):
+    import json
+    from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+    from .travel_reviewer.reference_store import TravelReferenceStore
+
+    config = load_config()
+    ref_path = Path(args.reference_path) if getattr(args, "reference_path", None) else None
+    provider = BaserowSnapshotProvider(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
+        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
+    )
+    store = TravelReferenceStore(reference_path=ref_path, provider=provider)
+
+    action = args.action
+
+    if action == "init":
+        existing = store.load_reference()
+        if existing:
+            if getattr(args, "json", False):
+                print(json.dumps({
+                    "status": "already_exists",
+                    "path": str(store.reference_path),
+                    "canonical_sha256": existing.canonical_sha256,
+                    "row_count": existing.row_count,
+                    "message": "Verified reference already exists; refusing to overwrite. Use 'verify' to inspect remote differences."
+                }, indent=2))
+            else:
+                print(f"Verified travel schedule reference already exists at: {store.reference_path}")
+                print(f"Source Table ID: {existing.source_table_id}")
+                print(f"Rows: {existing.row_count} | Canonical SHA-256: {existing.canonical_sha256}")
+                print("Refusing to silently overwrite verified reference. Use 'media-archive travel-reference verify' to check remote state.")
+            return
+
+        manifest = store.ensure_reference()
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "status": "initialized",
+                "source_table_id": manifest.source_table_id,
+                "row_count": manifest.row_count,
+                "canonical_sha256": manifest.canonical_sha256,
+                "retrieved_at": manifest.retrieved_at,
+                "path": str(store.reference_path),
+            }, indent=2))
+        else:
+            print(f"Travel schedule reference initialized at: {store.reference_path}")
+            print(f"Source Table ID: {manifest.source_table_id}")
+            print(f"Rows: {manifest.row_count}")
+            print(f"Canonical SHA-256: {manifest.canonical_sha256}")
+            print(f"Retrieved At: {manifest.retrieved_at}")
+
+    elif action == "status":
+        manifest = store.load_reference()
+        if not manifest:
+            if getattr(args, "json", False):
+                print(json.dumps({"status": "unavailable", "path": str(store.reference_path)}, indent=2))
+            else:
+                print(f"Reference at {store.reference_path} is unavailable or failed integrity check.", file=sys.stderr)
+            sys.exit(1)
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "status": "ok",
+                "source_table_id": manifest.source_table_id,
+                "row_count": manifest.row_count,
+                "canonical_sha256": manifest.canonical_sha256,
+                "retrieved_at": manifest.retrieved_at,
+                "path": str(store.reference_path),
+            }, indent=2))
+        else:
+            print(f"Reference Status: OK")
+            print(f"Path: {store.reference_path}")
+            print(f"Source Table ID: {manifest.source_table_id}")
+            print(f"Rows: {manifest.row_count}")
+            print(f"Canonical SHA-256: {manifest.canonical_sha256}")
+            print(f"Retrieved At: {manifest.retrieved_at}")
+
+    elif action == "verify":
+        try:
+            res = store.verify_remote_reference()
+            if getattr(args, "json", False):
+                print(json.dumps(res, indent=2))
+            else:
+                print(f"Remote verification completed:")
+                print(f"Matches: {'YES' if res['matches'] else 'NO'}")
+                print(f"Local SHA-256:  {res['local_sha256']}")
+                print(f"Remote SHA-256: {res['remote_sha256']}")
+                print(f"Local Rows: {res['local_row_count']} | Remote Rows: {res['remote_row_count']}")
+                if res['unexpected_change']:
+                    print("WARNING: Remote table differs from static reference! Unexpected change detected.")
+        except Exception as e:
+            if getattr(args, "json", False):
+                print(json.dumps({"error": str(e)}, indent=2))
+            else:
+                print(f"Verification failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Tool 3: Travel Schedule Reviewer commands
+    travel_review_parser = subparsers.add_parser("travel-review", help="Run Tool 3: Travel Schedule Reviewer")
+    travel_review_parser.add_argument("tracking_id", nargs="?", help="Optional tracking ID to review")
+    travel_review_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    travel_review_parser.add_argument("--reference-path", help="Custom travel schedule reference JSON path")
+    travel_review_parser.add_argument("--no-enrich", dest="auto_enrich", action="store_false", default=True, help="Do not automatically apply provisional enrichment to Renamer proposals")
+    travel_review_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    travel_review_parser.set_defaults(func=run_travel_review)
+
+    travel_ref_parser = subparsers.add_parser("travel-reference", help="Manage Tool 3 immutable travel schedule reference")
+    travel_ref_parser.add_argument("action", choices=["init", "status", "verify"], help="Action: init (bootstrap local reference), status (inspect local reference), verify (compare local vs remote)")
+    travel_ref_parser.add_argument("--reference-path", help="Custom travel schedule reference JSON path")
+    travel_ref_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    travel_ref_parser.set_defaults(func=run_travel_reference)
 
     # Tool 2: Media Database Reviewer command
     media_db_parser = subparsers.add_parser("media-db-review", help="Run Tool 2: Media Database Reviewer")

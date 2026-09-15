@@ -77,15 +77,23 @@ class RenamerApplicationService:
             if not ok:
                 raise ValueError(msg or "Invalid date in enrichment")
             parser_res.when.selected_value = evidence.when_val
-            parser_res.when.state = ResolutionState.STRONG if "DD" in evidence.when_val or "MM" in evidence.when_val else ResolutionState.EXACT
-            parser_res.when.evidence.append(Evidence(source=source, raw_value=evidence.when_val, details=evidence.details or "enriched"))
+            if evidence.when_state is not None:
+                parser_res.when.state = evidence.when_state
+            else:
+                parser_res.when.state = ResolutionState.STRONG if "DD" in evidence.when_val or "MM" in evidence.when_val else ResolutionState.EXACT
+            
+            ev = Evidence(source=source, raw_value=evidence.when_val, details=evidence.details or "enriched")
+            if not any(e.source == ev.source and e.raw_value == ev.raw_value for e in parser_res.when.evidence):
+                parser_res.when.evidence.append(ev)
             changes["when_val"] = evidence.when_val
 
         if evidence.what_val is not None:
             what_clean = sanitize_filename_token(to_ascii_latin(evidence.what_val))
             parser_res.what.selected_value = what_clean
             parser_res.what.state = ResolutionState.EXACT
-            parser_res.what.evidence.append(Evidence(source=source, raw_value=evidence.what_val, details=evidence.details or "enriched"))
+            ev = Evidence(source=source, raw_value=evidence.what_val, details=evidence.details or "enriched")
+            if not any(e.source == ev.source and e.raw_value == ev.raw_value for e in parser_res.what.evidence):
+                parser_res.what.evidence.append(ev)
             changes["what_val"] = what_clean
 
         if evidence.what_category is not None:
@@ -111,8 +119,14 @@ class RenamerApplicationService:
                         parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
             else:
                 parser_res.where.place_location = sanitize_filename_token(to_ascii_latin(where_clean))
-            parser_res.where.state = ResolutionState.EXACT
-            parser_res.where.evidence.append(Evidence(source=source, raw_value=where_clean, details=evidence.details or "enriched"))
+            if evidence.where_state is not None:
+                parser_res.where.state = evidence.where_state
+            else:
+                parser_res.where.state = ResolutionState.EXACT
+            
+            ev = Evidence(source=source, raw_value=where_clean, details=evidence.details or "enriched")
+            if not any(e.source == ev.source and e.raw_value == ev.raw_value for e in parser_res.where.evidence):
+                parser_res.where.evidence.append(ev)
             changes["where_val"] = where_clean
 
         if evidence.who_val is not None:

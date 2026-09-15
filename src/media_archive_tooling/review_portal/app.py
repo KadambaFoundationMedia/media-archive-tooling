@@ -141,10 +141,11 @@ def file_detail(request: Request, tracking_id: str):
     if not file_record:
         raise HTTPException(status_code=404, detail="File not found in registry")
     media_db_review = service.registry.get_media_db_review(tracking_id)
+    travel_review = service.registry.get_travel_review(tracking_id)
     return templates.TemplateResponse(
         request=request,
         name="detail.html",
-        context={"file": file_record, "media_db_review": media_db_review},
+        context={"file": file_record, "media_db_review": media_db_review, "travel_review": travel_review},
     )
 
 

@@ -235,6 +235,93 @@
     </div>
     {% endif %}
 
+    {% if travel_review %}
+    <div class="card">
+        <h2>Tool 3 — Travel Schedule Review</h2>
+        <div style="margin-bottom: 16px;">
+            <div>
+                Decision: <strong>{{ travel_review.decision }}</strong> &middot; 
+                Reference SHA: <code>{{ travel_review.reference_checksum[:12] }}...</code> ({{ travel_review.reference_row_count }} rows)
+                {% if travel_review.result.tool2_decision or travel_review.result.tool2_context_state %}
+                &middot; Tool 2 Context: <code>{{ travel_review.result.tool2_decision or travel_review.result.tool2_context_state }}</code>
+                {% if travel_review.result.selected_media_row_id %} (Media Row #{{ travel_review.result.selected_media_row_id }}){% endif %}
+                {% endif %}
+            </div>
+            {% if travel_review.result.provisional_enrichment %}
+            <div style="margin-top: 4px; color: #0284c7; font-weight: 600;">
+                Provisional Suggestion:
+                {% if travel_review.result.provisional_enrichment.when_val %}
+                WHEN: {{ travel_review.result.provisional_enrichment.when_val }} ({{ travel_review.result.provisional_enrichment.when_state }})
+                {% endif %}
+                {% if travel_review.result.provisional_enrichment.where_val %}
+                WHERE: {{ travel_review.result.provisional_enrichment.where_val }} ({{ travel_review.result.provisional_enrichment.where_state }})
+                {% endif %}
+            </div>
+            {% endif %}
+            {% if travel_review.result.conflicts %}
+            <div style="margin-top: 4px; color: #dc2626; font-weight: 600;">
+                Conflicts: {{ travel_review.result.conflicts|join('; ') }}
+            </div>
+            {% endif %}
+            {% if travel_review.result.diagnostic_notes %}
+            <div style="margin-top: 4px; font-size: 13px; color: #475569;">
+                Notes: {{ travel_review.result.diagnostic_notes|join('; ') }}
+            </div>
+            {% endif %}
+        </div>
+
+        {% if travel_review.result.candidates %}
+        <h3>Schedule Candidates</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px;">
+            <thead>
+                <tr style="background: #f1f5f9; text-align: left;">
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Row IDs</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Date Range</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Place / Location</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Country</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Schedule Text / Notes</th>
+                    <th style="padding: 8px; border: 1px solid #e2e8f0;">Match Reasons / Comparisons</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cand in travel_review.result.candidates %}
+                <tr>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.schedule_row_ids|join(', ') }}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.start_date }}{% if cand.end_date and cand.end_date != cand.start_date %} to {{ cand.end_date }}{% endif %}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.place }}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.country }} ({{ cand.country_iso2 or '—' }})</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">{{ cand.schedule_text or '—' }}</td>
+                    <td style="padding: 8px; border: 1px solid #e2e8f0;">
+                        {% if cand.date_comparison or cand.place_comparison or cand.country_comparison %}
+                        <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
+                            <strong>Comparisons:</strong>
+                            Date: <code>{{ cand.date_comparison or '—' }}</code> &middot;
+                            Place: <code>{{ cand.place_comparison or '—' }}</code> &middot;
+                            Country: <code>{{ cand.country_comparison or '—' }}</code>
+                        </div>
+                        {% endif %}
+                        {% if cand.match_reasons %}
+                        <ul style="margin: 0; padding-left: 16px;">
+                            {% for r in cand.match_reasons %}
+                            <li>{{ r }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                        {% if cand.possible_when %}
+                        <div>Possible WHEN: <code>{{ cand.possible_when }}</code></div>
+                        {% endif %}
+                        {% if cand.possible_where %}
+                        <div>Possible WHERE: <code>{{ cand.possible_where }}</code></div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <div class="card">
         <h2>Evidence Provenance</h2>
         <ul>
