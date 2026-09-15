@@ -15,6 +15,7 @@ class TravelReviewDecision(str, Enum):
     NO_SCHEDULE_SUPPORT = "NO_SCHEDULE_SUPPORT"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
     REFERENCE_UNAVAILABLE = "REFERENCE_UNAVAILABLE"
+    PROCESSING_ERROR = "PROCESSING_ERROR"
 
 
 class FieldComparisonState(str, Enum):
@@ -107,3 +108,5 @@ class TravelReviewResult(BaseModel):
     conflicts: List[str] = Field(default_factory=list)
     diagnostic_notes: List[str] = Field(default_factory=list)
     downstream_routing: List[str] = Field(default_factory=list)
+    review_required: bool = False
+    review_reasons: List[str] = Field(default_factory=list)

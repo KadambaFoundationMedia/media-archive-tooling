@@ -75,7 +75,9 @@ def _norm_country(country: Optional[str]) -> Optional[str]:
     if not country:
         return None
     c_clean = country.strip()
-    if len(c_clean) == 2 and c_clean.isalpha():
+    from ..renamer.validator import _get_valid_iso2_codes
+    valid_codes = _get_valid_iso2_codes()
+    if len(c_clean) == 2 and c_clean.lower() in valid_codes:
         return c_clean.upper()
 
     c_lower = c_clean.lower()
@@ -97,7 +99,7 @@ def _norm_country(country: Optional[str]) -> Optional[str]:
         "switzerland": "CH", "sweden": "SE", "australia": "AU", "brazil": "BR",
         "czech republic": "CZ", "czechia": "CZ", "netherlands": "NL",
     }
-    return common.get(c_lower, c_clean.upper())
+    return common.get(c_lower, None)
 
 
 def parse_scripture_reference(val: Optional[str]) -> Optional[Dict[str, Any]]:

@@ -260,6 +260,7 @@ def run_travel_review(args):
     print(f"no schedule support: {sum(1 for r in results if r.decision.value == 'NO_SCHEDULE_SUPPORT')}")
     print(f"insufficient evidence: {sum(1 for r in results if r.decision.value == 'INSUFFICIENT_EVIDENCE')}")
     print(f"reference unavailable: {sum(1 for r in results if r.decision.value == 'REFERENCE_UNAVAILABLE')}")
+    print(f"processing errors: {sum(1 for r in results if r.decision.value == 'PROCESSING_ERROR')}")
 
 
 def run_travel_reference(args):

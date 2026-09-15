@@ -140,6 +140,7 @@ def run_evaluation():
         TravelReviewDecision.NO_SCHEDULE_SUPPORT.value: 0,
         TravelReviewDecision.INSUFFICIENT_EVIDENCE.value: 0,
         TravelReviewDecision.REFERENCE_UNAVAILABLE.value: 0,
+        TravelReviewDecision.PROCESSING_ERROR.value: 0,
     }
     when_enrichments = 0
     where_enrichments = 0
@@ -196,6 +197,7 @@ def run_evaluation():
     print(f"NO_SCHEDULE_SUPPORT count: {counts['NO_SCHEDULE_SUPPORT']}")
     print(f"INSUFFICIENT_EVIDENCE count: {counts['INSUFFICIENT_EVIDENCE']}")
     print(f"REFERENCE_UNAVAILABLE count: {counts['REFERENCE_UNAVAILABLE']}")
+    print(f"PROCESSING_ERROR count: {counts['PROCESSING_ERROR']}")
     print(f"Media-context-unavailable count: {sum(1 for r in t3_results if r.tool2_context_state in ('UNAVAILABLE', 'DATABASE_UNAVAILABLE'))}")
     print(f"number of schedule enrichments applied to Tool 1: {len(enriched_examples)}")
     print(f"number of high-priority local values overwritten: {overwritten_high_authority}")

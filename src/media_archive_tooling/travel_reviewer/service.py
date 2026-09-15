@@ -193,14 +193,18 @@ class TravelScheduleReviewService:
                         tracking_id=tid,
                         decision=TravelReviewDecision.REFERENCE_UNAVAILABLE,
                         diagnostic_notes=[f"Reference unavailable during batch processing: {e}"],
+                        review_required=True,
+                        review_reasons=[f"Reference unavailable: {e}"],
                     )
                 else:
                     err_res = TravelReviewResult(
                         tracking_id=tid,
-                        decision=TravelReviewDecision.INSUFFICIENT_EVIDENCE,
+                        decision=TravelReviewDecision.PROCESSING_ERROR,
                         reference_checksum=engine.manifest.canonical_sha256,
                         reference_row_count=engine.manifest.row_count,
                         diagnostic_notes=[f"Batch item processing error for {tid}: {e}"],
+                        review_required=True,
+                        review_reasons=[f"Processing error: {e}"],
                     )
                 results.append(err_res)
         return results

@@ -67,8 +67,8 @@ def parse_structured_where(val: Optional[str]) -> Tuple[Optional[str], Optional[
     """Parse structured WHERE string into (place, country_iso2).
 
     Robustly preserves hyphenated place names (e.g. 'Villa-Vrindavan', 'New-York',
-    'Serbia-summer-camp', 'Krsna-Dvur') while extracting trailing 2-letter ISO
-    country code suffixes (e.g. '-IT', '-US', '-RS', '-CZ', '-DE') if present.
+    'Serbia-summer-camp', 'Krsna-Dvur', 'Farma-KD') while extracting trailing ISO
+    country code suffixes (e.g. '-IT', '-US', '-RS', '-CZ', '-DE') only if recognized (R-013).
     """
     if not val:
         return None, None
@@ -78,9 +78,21 @@ def parse_structured_where(val: Optional[str]) -> Tuple[Optional[str], Optional[
     if "-" in clean:
         parts = clean.rsplit("-", 1)
         place_part, cand_country = parts[0].strip(), parts[1].strip()
-        norm_c = _norm_country(cand_country)
-        if norm_c and len(norm_c) == 2 and norm_c.isalpha():
-            return place_part, norm_c.lower()
+        from ..renamer.validator import _get_valid_iso2_codes
+        valid_codes = _get_valid_iso2_codes()
+        cand_lower = cand_country.lower()
+        if len(cand_lower) == 2 and cand_lower in valid_codes:
+            return place_part, cand_lower
+        from ..adapters.baserow import COUNTRIES_PATH
+        import json
+        try:
+            if COUNTRIES_PATH.exists():
+                with open(COUNTRIES_PATH, "r", encoding="utf-8") as f:
+                    c_map = json.load(f)
+                    if cand_lower in c_map:
+                        return place_part, c_map[cand_lower].lower()
+        except Exception:
+            pass
     return clean, None
 
 
@@ -331,14 +343,13 @@ class TravelScheduleEngine:
             if cand:
                 if not confirmed_media_when and cand.normalized_row.get("date"):
                     confirmed_media_when = str(cand.normalized_row.get("date")).strip()
-                if not confirmed_media_where and cand.normalized_row.get("place"):
-                    p = str(cand.normalized_row.get("place")).strip()
-                    c = str(cand.normalized_row.get("country") or "").strip()
-                    confirmed_media_where = f"{p}-{c}".strip("-") if c else p
                 if cand.normalized_row.get("country"):
                     c_iso = _norm_country(str(cand.normalized_row.get("country")))
                     if c_iso:
                         confirmed_media_country_iso = c_iso.lower()
+                if not confirmed_media_where and cand.normalized_row.get("place"):
+                    p = str(cand.normalized_row.get("place")).strip()
+                    confirmed_media_where = f"{p}-{confirmed_media_country_iso}" if confirmed_media_country_iso else p
 
             if confirmed_media_where and not confirmed_media_country_iso:
                 _, parsed_cm_iso = parse_structured_where(confirmed_media_where)
@@ -443,12 +454,13 @@ class TravelScheduleEngine:
 
         # Case A: Both WHEN and WHERE known
         if has_full_date and has_place:
+            eff_iso = local_iso or cm_country
             eval_res = self._evaluate_case_a(
                 parser_result=parser_result,
                 res=res,
                 exact_date=f"{y:04d}-{m:02d}-{d:02d}",
                 place=local_place,
-                country_iso=local_iso,
+                country_iso=eff_iso,
                 is_confirmed_media=is_confirmed_media,
                 t2_res=t2_res,
             )
@@ -456,11 +468,12 @@ class TravelScheduleEngine:
 
         # Case B: Location known, date missing or partial
         if has_place and (not has_any_date or has_partial_date):
+            eff_iso = local_iso or cm_country
             eval_res = self._evaluate_case_b(
                 parser_result=parser_result,
                 res=res,
                 place=local_place,
-                country_iso=local_iso,
+                country_iso=eff_iso,
                 year=y,
                 month=m,
                 is_confirmed_media=is_confirmed_media,
@@ -470,11 +483,12 @@ class TravelScheduleEngine:
 
         # Case C: Date known, location missing or partial
         if has_full_date and (not has_place):
+            eff_iso = local_iso or cm_country
             eval_res = self._evaluate_case_c(
                 parser_result=parser_result,
                 res=res,
                 exact_date=f"{y:04d}-{m:02d}-{d:02d}",
-                country_iso=local_iso,
+                country_iso=eff_iso,
                 is_confirmed_media=is_confirmed_media,
                 t2_res=t2_res,
             )
@@ -497,14 +511,21 @@ class TravelScheduleEngine:
         confirmed_media_when: Optional[str],
         confirmed_media_where: Optional[str],
     ) -> TravelReviewResult:
-        """Ensure confirmed Tool 2 Media values are never contradicted, downgraded, or overwritten."""
+        """Ensure confirmed Tool 2 Media values are never contradicted, downgraded, or overwritten (R-008, R-013)."""
         if not res.provisional_enrichment:
             return res
 
         if confirmed_media_when and res.provisional_enrichment.when_val:
             if res.provisional_enrichment.when_val != confirmed_media_when:
+                res.conflicts.append(
+                    f"Schedule date {res.provisional_enrichment.when_val} contradicts confirmed Media date {confirmed_media_when}"
+                )
                 res.provisional_enrichment.when_val = None
                 res.diagnostic_notes.append("Suppressed provisional WHEN enrichment: contradicts confirmed Media date")
+            else:
+                # Schedule agrees with confirmed Media date; record corroboration without redundant provisional enrichment (R-013)
+                res.provisional_enrichment.when_val = None
+                res.diagnostic_notes.append("Schedule agrees with confirmed Media date; recording corroboration without redundant provisional enrichment")
 
         if confirmed_media_where and res.provisional_enrichment.where_val:
             cand_p, cand_iso = parse_structured_where(res.provisional_enrichment.where_val)
@@ -520,8 +541,22 @@ class TravelScheduleEngine:
                 and cand_iso.lower() != cm_iso.lower()
             )
             if place_diff or country_diff:
+                conflict_details = []
+                if place_diff:
+                    conflict_details.append(f"place {cand_p} vs confirmed Media {cm_p}")
+                if country_diff:
+                    conflict_details.append(f"country {cand_iso} vs confirmed Media {cm_iso}")
+                res.conflicts.append(
+                    f"Schedule location {res.provisional_enrichment.where_val} contradicts confirmed Media WHERE {confirmed_media_where} ({', '.join(conflict_details)})"
+                )
                 res.provisional_enrichment.where_val = None
-                res.diagnostic_notes.append("Suppressed provisional WHERE enrichment: contradicts confirmed Media location")
+                res.diagnostic_notes.append(
+                    f"Suppressed provisional WHERE enrichment: contradicts confirmed Media location ({', '.join(conflict_details)})"
+                )
+            else:
+                # Schedule agrees with confirmed Media location; record corroboration without redundant provisional enrichment (R-013)
+                res.provisional_enrichment.where_val = None
+                res.diagnostic_notes.append("Schedule agrees with confirmed Media location; recording corroboration without redundant provisional enrichment")
 
         if not res.provisional_enrichment.when_val and not res.provisional_enrichment.where_val:
             res.provisional_enrichment = None
@@ -559,22 +594,41 @@ class TravelScheduleEngine:
             place_agrees = (norm_local_place == cand_canon_place)
             
             cand_iso = cand.country_iso2.lower() if cand.country_iso2 else None
-            country_compatible = (
-                country_iso is None
-                or cand_iso is None
-                or country_iso == cand_iso
-            )
 
             cand.date_comparison = FieldComparisonState.AGREES.value
-            if place_agrees and country_compatible:
+            
+            # Place comparison computed independently (R-013)
+            if place_agrees:
                 cand.place_comparison = FieldComparisonState.AGREES.value
-                cand.country_comparison = FieldComparisonState.AGREES.value if (country_iso and cand_iso) else FieldComparisonState.NOT_COMPARABLE.value
+            else:
+                cand.place_comparison = FieldComparisonState.CONFLICT.value
+
+            # Country comparison computed independently (R-013)
+            if country_iso and cand_iso:
+                if country_iso.lower() == cand_iso.lower():
+                    cand.country_comparison = FieldComparisonState.AGREES.value
+                    country_compatible = True
+                else:
+                    cand.country_comparison = FieldComparisonState.CONFLICT.value
+                    country_compatible = False
+            elif country_iso or cand_iso:
+                cand.country_comparison = FieldComparisonState.NOT_COMPARABLE.value
+                country_compatible = True
+            else:
+                cand.country_comparison = FieldComparisonState.NOT_COMPARABLE.value
+                country_compatible = True
+
+            if place_agrees and country_compatible:
                 cand.match_reasons.append(f"Schedule corroborates {place} on {exact_date}")
                 corroborating_candidates.append(cand)
             else:
-                cand.place_comparison = FieldComparisonState.CONFLICT.value
+                conflict_details = []
+                if not place_agrees:
+                    conflict_details.append(f"place {cand.place} vs {place}")
+                if not country_compatible:
+                    conflict_details.append(f"country {cand_iso or '??'} vs {country_iso or '??'}")
                 cand.match_reasons.append(
-                    f"Schedule places speaker in {cand.place} ({cand_iso or '??'}) on {exact_date}, conflicting with {place}"
+                    f"Schedule places speaker in {cand.place} ({cand_iso or '??'}) on {exact_date}, conflicting with {place} ({', '.join(conflict_details)})"
                 )
                 conflicting_candidates.append(cand)
 
@@ -612,11 +666,12 @@ class TravelScheduleEngine:
         # If matching rows exist on that date but all are elsewhere: SCHEDULE_CONFLICT
         res.decision = TravelReviewDecision.SCHEDULE_CONFLICT
         conflict_places = [f"{c.place}-{c.country_iso2 or ''}".strip("-") for c in conflicting_candidates]
+        target_loc = f"{place}-{country_iso}" if country_iso else place
         res.conflicts.append(
-            f"Schedule on {exact_date} records speaker in {', '.join(conflict_places)}, not {place}"
+            f"Schedule on {exact_date} records speaker in {', '.join(conflict_places)}, not {target_loc}"
         )
         res.diagnostic_notes.append(
-            f"Schedule conflict on {exact_date}: planned {', '.join(conflict_places)} vs local {place}"
+            f"Schedule conflict on {exact_date}: planned {', '.join(conflict_places)} vs local {target_loc}"
         )
         return res
 

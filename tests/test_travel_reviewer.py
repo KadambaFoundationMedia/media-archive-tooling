@@ -84,6 +84,19 @@ def make_raw_schedule_row(
     }
 
 
+def create_engine_with_rows(rows: List[NormalizedTravelRow]) -> TravelScheduleEngine:
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-14T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    return TravelScheduleEngine(manifest)
+
+
 class FakeBaserowProvider:
     def __init__(self, rows=None, travel_schedule_table_id="12345", fail=False):
         self.rows = rows if rows is not None else []
@@ -1079,7 +1092,7 @@ def test_40_batch_isolates_one_file_errors_and_continues(tmp_path):
     # Review batch containing a non-existent tracking ID and the good tracking ID
     results = service.review_batch(tracking_ids=["nonexistent_id", "good0001"])
     assert len(results) == 2
-    assert results[0].decision == TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    assert results[0].decision == TravelReviewDecision.PROCESSING_ERROR
     assert "Batch item processing error" in results[0].diagnostic_notes[0]
     assert results[1].decision == TravelReviewDecision.CORROBORATED
 
@@ -1549,7 +1562,7 @@ def test_r011_candidate_comparison_states_populated_in_cases_b_and_c(tmp_path):
 
 
 def test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_healthy(tmp_path):
-    """R-012: per-file error in batch does not return REFERENCE_UNAVAILABLE when reference is healthy."""
+    """R-012/R-014: per-file error in batch produces PROCESSING_ERROR, not REFERENCE_UNAVAILABLE or INSUFFICIENT_EVIDENCE."""
     reg = LocalRegistry(tmp_path / "registry.sqlite3")
     row = normalize_to_travel_row(make_raw_schedule_row(999, "2020-01-01", place="Berlin", country="Germany"))
     manifest = TravelScheduleManifest(
@@ -1568,7 +1581,167 @@ def test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_
 
     results = service.review_batch(tracking_ids=["missing_from_registry"])
     assert len(results) == 1
-    # Must NOT be REFERENCE_UNAVAILABLE
-    assert results[0].decision == TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    # Must NOT be REFERENCE_UNAVAILABLE or INSUFFICIENT_EVIDENCE; must be distinct PROCESSING_ERROR (R-014)
+    assert results[0].decision == TravelReviewDecision.PROCESSING_ERROR
+    assert results[0].reference_checksum == manifest.canonical_sha256
     assert "Batch item processing error" in results[0].diagnostic_notes[0]
+    assert results[0].review_required is True
+
+
+def test_r013_confirmed_country_missing_locally_agreeing_schedule_corroborates_without_redundant_provisional_enrichment(tmp_path):
+    """R-013: confirmed Media country missing locally + agreeing schedule -> CORROBORATED without redundant provisional enrichment."""
+    # Local: exact date 2005-06-15, Springfield, country missing
+    p = create_sample_parser_result(tracking_id="t13_agree", when_val="2005-06-15", place="Springfield", country=None, country_iso2=None)
+    
+    # Tool 2: confirmed match with Springfield-AU
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id="t13_agree",
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=777,
+        candidates=[
+            MediaCandidate(
+                media_row_id=777,
+                normalized_row={"date": "2005-06-15", "place": "Springfield", "country": "Australia"},
+            )
+        ],
+        renamer_enrichment=RenamerEnrichment(
+            confirmed=True,
+            media_row_id=777,
+            when_val="2005-06-15",
+            where_val="Springfield-AU",
+        ),
+    )
+    
+    # Schedule: 2005-06-15, Springfield, Australia (au)
+    row = normalize_to_travel_row(make_raw_schedule_row(10, "2005-06-15", place="Springfield", country="Australia"))
+    engine = create_engine_with_rows([row])
+    
+    res = engine.evaluate(p, tool2_context=t2_res)
+    assert res.decision == TravelReviewDecision.CORROBORATED
+    # Must NOT emit provisional enrichment (Tool 2/Media already owns authoritative country)
+    assert res.provisional_enrichment is None
+    assert len(res.candidates) == 1
+    assert res.candidates[0].date_comparison == "AGREES"
+    assert res.candidates[0].place_comparison == "AGREES"
+    assert res.candidates[0].country_comparison == "AGREES"
+
+
+def test_r013_confirmed_country_missing_locally_conflicting_schedule_returns_schedule_conflict(tmp_path):
+    """R-013: confirmed Media country missing locally + conflicting schedule -> SCHEDULE_CONFLICT with explicit provenance."""
+    # Local: exact date 2005-06-15, Springfield, country missing
+    p = create_sample_parser_result(tracking_id="t13_conf", when_val="2005-06-15", place="Springfield", country=None, country_iso2=None)
+    
+    # Tool 2: confirmed match with Springfield-AU
+    t2_res = MediaDatabaseReviewResult(
+        tracking_id="t13_conf",
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=777,
+        candidates=[
+            MediaCandidate(
+                media_row_id=777,
+                normalized_row={"date": "2005-06-15", "place": "Springfield", "country": "Australia"},
+            )
+        ],
+        renamer_enrichment=RenamerEnrichment(
+            confirmed=True,
+            media_row_id=777,
+            when_val="2005-06-15",
+            where_val="Springfield-AU",
+        ),
+    )
+    
+    # Schedule: 2005-06-15, Springfield, United States (us)
+    row = normalize_to_travel_row(make_raw_schedule_row(20, "2005-06-15", place="Springfield", country="United States"))
+    engine = create_engine_with_rows([row])
+    
+    res = engine.evaluate(p, tool2_context=t2_res)
+    assert res.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert len(res.conflicts) > 0
+    assert res.provisional_enrichment is None
+    assert len(res.candidates) == 1
+    # Place agrees, country conflicts
+    assert res.candidates[0].place_comparison == "AGREES"
+    assert res.candidates[0].country_comparison == "CONFLICT"
+
+
+def test_r013_case_a_country_only_conflict_comparison_states():
+    """R-013: Case A place agrees and country conflicts -> place_comparison=AGREES, country_comparison=CONFLICT."""
+    p = create_sample_parser_result(tracking_id="t13_cmp", when_val="2005-06-15", place="Springfield", country="Australia", country_iso2="au")
+    # Schedule has Springfield in United States
+    row = normalize_to_travel_row(make_raw_schedule_row(30, "2005-06-15", place="Springfield", country="United States"))
+    engine = create_engine_with_rows([row])
+    
+    res = engine.evaluate(p)
+    assert res.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert len(res.candidates) == 1
+    cand = res.candidates[0]
+    assert cand.date_comparison == "AGREES"
+    assert cand.place_comparison == "AGREES"
+    assert cand.country_comparison == "CONFLICT"
+
+
+def test_r013_non_iso_two_letter_place_suffix_not_truncated():
+    """R-013: hyphenated place ending in non-ISO two-letter suffix is preserved and not truncated."""
+    from media_archive_tooling.travel_reviewer.engine import parse_structured_where
+    
+    # Non-ISO two-letter suffix (KD is not a country)
+    place, iso = parse_structured_where("Farma-KD")
+    assert place == "Farma-KD"
+    assert iso is None
+    
+    # Non-ISO two-letter suffix (XY is not a country)
+    place, iso = parse_structured_where("Temple-XY")
+    assert place == "Temple-XY"
+    assert iso is None
+    
+    # Valid ISO suffixes must still be recognized
+    place, iso = parse_structured_where("Villa-Vrindavan-IT")
+    assert place == "Villa-Vrindavan"
+    assert iso == "it"
+    
+    place, iso = parse_structured_where("Serbia-summer-camp-RS")
+    assert place == "Serbia-summer-camp"
+    assert iso == "rs"
+
+
+def test_r014_batch_processing_error_distinct_from_insufficient_evidence_and_reference_unavailable(tmp_path):
+    """R-014: operational batch error produces PROCESSING_ERROR, distinct from INSUFFICIENT_EVIDENCE and REFERENCE_UNAVAILABLE."""
+    reg = LocalRegistry(tmp_path / "registry.sqlite3")
+    row = normalize_to_travel_row(make_raw_schedule_row(100, "2020-01-01", place="Berlin", country="Germany"))
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="tbl_100",
+        retrieved_at="2026-09-15T00:00:00Z",
+        complete=True,
+        row_count=1,
+        canonical_sha256=compute_canonical_sha256([row]),
+        normalized_rows=[row],
+    )
+    ref_file = tmp_path / "travel_schedule.json"
+    store = TravelReferenceStore(reference_path=ref_file)
+    store.save_reference(manifest)
+    service = TravelScheduleReviewService(registry=reg, reference_store=store)
+
+    # Valid item registered in registry
+    p_good = create_sample_parser_result(tracking_id="good_item", when_val="2020-01-01", place="Berlin", country="Germany", country_iso2="de")
+    register_file(reg, p_good)
+
+    # Missing item not in registry
+    results = service.review_batch(tracking_ids=["missing_item", "good_item"])
+    assert len(results) == 2
+    
+    # First item failed due to missing record: must be distinct PROCESSING_ERROR
+    err_res = results[0]
+    assert err_res.decision == TravelReviewDecision.PROCESSING_ERROR
+    assert err_res.decision != TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    assert err_res.decision != TravelReviewDecision.REFERENCE_UNAVAILABLE
+    assert err_res.decision != TravelReviewDecision.NO_SCHEDULE_SUPPORT
+    assert err_res.reference_checksum == manifest.canonical_sha256
+    assert err_res.reference_row_count == 1
+    assert err_res.review_required is True
+    assert "Batch item processing error" in err_res.diagnostic_notes[0]
+
+    # Second item must succeed, showing batch isolation
+    good_res = results[1]
+    assert good_res.decision == TravelReviewDecision.CORROBORATED
 
