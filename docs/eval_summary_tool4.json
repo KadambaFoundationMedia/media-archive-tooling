@@ -1,0 +1,455 @@
+{
+  "total_files": 260,
+  "would_update_existing_rows": 1,
+  "would_create_new_rows": 39,
+  "noop_already_synchronized": 0,
+  "review_required_conflicts": 246,
+  "duplicate_multiple_candidate_blocked": 99,
+  "insufficient_evidence_blocked": 32,
+  "database_unavailable": 0,
+  "partial_date_notes_cases": 1,
+  "country_location_option_additions_proposed": 13,
+  "archive_path_representation_conflicts": 1,
+  "tool2_counts": {
+    "INSUFFICIENT_EVIDENCE": 32,
+    "CONFLICT_WITH_EXISTING": 69,
+    "NEW_MEDIA_CANDIDATE": 39,
+    "MULTIPLE_CANDIDATES": 99,
+    "PROBABLE_EXISTING_MEDIA": 20,
+    "EXISTING_MEDIA_MATCH": 1
+  },
+  "sample_detailed_results": [
+    {
+      "tracking_id": "adb547c6",
+      "filename": "Prague-Oct-2003-20260810T132808Z-1-001.zip",
+      "tool2_decision": "INSUFFICIENT_EVIDENCE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision INSUFFICIENT_EVIDENCE requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "5c76dea4",
+      "filename": "2020-03-30_KKS_Reading-from-Kirtaniyah-sada-harih_livestream.mp4",
+      "tool2_decision": "CONFLICT_WITH_EXISTING",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision CONFLICT_WITH_EXISTING requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "985cc13a",
+      "filename": "Anti-test.zip",
+      "tool2_decision": "INSUFFICIENT_EVIDENCE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision INSUFFICIENT_EVIDENCE requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "15965cca",
+      "filename": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "4d9f0be4",
+      "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": [
+        "Provisional WHERE location excluded from authoritative fields"
+      ]
+    },
+    {
+      "tracking_id": "5e66a715",
+      "filename": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "31e2598b",
+      "filename": "KKS-BhajansProgram Clean - 2015.01.25 10.12.54.avi",
+      "tool2_decision": "INSUFFICIENT_EVIDENCE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision INSUFFICIENT_EVIDENCE requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "05406c5b",
+      "filename": "2011-08-20_KKS_Jaya-radha-madhava_oslo_fi.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "SYNCING",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Category",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "4a5250dd",
+      "filename": "KKS-Home-program_feb-2015_amsterdam.mp3",
+      "tool2_decision": "MULTIPLE_CANDIDATES",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "71ae219a",
+      "filename": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+      "tool2_decision": "EXISTING_MEDIA_MATCH",
+      "status": "REVIEW_REQUIRED",
+      "operation": "UPDATE",
+      "media_row_id": 2335,
+      "fields_modified": [
+        "Filename",
+        "Place, location",
+        "Notes"
+      ],
+      "conflicts": [
+        "media_archive_path collision: row has '/Users/maced/dev/Media-renaming/renamed-files/Srimad-bhagavatam/2015-08-27_KKS_SB-3-6-6_se.mp3', incoming file is '/Users/maced/dev/media-archive-tooling/sample-files/HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3'",
+        "Title conflict: DB has 'SB 3.6.6 class', incoming resolved 'SB-3-6-6-class'",
+        "Country conflict: DB has 'Sweden', incoming is 'se'"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "92797b1e",
+      "filename": "A022 03-10-25 SB 4.9.11 Farma KD.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "871e5c02",
+      "filename": "A024 03-10-26 SB 9.23.32 Praha.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "adf387d9",
+      "filename": "A021 03-10-24 BG 4.38 Praha.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Bhagavad Gita' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "c5467340",
+      "filename": "A019 03-10-23 BG 3.12 Praha.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Bhagavad Gita' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "9b6b453c",
+      "filename": "A025 03-10-26 Govardhana lekce Pruhon.mp3",
+      "tool2_decision": "MULTIPLE_CANDIDATES",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "58433c03",
+      "filename": "A020 03-10-24 SB 9.23.22 Praha.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "9eba961f",
+      "filename": "A023 03-10-25 TKG_s Diary Praha.mp3",
+      "tool2_decision": "MULTIPLE_CANDIDATES",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "552cb9cd",
+      "filename": "A026 03-10-26 Govardhana slideshow Pruhon.mp3",
+      "tool2_decision": "MULTIPLE_CANDIDATES",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+      ]
+    },
+    {
+      "tracking_id": "4b932cf5",
+      "filename": "A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "REVIEW_REQUIRED",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
+        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on",
+        "Country",
+        "Place, location"
+      ],
+      "conflicts": [
+        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
+      ],
+      "diagnostic_notes": []
+    },
+    {
+      "tracking_id": "24d47bde",
+      "filename": "Hare Krsna.mp3",
+      "tool2_decision": "MULTIPLE_CANDIDATES",
+      "status": "REVIEW_REQUIRED",
+      "operation": "BLOCKED",
+      "media_row_id": null,
+      "fields_modified": [],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+      ]
+    }
+  ]
+}

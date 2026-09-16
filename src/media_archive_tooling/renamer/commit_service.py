@@ -1,6 +1,6 @@
 """Reusable application service for committing reviewed Tool 1 rename proposals."""
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .models import ParserResult, RenameMode, RenameProposal
 from .registry.registry import LocalRegistry
@@ -15,9 +15,15 @@ class RenameCommitService:
     human-review blockers have been resolved.
     """
 
-    def __init__(self, registry: LocalRegistry, mode: RenameMode = RenameMode.INITIAL):
+    def __init__(
+        self,
+        registry: LocalRegistry,
+        mode: RenameMode = RenameMode.INITIAL,
+        media_db_updater_service: Optional[Any] = None,
+    ):
         self.registry = registry
         self.mode = mode
+        self.media_db_updater_service = media_db_updater_service
 
     def commit_file(self, tracking_id: str, reviewer: str = "human") -> Dict[str, Any]:
         record = self.registry.get_file(tracking_id)
@@ -78,6 +84,7 @@ class RenameCommitService:
                 changes={"filesystem_rename": False, "path": str(source_path)},
                 previous_values=previous_values,
             )
+            self._trigger_media_db_sync(tracking_id)
             return self.registry.get_file(tracking_id)
 
         proposal = RenameProposal(
@@ -130,4 +137,20 @@ class RenameCommitService:
             },
             previous_values=previous_values,
         )
+        self._trigger_media_db_sync(tracking_id)
         return self.registry.get_file(tracking_id)
+
+    def _trigger_media_db_sync(self, tracking_id: str):
+        """Record durable sync outbox state and trigger automatic synchronization if configured."""
+        try:
+            self.registry.save_media_db_sync(
+                tracking_id=tracking_id,
+                sync_status="PENDING_SYNC",
+                attempt_count=0,
+            )
+            if self.media_db_updater_service is not None:
+                self.media_db_updater_service.synchronize(tracking_id, commit=True)
+        except Exception:
+            # Filesystem commit must never be rolled back if Baserow sync fails
+            pass
+

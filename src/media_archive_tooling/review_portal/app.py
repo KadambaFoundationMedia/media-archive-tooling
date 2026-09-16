@@ -31,6 +31,7 @@ _commit_service: Optional[RenameCommitService] = None
 _review_root: Optional[Path] = None
 _media_db_service: Optional[Any] = None
 _media_db_provider: Optional[Any] = None
+_media_db_updater_service: Optional[Any] = None
 
 
 def configure_review_context(
@@ -38,17 +39,19 @@ def configure_review_context(
     review_root: Optional[Path] = None,
     media_db_service: Optional[Any] = None,
     media_db_provider: Optional[Any] = None,
+    media_db_updater_service: Optional[Any] = None,
 ) -> None:
     """Configure the portal to use the same local review registry/root as the scan."""
-    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider
+    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider, _media_db_updater_service
     config = load_config()
     selected_registry = Path(registry_path) if registry_path else config.registry_path
     registry = LocalRegistry(selected_registry)
     _service = RenamerApplicationService(registry=registry)
-    _commit_service = RenameCommitService(registry=registry)
-    _review_root = Path(review_root).expanduser().resolve() if review_root else None
     _media_db_service = media_db_service
     _media_db_provider = media_db_provider
+    _media_db_updater_service = media_db_updater_service
+    _commit_service = RenameCommitService(registry=registry, media_db_updater_service=media_db_updater_service)
+    _review_root = Path(review_root).expanduser().resolve() if review_root else None
 
 
 def get_service() -> RenamerApplicationService:
@@ -62,7 +65,10 @@ def get_service() -> RenamerApplicationService:
 def get_commit_service() -> RenameCommitService:
     global _commit_service
     if _commit_service is None:
-        _commit_service = RenameCommitService(registry=get_service().registry)
+        _commit_service = RenameCommitService(
+            registry=get_service().registry,
+            media_db_updater_service=get_media_db_updater_service(),
+        )
     return _commit_service
 
 
@@ -92,6 +98,29 @@ def get_media_db_service() -> Any:
             snapshot_path=config.baserow_snapshot_path,
         )
     return MediaDatabaseReviewService(registry=registry, provider=provider)
+
+
+def get_media_db_updater_service() -> Any:
+    """Return configured MediaDatabaseUpdaterService with support for test dependency injection."""
+    global _media_db_updater_service
+    if _media_db_updater_service is not None:
+        return _media_db_updater_service
+
+    from ..media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
+
+    config = load_config()
+    registry = get_registry()
+    write_adapter = BaserowWriteAdapter(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+    )
+    tool2_svc = get_media_db_service()
+    return MediaDatabaseUpdaterService(
+        registry=registry,
+        write_adapter=write_adapter,
+        tool2_service=tool2_svc,
+    )
 
 
 def _dashboard_record(record: dict) -> dict:
@@ -142,10 +171,16 @@ def file_detail(request: Request, tracking_id: str):
         raise HTTPException(status_code=404, detail="File not found in registry")
     media_db_review = service.registry.get_media_db_review(tracking_id)
     travel_review = service.registry.get_travel_review(tracking_id)
+    media_db_sync = service.registry.get_media_db_sync(tracking_id)
     return templates.TemplateResponse(
         request=request,
         name="detail.html",
-        context={"file": file_record, "media_db_review": media_db_review, "travel_review": travel_review},
+        context={
+            "file": file_record,
+            "media_db_review": media_db_review,
+            "travel_review": travel_review,
+            "media_db_sync": media_db_sync,
+        },
     )
 
 
@@ -165,6 +200,21 @@ def media_db_action(
             notes=notes,
             reviewer="review_portal",
         )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+
+
+@app.post("/file/{tracking_id}/media-db-sync")
+def media_db_sync(
+    tracking_id: str,
+    action: str = Form("preview"),
+):
+    updater = get_media_db_updater_service()
+    commit = (action in ("commit", "retry"))
+    try:
+        updater.synchronize(tracking_id, commit=commit)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

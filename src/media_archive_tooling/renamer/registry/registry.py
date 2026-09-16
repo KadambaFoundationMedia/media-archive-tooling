@@ -94,6 +94,21 @@ class LocalRegistry:
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS media_db_syncs (
+                tracking_id TEXT PRIMARY KEY,
+                sync_status TEXT NOT NULL,
+                operation_type TEXT,
+                media_row_id INTEGER,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                error_message TEXT,
+                request_json TEXT,
+                result_json TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
             try:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
@@ -102,6 +117,7 @@ class LocalRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_current_path ON files(current_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_decision ON media_db_reviews(decision)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_travel_reviews_decision ON travel_reviews(decision)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_syncs_status ON media_db_syncs(sync_status)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -481,6 +497,100 @@ class LocalRegistry:
                 d = dict(r)
                 d["result"] = json.loads(d["result_json"])
                 d["selected_row_ids"] = json.loads(d["selected_row_ids"]) if d.get("selected_row_ids") else []
+                results.append(d)
+            return results
+
+    def save_media_db_sync(
+        self,
+        tracking_id: str,
+        sync_status: str,
+        operation_type: Optional[str] = None,
+        media_row_id: Optional[int] = None,
+        attempt_count: int = 1,
+        last_attempt_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+        request_json: Optional[str] = None,
+        result_json: Optional[str] = None,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        last_attempt = last_attempt_at or now
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO media_db_syncs (
+                tracking_id, sync_status, operation_type, media_row_id,
+                attempt_count, last_attempt_at, error_message, request_json, result_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id) DO UPDATE SET
+                sync_status = excluded.sync_status,
+                operation_type = excluded.operation_type,
+                media_row_id = excluded.media_row_id,
+                attempt_count = excluded.attempt_count,
+                last_attempt_at = excluded.last_attempt_at,
+                error_message = excluded.error_message,
+                request_json = COALESCE(excluded.request_json, media_db_syncs.request_json),
+                result_json = excluded.result_json,
+                updated_at = excluded.updated_at
+            """, (
+                tracking_id,
+                sync_status,
+                operation_type,
+                media_row_id,
+                attempt_count,
+                last_attempt,
+                error_message,
+                request_json,
+                result_json,
+                now,
+            ))
+            conn.commit()
+
+    def get_media_db_sync(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM media_db_syncs WHERE tracking_id = ?", (tracking_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["request"] = json.loads(d["request_json"]) if d.get("request_json") else None
+                d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
+                return d
+        return None
+
+    def list_media_db_syncs(
+        self,
+        sync_status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM media_db_syncs WHERE 1=1"
+        params = []
+        if sync_status:
+            query += " AND sync_status = ?"
+            params.append(sync_status)
+        query += " ORDER BY updated_at DESC"
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["request"] = json.loads(d["request_json"]) if d.get("request_json") else None
+                d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
+                results.append(d)
+            return results
+
+    def list_pending_media_db_syncs(self) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM media_db_syncs WHERE sync_status IN ('PENDING_SYNC', 'FAILED_RETRYABLE') ORDER BY updated_at ASC"
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["request"] = json.loads(d["request_json"]) if d.get("request_json") else None
+                d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
                 results.append(d)
             return results
 

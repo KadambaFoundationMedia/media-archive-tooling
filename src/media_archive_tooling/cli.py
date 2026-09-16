@@ -1,5 +1,6 @@
 """Unified CLI entry point for media-archive-tooling."""
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -9,6 +10,9 @@ from .renamer.registry.registry import LocalRegistry
 from .renamer.logging.logger import RenamerLogger
 from .renamer.planner.executor import BatchExecutor
 from .adapters.baserow import BaserowReferenceProvider
+from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+from .media_db_reviewer.service import MediaDatabaseReviewService
+from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
 
 
 def run_renamer(args):
@@ -362,9 +366,85 @@ def run_travel_reference(args):
             sys.exit(1)
 
 
+def run_media_db_update(args):
+    config = load_config()
+    reg_path = Path(args.registry_path) if getattr(args, "registry_path", None) else config.registry_path
+    registry = LocalRegistry(reg_path)
+
+    write_adapter = BaserowWriteAdapter(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+    )
+    tool2_provider = BaserowSnapshotProvider(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+        category_table_id=config.baserow_category_table_id,
+    )
+    tool2_service = MediaDatabaseReviewService(registry=registry, provider=tool2_provider)
+    updater_service = MediaDatabaseUpdaterService(
+        registry=registry,
+        write_adapter=write_adapter,
+        tool2_service=tool2_service,
+    )
+
+    commit = getattr(args, "commit", False)
+    is_json = getattr(args, "json", False)
+
+    if getattr(args, "retry_pending", False):
+        results = updater_service.retry_pending()
+        if is_json:
+            print(json.dumps([r.model_dump() for r in results], indent=2))
+        else:
+            print(f"Retried {len(results)} pending synchronization requests.")
+            for r in results:
+                print(f"  [{r.tracking_id}] Status: {r.status.value} | Operation: {r.operation.value} | Row ID: {r.media_row_id}")
+        return
+
+    tracking_ids = [args.tracking_id] if getattr(args, "tracking_id", None) else [f["tracking_id"] for f in registry.list_files()]
+    if not tracking_ids:
+        if is_json:
+            print("[]")
+        else:
+            print("No files found in registry to synchronize.")
+        return
+
+    results = []
+    for tid in tracking_ids:
+        res = updater_service.synchronize(tid, commit=commit)
+        results.append(res)
+
+    if is_json:
+        print(json.dumps([r.model_dump() for r in results], indent=2))
+    else:
+        mode_str = "COMMIT" if commit else "DRY-RUN / PREVIEW"
+        print(f"=== Media Database Update ({mode_str}) ===")
+        print(f"Processed {len(results)} file(s).")
+        for r in results:
+            print(f"  [{r.tracking_id}] Status: {r.status.value} | Op: {r.operation.value} | Row: {r.media_row_id}")
+            if r.field_diffs:
+                for d in r.field_diffs:
+                    if d.action.value == "SET":
+                        print(f"    - {d.field_name}: '{d.old_value}' -> '{d.new_value}' (SET)")
+            if r.conflicts:
+                print(f"    Conflicts: {', '.join(r.conflicts)}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Tool 4: Media Database Updater command
+    media_update_parser = subparsers.add_parser("media-db-update", help="Run Tool 4: Media Database Updater")
+    media_update_parser.add_argument("tracking_id", nargs="?", help="Optional tracking ID to synchronize")
+    media_update_parser.add_argument("--commit", dest="commit", action="store_true", default=False, help="Apply mutations to Baserow")
+    media_update_parser.add_argument("--dry-run", dest="commit", action="store_false", help="Perform dry-run preview without mutating database (default)")
+    media_update_parser.add_argument("--retry-pending", action="store_true", default=False, help="Retry all pending or retryable sync records")
+    media_update_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    media_update_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    media_update_parser.set_defaults(func=run_media_db_update)
+
 
     # Tool 3: Travel Schedule Reviewer commands
     travel_review_parser = subparsers.add_parser("travel-review", help="Run Tool 3: Travel Schedule Reviewer")
