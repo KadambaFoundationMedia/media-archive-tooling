@@ -1,6 +1,14 @@
 {
-  "evaluated_commit": "c829b983796beaa2c109d6bb9386e93f52db3df1",
-  "run_timestamp": "2026-09-17T11:39:12.312885+00:00",
+  "evaluated_commit": "b2e97478f7ea81fb462864d774f2abc03c62f93e",
+  "clean_worktree_confirmed": true,
+  "run_timestamp": "2026-09-17T14:08:39.437955+00:00",
+  "tool2_live_database_state": "LIVE_CURRENT",
+  "tool2_read_timestamp": "2026-09-17T13:56:09.618415+00:00",
+  "reference_checksums": {
+    "travel_schedule_sha256": "a507fce660fe1d84c3a2e5cdb7a6c39608a5220cc7609d60fca201ec267fc89a",
+    "travel_schedule_row_count": 14,
+    "snapshot_sha256": "e32460ea0accd29e7fa8bf7b9e2ef4277d37a0a3f9e201a9094069562c549a85"
+  },
   "live_reference_info": {
     "media_table_id": "658291",
     "category_table_id": null,
@@ -29,20 +37,20 @@
   "representative_diffs": {
     "matched_updates": [
       {
-        "tracking_id": "14085754",
+        "tracking_id": "49ee8526",
         "filename": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
         "media_row_id": 2335,
         "fields_preserved": [
-          "Youtube",
-          "Themes",
-          "Alt. Links",
-          "Media Archive link",
-          "Transcriber",
+          "Article Link",
           "Transcript Archive link",
           "Audio link",
-          "Article Link",
-          "Thumb image",
+          "Media Archive link",
+          "Transcriber",
+          "Alt. Links",
           "Youtube descr",
+          "Thumb image",
+          "Youtube",
+          "Themes",
           "Status Media",
           "Status thumb",
           "Status Transcript",
@@ -62,6 +70,13 @@
             "field_name": "Filename",
             "old_value": "2015-08-27_KKS_SB-3-6-6_se.mp3",
             "new_value": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+            "action": "PRESERVED",
+            "details": null
+          },
+          {
+            "field_name": "Media Archive link",
+            "old_value": null,
+            "new_value": null,
             "action": "PRESERVED",
             "details": null
           },
@@ -119,19 +134,19 @@
     ],
     "candidate_creates": [
       {
-        "tracking_id": "b02ec4ab",
+        "tracking_id": "6e9ed985",
         "filename": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
         "fields_preserved": [
-          "Youtube",
-          "Themes",
-          "Alt. Links",
-          "Media Archive link",
-          "Transcriber",
+          "Article Link",
           "Transcript Archive link",
           "Audio link",
-          "Article Link",
+          "Media Archive link",
+          "Transcriber",
+          "Alt. Links",
+          "Youtube descr",
           "Thumb image",
-          "Youtube descr"
+          "Youtube",
+          "Themes"
         ],
         "field_diffs": [
           {
@@ -235,19 +250,19 @@
         ]
       },
       {
-        "tracking_id": "e268c3eb",
+        "tracking_id": "ad946cf7",
         "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
         "fields_preserved": [
-          "Youtube",
-          "Themes",
-          "Alt. Links",
-          "Media Archive link",
-          "Transcriber",
+          "Article Link",
           "Transcript Archive link",
           "Audio link",
-          "Article Link",
+          "Media Archive link",
+          "Transcriber",
+          "Alt. Links",
+          "Youtube descr",
           "Thumb image",
-          "Youtube descr"
+          "Youtube",
+          "Themes"
         ],
         "field_diffs": [
           {
@@ -351,19 +366,19 @@
         ]
       },
       {
-        "tracking_id": "d0361a14",
+        "tracking_id": "cc5b056d",
         "filename": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
         "fields_preserved": [
-          "Youtube",
-          "Themes",
-          "Alt. Links",
-          "Media Archive link",
-          "Transcriber",
+          "Article Link",
           "Transcript Archive link",
           "Audio link",
-          "Article Link",
+          "Media Archive link",
+          "Transcriber",
+          "Alt. Links",
+          "Youtube descr",
           "Thumb image",
-          "Youtube descr"
+          "Youtube",
+          "Themes"
         ],
         "field_diffs": [
           {
@@ -483,19 +498,19 @@
     ],
     "partial_date_notes": [
       {
-        "tracking_id": "f3bae2bf",
+        "tracking_id": "d36d011a",
         "filename": "JRM.mp3",
         "fields_preserved": [
-          "Youtube",
-          "Themes",
-          "Alt. Links",
-          "Media Archive link",
-          "Transcriber",
+          "Article Link",
           "Transcript Archive link",
           "Audio link",
-          "Article Link",
+          "Media Archive link",
+          "Transcriber",
+          "Alt. Links",
+          "Youtube descr",
           "Thumb image",
-          "Youtube descr"
+          "Youtube",
+          "Themes"
         ],
         "field_diffs": [
           {
@@ -608,21 +623,21 @@
     ],
     "conflict_blocked": [
       {
-        "tracking_id": "9d5c5cb8",
+        "tracking_id": "911cb386",
         "filename": "Prague-Oct-2003-20260810T132808Z-1-001.zip",
         "conflicts": [],
         "fields_preserved": [],
         "field_diffs": []
       },
       {
-        "tracking_id": "1056a818",
+        "tracking_id": "36f1c923",
         "filename": "2020-03-30_KKS_Reading-from-Kirtaniyah-sada-harih_livestream.mp4",
         "conflicts": [],
         "fields_preserved": [],
         "field_diffs": []
       },
       {
-        "tracking_id": "6ccc1ffb",
+        "tracking_id": "e0af1f94",
         "filename": "Anti-test.zip",
         "conflicts": [],
         "fields_preserved": [],
@@ -632,7 +647,7 @@
   },
   "sample_detailed_results": [
     {
-      "tracking_id": "9d5c5cb8",
+      "tracking_id": "911cb386",
       "filename": "Prague-Oct-2003-20260810T132808Z-1-001.zip",
       "tool2_decision": "INSUFFICIENT_EVIDENCE",
       "status": "REVIEW_REQUIRED",
@@ -642,11 +657,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision INSUFFICIENT_EVIDENCE requires review; automatic mutation disallowed"
+        "Tool 2 decision INSUFFICIENT_EVIDENCE requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "1056a818",
+      "tracking_id": "36f1c923",
       "filename": "2020-03-30_KKS_Reading-from-Kirtaniyah-sada-harih_livestream.mp4",
       "tool2_decision": "CONFLICT_WITH_EXISTING",
       "status": "REVIEW_REQUIRED",
@@ -656,11 +671,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision CONFLICT_WITH_EXISTING requires review; automatic mutation disallowed"
+        "Tool 2 decision CONFLICT_WITH_EXISTING requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "6ccc1ffb",
+      "tracking_id": "e0af1f94",
       "filename": "Anti-test.zip",
       "tool2_decision": "INSUFFICIENT_EVIDENCE",
       "status": "REVIEW_REQUIRED",
@@ -670,11 +685,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision INSUFFICIENT_EVIDENCE requires review; automatic mutation disallowed"
+        "Tool 2 decision INSUFFICIENT_EVIDENCE requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "b02ec4ab",
+      "tracking_id": "6e9ed985",
       "filename": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -697,16 +712,16 @@
         "imported_on"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": [
@@ -714,7 +729,7 @@
       ]
     },
     {
-      "tracking_id": "e268c3eb",
+      "tracking_id": "ad946cf7",
       "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -737,16 +752,16 @@
         "imported_on"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": [
@@ -754,7 +769,7 @@
       ]
     },
     {
-      "tracking_id": "d0361a14",
+      "tracking_id": "cc5b056d",
       "filename": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -779,22 +794,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "1396f0b3",
+      "tracking_id": "058102a5",
       "filename": "KKS-BhajansProgram Clean - 2015.01.25 10.12.54.avi",
       "tool2_decision": "INSUFFICIENT_EVIDENCE",
       "status": "REVIEW_REQUIRED",
@@ -804,11 +819,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision INSUFFICIENT_EVIDENCE requires review; automatic mutation disallowed"
+        "Tool 2 decision INSUFFICIENT_EVIDENCE requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "4adc92f5",
+      "tracking_id": "81fcc95a",
       "filename": "2011-08-20_KKS_Jaya-radha-madhava_oslo_fi.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -832,22 +847,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "c25924c3",
+      "tracking_id": "207d8999",
       "filename": "KKS-Home-program_feb-2015_amsterdam.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -857,11 +872,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+        "Tool 2 decision MULTIPLE_CANDIDATES requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "14085754",
+      "tracking_id": "49ee8526",
       "filename": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
       "tool2_decision": "EXISTING_MEDIA_MATCH",
       "status": "REVIEW_REQUIRED",
@@ -871,16 +886,16 @@
         "Notes"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
-        "Thumb image",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
         "Youtube descr",
+        "Thumb image",
+        "Youtube",
+        "Themes",
         "Status Media",
         "Status thumb",
         "Status Transcript",
@@ -895,7 +910,7 @@
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "f3c49e4b",
+      "tracking_id": "64fb1a2f",
       "filename": "A022 03-10-25 SB 4.9.11 Farma KD.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -920,22 +935,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "2d196ed8",
+      "tracking_id": "77d393d2",
       "filename": "A024 03-10-26 SB 9.23.32 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -960,22 +975,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "6c10b513",
+      "tracking_id": "89baa289",
       "filename": "A021 03-10-24 BG 4.38 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -1000,22 +1015,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "1f0aebb3",
+      "tracking_id": "71aa4782",
       "filename": "A019 03-10-23 BG 3.12 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -1040,22 +1055,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "91f02b50",
+      "tracking_id": "216095ed",
       "filename": "A025 03-10-26 Govardhana lekce Pruhon.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -1065,11 +1080,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+        "Tool 2 decision MULTIPLE_CANDIDATES requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "14498262",
+      "tracking_id": "f694dc0b",
       "filename": "A020 03-10-24 SB 9.23.22 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -1094,22 +1109,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "858a1c30",
+      "tracking_id": "fb21e8bf",
       "filename": "A023 03-10-25 TKG_s Diary Praha.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -1119,11 +1134,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+        "Tool 2 decision MULTIPLE_CANDIDATES requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "f4079763",
+      "tracking_id": "c24628e6",
       "filename": "A026 03-10-26 Govardhana slideshow Pruhon.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -1133,11 +1148,11 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+        "Tool 2 decision MULTIPLE_CANDIDATES requires human association review; automatic mutation disallowed"
       ]
     },
     {
-      "tracking_id": "74959bac",
+      "tracking_id": "64425530",
       "filename": "A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -1162,22 +1177,22 @@
         "Place, location"
       ],
       "fields_preserved": [
-        "Youtube",
-        "Themes",
-        "Alt. Links",
-        "Media Archive link",
-        "Transcriber",
+        "Article Link",
         "Transcript Archive link",
         "Audio link",
-        "Article Link",
+        "Media Archive link",
+        "Transcriber",
+        "Alt. Links",
+        "Youtube descr",
         "Thumb image",
-        "Youtube descr"
+        "Youtube",
+        "Themes"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "925ab9ac",
+      "tracking_id": "fdb3da8c",
       "filename": "Hare Krsna.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -1187,7 +1202,7 @@
       "fields_preserved": [],
       "conflicts": [],
       "diagnostic_notes": [
-        "Tool 2 decision MULTIPLE_CANDIDATES requires review; automatic mutation disallowed"
+        "Tool 2 decision MULTIPLE_CANDIDATES requires human association review; automatic mutation disallowed"
       ]
     }
   ]
