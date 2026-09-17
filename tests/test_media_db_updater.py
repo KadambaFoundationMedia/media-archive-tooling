@@ -1070,6 +1070,22 @@ def test_31_ambiguous_similar_location_options_route_to_review(tmp_path):
         fake_db.ensure_select_option("Place, location", "Leipzig")
 
 
+def test_31b_country_reuses_established_hyphenated_option_without_schema_write():
+    live_fields = FakeBaserowWriteAdapter().fields
+    country = next(field for field in live_fields if field["name"] == "Country")
+    country["select_options"] = [
+        {"id": 10, "value": "Czech-republic", "color": "blue"},
+        {"id": 20, "value": "Czech-Republic", "color": "red"},
+    ]
+    fake_db = FakeBaserowWriteAdapter(initial_fields=live_fields)
+
+    matched = fake_db.ensure_select_option("Country", "Czech Republic")
+
+    assert matched == "Czech-republic"
+    assert len(country["select_options"]) == 2
+    assert are_countries_equivalent(matched, "cz") is True
+
+
 # ---------------------------------------------------------------------------
 # Test 32: Select-option schema update preserves all existing options
 # ---------------------------------------------------------------------------
@@ -1672,6 +1688,8 @@ def test_54_country_mapper_authoritative_resolution():
     assert are_countries_equivalent("de", "germany") is True
     assert are_countries_equivalent("IN", "India") is True
     assert are_countries_equivalent("USA", "United States") is True
+    assert are_countries_equivalent("Czech-republic", "Czech Republic") is True
+    assert are_countries_equivalent("Czech_Republic", "cz") is True
     assert are_countries_equivalent("Germany", "France") is False
 
 

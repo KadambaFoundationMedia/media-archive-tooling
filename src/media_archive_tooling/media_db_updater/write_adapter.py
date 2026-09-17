@@ -95,6 +95,34 @@ def _normalize_option_text(text: str) -> str:
     return to_ascii_latin(text).strip().lower()
 
 
+def _matching_select_options(
+    field_name: str,
+    option_name: str,
+    existing_options: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return existing options representing the requested value.
+
+    Country options are compared semantically because the live table contains
+    established hyphen/space and capitalization variants for the same country.
+    Other select fields retain strict normalized-text matching.
+    """
+    if field_name.strip().lower() == "country":
+        from .country_mapper import are_countries_equivalent
+
+        return [
+            option
+            for option in existing_options
+            if are_countries_equivalent(option.get("value"), option_name)
+        ]
+
+    norm_target = _normalize_option_text(option_name)
+    return [
+        option
+        for option in existing_options
+        if _normalize_option_text(option.get("value", "")) == norm_target
+    ]
+
+
 def validate_field_schema(field_name: str, value: Any, live_field: Dict[str, Any], allow_new_options: bool = False) -> None:
     """Validate that value is compatible with the live field definition in Baserow.
     Raises BaserowSchemaError on incompatible types or unpermitted values.
@@ -291,12 +319,13 @@ class BaserowWriteAdapter:
         field_id = target_field["id"]
         existing_options = target_field.get("select_options", [])
         norm_target_val = _normalize_option_text(option_name)
+        matches = _matching_select_options(field_name, option_name, existing_options)
 
-        matches = []
-        for opt in existing_options:
-            if _normalize_option_text(opt.get("value", "")) == norm_target_val:
-                matches.append(opt)
-
+        if matches and norm_field == "country":
+            # Multiple labels can already represent the same country in the
+            # authoritative live options. Reuse the first established option;
+            # never create another spelling variant.
+            return matches[0]["value"]
         if len(matches) == 1:
             return matches[0]["value"]
         elif len(matches) > 1:
@@ -545,13 +574,10 @@ class FakeBaserowWriteAdapter:
             raise BaserowSchemaError(f"Field '{field_name}' not found in fake schema")
 
         existing_options = target_field.get("select_options", [])
-        norm_target_val = _normalize_option_text(option_name)
+        matches = _matching_select_options(field_name, option_name, existing_options)
 
-        matches = []
-        for opt in existing_options:
-            if _normalize_option_text(opt.get("value", "")) == norm_target_val:
-                matches.append(opt)
-
+        if matches and norm_field == "country":
+            return matches[0]["value"]
         if len(matches) == 1:
             return matches[0]["value"]
         elif len(matches) > 1:

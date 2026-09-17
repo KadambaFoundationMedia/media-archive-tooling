@@ -1,6 +1,7 @@
 """Authoritative Country and ISO-3166-1 alpha-2 mapping for Tool 4."""
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -329,6 +330,10 @@ def normalize_country_name(name_or_iso: Optional[str]) -> Optional[str]:
             raw = ISO_TO_COUNTRY[raw].lower()
         else:
             return None
+    # Baserow's established options use both spaces and hyphens for country
+    # names. Treat those presentation variants as the same country.
+    raw = re.sub(r"[-_]+", " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
     return COUNTRY_ALIASES.get(raw, raw)
 
 

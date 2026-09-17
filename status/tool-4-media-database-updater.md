@@ -682,3 +682,7 @@ The user-directed correction was exercised against tracking ID `48f52166` and th
 ### Practical Tool 2 revalidation isolation correction
 
 The Czech sample exposed that Tool 4's mandatory fresh Tool 2 checks used Tool 2's default `auto_enrich=True`. During a finalized sync this could rewrite Tool 1 registry state and replace the no-ID final proposal with an internal `_ID-xxxxxxxx` proposal. Tool 4 now calls every Tool 2 request-building and pre-write revalidation path with `auto_enrich=False`. The live duplicate check remains fresh and read-only, while finalized Tool 1 state remains immutable during Tool 4 synchronization.
+
+### Practical country-option reuse correction
+
+The same sample found established live Country options `Czech-republic` and `Czech-Republic`. Tool 4 previously treated the space-separated ISO display name `Czech Republic` as a missing option and attempted an unnecessary schema mutation. Country option matching now treats spaces, hyphens, underscores, and capitalization as presentation variants, reuses the first established live option, and does not create another duplicate country spelling. Ambiguous Place/location options remain review-blocking.
