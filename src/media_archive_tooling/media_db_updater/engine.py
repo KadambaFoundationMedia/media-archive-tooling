@@ -27,6 +27,7 @@ from .models import (
     SyncOperation,
     SyncStatus,
 )
+from ..media_db_reviewer.models import MediaDatabaseReviewResult, ReviewDecision
 from .write_adapter import (
     AmbiguousOptionError,
     BaserowSchemaError,
@@ -41,6 +42,67 @@ from .write_adapter import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def validate_tool2_review_result(
+    rev: Any, tracking_id: str
+) -> Tuple[Optional[MediaDatabaseReviewResult], Optional[str]]:
+    """Strictly validate that Tool 2 returned a typed, valid MediaDatabaseReviewResult.
+
+    Enforces R-023 and R-033:
+    - Object must be an instance of MediaDatabaseReviewResult (or validatable via model).
+    - tracking_id must match.
+    - live_read_complete must be True.
+    - snapshot_complete must be True.
+    - baserow_check_complete must be True.
+    - database_state must be in ('LIVE_CURRENT', 'LIVE_COMPLETE').
+    - baserow_read_at (or database_snapshot_at) must be a non-empty string.
+    - decision must not be empty or DATABASE_UNAVAILABLE.
+    """
+    if rev is None:
+        return None, "Tool 2 returned no review result (None)"
+
+    result_model: Optional[MediaDatabaseReviewResult] = None
+    if isinstance(rev, MediaDatabaseReviewResult):
+        result_model = rev
+    elif isinstance(rev, dict):
+        try:
+            result_model = MediaDatabaseReviewResult.model_validate(rev)
+        except Exception as e:
+            return None, f"Tool 2 review dictionary failed MediaDatabaseReviewResult contract validation: {e}"
+    else:
+        if hasattr(rev, "model_dump"):
+            try:
+                result_model = MediaDatabaseReviewResult.model_validate(rev.model_dump())
+            except Exception as e:
+                return None, f"Tool 2 result object failed MediaDatabaseReviewResult contract: {e}"
+        else:
+            return None, f"Tool 2 result is of type {type(rev).__name__}, not MediaDatabaseReviewResult"
+
+    if result_model.tracking_id != tracking_id:
+        return None, f"Tool 2 result tracking_id '{result_model.tracking_id}' does not match expected '{tracking_id}'"
+
+    if result_model.live_read_complete is not True:
+        return None, "Tool 2 live_read_complete is not True"
+
+    if result_model.snapshot_complete is not True:
+        return None, "Tool 2 snapshot_complete is not True"
+
+    if result_model.baserow_check_complete is not True:
+        return None, "Tool 2 baserow_check_complete is not True"
+
+    if result_model.database_state not in ("LIVE_CURRENT", "LIVE_COMPLETE"):
+        return None, f"Tool 2 check incomplete or non-live (database_state '{result_model.database_state}' not in ('LIVE_CURRENT', 'LIVE_COMPLETE'))"
+
+    read_ts = (result_model.baserow_read_at or result_model.database_snapshot_at or "").strip()
+    if not read_ts:
+        return None, "Tool 2 live-read timestamp is missing or empty"
+
+    dec_val = result_model.decision.value if hasattr(result_model.decision, "value") else str(result_model.decision)
+    if not dec_val or dec_val.upper() == "DATABASE_UNAVAILABLE":
+        return None, f"Tool 2 decision is '{dec_val}'"
+
+    return result_model, None
 
 # Section 7 positive eligibility: automatic semantic writes require exact/strong (R-014)
 TRUSTED_SEMANTIC_STATES = {"exact", "strong"}
@@ -372,7 +434,7 @@ class MediaDatabaseUpdateEngine:
                     diagnostic_notes=[f"Target Media row {target_id} not found in database"],
                 ), request)
 
-            # Precondition revalidation for association approval
+            # Precondition revalidation for association approval (R-024, R-033)
             if is_valid_assoc and assoc_approval:
                 if assoc_approval.reviewed_candidate_row_id != live_row.get("id"):
                     return self._enrich_result(MediaDbSyncResult(
@@ -383,6 +445,30 @@ class MediaDatabaseUpdateEngine:
                         conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
                         diagnostic_notes=[
                             f"Reviewed candidate row ID {assoc_approval.reviewed_candidate_row_id} does not match live row ID {live_row.get('id')}"
+                        ],
+                    ), request)
+                if not assoc_approval.reviewed_precondition_filename:
+                    return self._enrich_result(MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.REVIEW_REQUIRED,
+                        operation=SyncOperation.CONFLICT,
+                        review_required=True,
+                        conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
+                        diagnostic_notes=[
+                            "Association approval missing reviewed_precondition_filename fingerprint"
+                        ],
+                    ), request)
+                live_fn = str(live_row.get("Filename") or "").strip()
+                precond_fn = str(assoc_approval.reviewed_precondition_filename or "").strip()
+                if precond_fn != live_fn:
+                    return self._enrich_result(MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.REVIEW_REQUIRED,
+                        operation=SyncOperation.CONFLICT,
+                        review_required=True,
+                        conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
+                        diagnostic_notes=[
+                            f"Association precondition filename '{precond_fn}' does not match live row Filename '{live_fn}'"
                         ],
                     ), request)
 
@@ -1232,17 +1318,18 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=[redact_secrets(f"Pre-create live check failed with exception: {e}")],
             )
 
-        if not fresh_rev:
+        valid_rev, err_msg = validate_tool2_review_result(fresh_rev, request.tracking_id)
+        if not valid_rev:
             return MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.DATABASE_UNAVAILABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
-                diagnostic_notes=["Pre-create race guard: Tool 2 returned no review result"],
+                diagnostic_notes=[f"Pre-create race guard: {err_msg}"],
             )
 
-        if fresh_rev.decision != "NEW_MEDIA_CANDIDATE":
-            decision_str = fresh_rev.decision if fresh_rev else "None"
+        dec_str = valid_rev.decision.value if hasattr(valid_rev.decision, "value") else str(valid_rev.decision)
+        if dec_str != "NEW_MEDIA_CANDIDATE":
             return MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.REVIEW_REQUIRED,
@@ -1250,47 +1337,16 @@ class MediaDatabaseUpdateEngine:
                 review_required=True,
                 conflicts=["COLLABORATOR_NEW_ROW_CREATED"],
                 diagnostic_notes=[
-                    f"Pre-create race guard: live Tool 2 check changed from NEW_MEDIA_CANDIDATE to {decision_str}"
+                    f"Pre-create race guard: live Tool 2 check changed from NEW_MEDIA_CANDIDATE to {dec_str}"
                 ],
             )
 
-        # R-013 / R-023: Strict Tool 2 verification of live and complete candidate check
-        if getattr(fresh_rev, "live_read_complete", None) is not True:
-            return MediaDbSyncResult(
-                tracking_id=request.tracking_id,
-                status=SyncStatus.DATABASE_UNAVAILABLE,
-                operation=SyncOperation.BLOCKED,
-                review_required=True,
-                diagnostic_notes=["Pre-create race guard: Tool 2 live_read_complete is not True"],
-            )
-        if getattr(fresh_rev, "snapshot_complete", None) is not True:
-            return MediaDbSyncResult(
-                tracking_id=request.tracking_id,
-                status=SyncStatus.DATABASE_UNAVAILABLE,
-                operation=SyncOperation.BLOCKED,
-                review_required=True,
-                diagnostic_notes=["Pre-create race guard: Tool 2 snapshot_complete is not True"],
-            )
-        if getattr(fresh_rev, "baserow_check_complete", None) is not True:
-            return MediaDbSyncResult(
-                tracking_id=request.tracking_id,
-                status=SyncStatus.DATABASE_UNAVAILABLE,
-                operation=SyncOperation.BLOCKED,
-                review_required=True,
-                diagnostic_notes=["Pre-create race guard: Tool 2 baserow_check_complete is not True"],
-            )
-
-        database_state = getattr(fresh_rev, "database_state", None)
-        if database_state not in ("LIVE_CURRENT", "LIVE_COMPLETE"):
-            return MediaDbSyncResult(
-                tracking_id=request.tracking_id,
-                status=SyncStatus.DATABASE_UNAVAILABLE,
-                operation=SyncOperation.BLOCKED,
-                review_required=True,
-                diagnostic_notes=[
-                    f"Pre-create race guard: Tool 2 check incomplete or non-live (database_state '{database_state}' not in ('LIVE_CURRENT', 'LIVE_COMPLETE'))"
-                ],
-            )
+        # Update request metadata with fresh live Tool 2 audit evidence
+        read_ts = (valid_rev.baserow_read_at or valid_rev.database_snapshot_at or "").strip()
+        request.tool2_timestamp = valid_rev.database_snapshot_at or read_ts
+        request.live_query_timestamp = read_ts
+        request.tool2_database_state = valid_rev.database_state
+        request.tool2_decision = dec_str
 
         # 2. Re-fetch live table fields to build payload with valid field existence (R-006, R-017)
         try:
@@ -1421,6 +1477,70 @@ class MediaDatabaseUpdateEngine:
             plan.status = SyncStatus.FAILED_BLOCKED
             return plan
 
+        # R-031: Fresh Tool 2 write gate before update mutation
+        if self.tool2_service is not None:
+            try:
+                fresh_rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
+            except Exception as e:
+                logger.warning(f"Pre-update Tool 2 live check encountered error: {e}")
+                return self._enrich_result(MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.DATABASE_UNAVAILABLE,
+                    operation=SyncOperation.BLOCKED,
+                    media_row_id=row_id,
+                    review_required=True,
+                    error_message=redact_secrets(str(e)),
+                    diagnostic_notes=[redact_secrets(f"Pre-update Tool 2 live check failed with exception: {e}")],
+                ), request)
+
+            valid_rev, err_msg = validate_tool2_review_result(fresh_rev, request.tracking_id)
+            if not valid_rev:
+                return self._enrich_result(MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.DATABASE_UNAVAILABLE,
+                    operation=SyncOperation.BLOCKED,
+                    media_row_id=row_id,
+                    review_required=True,
+                    diagnostic_notes=[f"Pre-update Tool 2 gate contract failure: {err_msg}"],
+                ), request)
+
+            # Update request metadata with fresh live Tool 2 audit evidence
+            read_ts = (valid_rev.baserow_read_at or valid_rev.database_snapshot_at or "").strip()
+            request.tool2_timestamp = valid_rev.database_snapshot_at or read_ts
+            request.live_query_timestamp = read_ts
+            request.tool2_database_state = valid_rev.database_state
+            t2_decision_val = valid_rev.decision.value if hasattr(valid_rev.decision, "value") else str(valid_rev.decision)
+            request.tool2_decision = t2_decision_val
+
+            # Validate decision gate for update (R-031)
+            assoc_approval = request.get_association_approval()
+            if assoc_approval is None:
+                # Without association approval, fresh review MUST be EXISTING_MEDIA_MATCH with exact same row_id
+                if t2_decision_val != "EXISTING_MEDIA_MATCH":
+                    return self._enrich_result(MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.REVIEW_REQUIRED,
+                        operation=SyncOperation.CONFLICT,
+                        media_row_id=row_id,
+                        review_required=True,
+                        conflicts=["TOOL2_DECISION_CHANGED"],
+                        diagnostic_notes=[
+                            f"Pre-update Tool 2 gate: live decision changed from EXISTING_MEDIA_MATCH to {t2_decision_val}; update blocked"
+                        ],
+                    ), request)
+                if valid_rev.selected_media_row_id != row_id:
+                    return self._enrich_result(MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.REVIEW_REQUIRED,
+                        operation=SyncOperation.CONFLICT,
+                        media_row_id=row_id,
+                        review_required=True,
+                        conflicts=["TOOL2_SELECTED_ROW_CHANGED"],
+                        diagnostic_notes=[
+                            f"Pre-update Tool 2 gate: live selected row ID changed from {row_id} to {valid_rev.selected_media_row_id}; update blocked"
+                        ],
+                    ), request)
+
         # 1. Fetch fresh live row immediately before write
         try:
             fresh_row = self.write_adapter.fetch_row_raw(row_id)
@@ -1433,6 +1553,48 @@ class MediaDatabaseUpdateEngine:
             plan.status = SyncStatus.FAILED_BLOCKED
             plan.error_message = f"Target row {row_id} no longer exists"
             return plan
+
+        # R-033: Association approval precondition revalidation against live row
+        assoc_approval = request.get_association_approval()
+        if assoc_approval is not None:
+            if assoc_approval.reviewed_candidate_row_id != fresh_row.get("id"):
+                return self._enrich_result(MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.REVIEW_REQUIRED,
+                    operation=SyncOperation.CONFLICT,
+                    media_row_id=row_id,
+                    review_required=True,
+                    conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
+                    diagnostic_notes=[
+                        f"Reviewed candidate row ID {assoc_approval.reviewed_candidate_row_id} does not match live row ID {fresh_row.get('id')}"
+                    ],
+                ), request)
+            if not assoc_approval.reviewed_precondition_filename:
+                return self._enrich_result(MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.REVIEW_REQUIRED,
+                    operation=SyncOperation.CONFLICT,
+                    media_row_id=row_id,
+                    review_required=True,
+                    conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
+                    diagnostic_notes=[
+                        "Association approval missing reviewed_precondition_filename fingerprint"
+                    ],
+                ), request)
+            live_filename = str(fresh_row.get("Filename") or "").strip()
+            precond_filename = str(assoc_approval.reviewed_precondition_filename or "").strip()
+            if precond_filename != live_filename:
+                return self._enrich_result(MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.REVIEW_REQUIRED,
+                    operation=SyncOperation.CONFLICT,
+                    media_row_id=row_id,
+                    review_required=True,
+                    conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
+                    diagnostic_notes=[
+                        f"Association precondition filename '{precond_filename}' does not match live row Filename '{live_filename}'"
+                    ],
+                ), request)
 
         # Helper to extract normalized comparison value
         def _get_row_field_value(row: Optional[Dict[str, Any]], field_name: str) -> Any:
@@ -1650,4 +1812,3 @@ class MediaDatabaseUpdateEngine:
         plan.status = SyncStatus.FAILED_RETRYABLE
         plan.error_message = redact_secrets(f"Update timeout (transport uncertain): {error_message}")
         return plan
-

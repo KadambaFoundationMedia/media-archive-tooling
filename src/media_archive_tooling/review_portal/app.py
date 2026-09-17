@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..config import load_config
 from ..renamer.commit_service import RenameCommitService
+from ..renamer.models import RenameMode
 from ..renamer.registry.registry import LocalRegistry
 from ..renamer.service import RenamerApplicationService
 
@@ -53,7 +54,11 @@ def configure_review_context(
     _media_db_service = media_db_service
     _media_db_provider = media_db_provider
     _media_db_updater_service = media_db_updater_service or get_media_db_updater_service()
-    _commit_service = RenameCommitService(registry=registry, media_db_updater_service=_media_db_updater_service)
+    _commit_service = RenameCommitService(
+        registry=registry,
+        mode=RenameMode.FINALIZE,
+        media_db_updater_service=_media_db_updater_service,
+    )
     _review_root = Path(review_root).expanduser().resolve() if review_root else None
 
 
@@ -70,6 +75,7 @@ def get_commit_service() -> RenameCommitService:
     if _commit_service is None:
         _commit_service = RenameCommitService(
             registry=get_service().registry,
+            mode=RenameMode.FINALIZE,
             media_db_updater_service=get_media_db_updater_service(),
         )
     return _commit_service

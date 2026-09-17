@@ -141,7 +141,14 @@ class RenameCommitService:
         return self.registry.get_file(tracking_id)
 
     def _trigger_media_db_sync(self, tracking_id: str):
-        """Record durable sync outbox state and trigger automatic synchronization if configured."""
+        """Record durable sync outbox state and trigger automatic synchronization if configured.
+
+        Tool 4 is called only after the final filename is committed for the current
+        processing stage, not on RenameMode.INITIAL (amendment section 2).
+        """
+        if self.mode == RenameMode.INITIAL:
+            return
+
         try:
             self.registry.save_media_db_sync(
                 tracking_id=tracking_id,
@@ -153,4 +160,3 @@ class RenameCommitService:
         except Exception:
             # Filesystem commit must never be rolled back if Baserow sync fails
             pass
-

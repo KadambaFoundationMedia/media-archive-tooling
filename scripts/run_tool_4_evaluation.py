@@ -7,11 +7,16 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any, Dict, List
 
 from media_archive_tooling.adapters.baserow import BaserowReferenceProvider
 from media_archive_tooling.config import load_config
 from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+from media_archive_tooling.media_db_reviewer.models import (
+    MediaDatabaseReviewResult,
+    ReviewDecision,
+)
 from media_archive_tooling.media_db_reviewer.service import MediaDatabaseReviewService
 from media_archive_tooling.media_db_updater.models import (
     FieldAction,
@@ -21,7 +26,7 @@ from media_archive_tooling.media_db_updater.models import (
 from media_archive_tooling.media_db_updater.service import MediaDatabaseUpdaterService
 from media_archive_tooling.media_db_updater.write_adapter import BaserowWriteAdapter
 from media_archive_tooling.renamer.logging.logger import RenamerLogger
-from media_archive_tooling.renamer.models import RenameMode
+from media_archive_tooling.renamer.models import ParserResult, RenameMode
 from media_archive_tooling.renamer.planner.executor import BatchExecutor
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.renamer.service import RenamerApplicationService
@@ -29,6 +34,21 @@ from media_archive_tooling.travel_reviewer.reference_store import TravelReferenc
 from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
 
 logger = logging.getLogger(__name__)
+
+
+def make_portable(data: Any) -> Any:
+    """Sanitize machine-local paths into repository-relative portable paths (R-034)."""
+    if isinstance(data, str):
+        s = data.replace(str(Path.cwd()), ".")
+        s = re.sub(r"/Users/[^/]+/dev/media-archive-tooling/?", "./", s)
+        s = re.sub(r"/Users/[^/]+/dev/Media-renaming/?", "Media-renaming/", s)
+        s = re.sub(r"/Users/[^/]+/", "~/", s)
+        return s
+    elif isinstance(data, dict):
+        return {k: make_portable(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [make_portable(v) for v in data]
+    return data
 
 
 def run_evaluation():
@@ -82,8 +102,34 @@ def run_evaluation():
     for dec, c in sorted(t2_counts.items()):
         print(f"  {dec}: {c}")
 
-    t2_db_state = getattr(t2_provider, "state", "LIVE_CURRENT")
-    t2_read_timestamp = t2_results[0].baserow_read_at if t2_results and getattr(t2_results[0], "baserow_read_at", None) else ""
+    if not t2_results:
+        raise RuntimeError("Evaluation failed: Tool 2 returned 0 review results")
+
+    t2_states = set()
+    t2_timestamps = set()
+    for r in t2_results:
+        if not isinstance(r, MediaDatabaseReviewResult):
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} is not a MediaDatabaseReviewResult: {type(r)}")
+        if r.live_read_complete is not True:
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} has live_read_complete != True")
+        if r.snapshot_complete is not True:
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} has snapshot_complete != True")
+        if r.baserow_check_complete is not True:
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} has baserow_check_complete != True")
+        if r.database_state not in ("LIVE_CURRENT", "LIVE_COMPLETE"):
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} has non-live database_state: {r.database_state}")
+        read_ts = (r.baserow_read_at or r.database_snapshot_at or "").strip()
+        if not read_ts:
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} has missing live read timestamp")
+        if r.decision == ReviewDecision.DATABASE_UNAVAILABLE:
+            raise RuntimeError(f"Tool 2 result for {r.tracking_id} reported DATABASE_UNAVAILABLE")
+        t2_states.add(r.database_state)
+        t2_timestamps.add(read_ts)
+
+    if len(t2_states) != 1:
+        raise RuntimeError(f"Tool 2 database_state is inconsistent across batch: {t2_states}")
+    t2_db_state = list(t2_states)[0]
+    t2_read_timestamp = sorted(t2_timestamps)[-1]
 
     print("\n=== Step 3: Tool 3 Travel Schedule Review Context ===")
     # Tool 3 receives only local verified schedule artifact without Baserow provider (amendment section 1 & 5)
@@ -110,7 +156,27 @@ def run_evaluation():
         t3_results.append(t3_res)
     print(f"Evaluated {len(t3_results)} files through Tool 3")
 
-    print("\n=== Step 4: Tool 4 Media Database Synchronization Preview ===")
+    print("\n=== Step 4: Final Proposal Generation (RenameMode.FINALIZE) ===")
+    final_executor = BatchExecutor(
+        registry=eval_reg,
+        logger=renamer_logger,
+        provider=ref_provider,
+        mode=RenameMode.FINALIZE,
+    )
+    final_proposals = []
+    for p in proposals:
+        rec = eval_reg.get_file(p.tracking_id)
+        if rec and rec.get("parser_result"):
+            pr = ParserResult.model_validate(rec["parser_result"])
+            prop = final_executor.planner.plan_rename(pr)
+            eval_reg.save_proposal(prop)
+            final_proposals.append(prop)
+        else:
+            final_proposals.append(p)
+    proposals = final_proposals
+    print(f"Generated final proposals for {len(proposals)} files")
+
+    print("\n=== Step 5: Tool 4 Media Database Synchronization Preview ===")
     write_adapter = BaserowWriteAdapter(
         api_url=config.baserow_api_url,
         api_token=config.baserow_api_token,
@@ -316,7 +382,8 @@ def run_evaluation():
     }
 
     out_path = Path("docs/eval_summary_tool4.json")
-    out_path.write_text(json.dumps(eval_summary, indent=2), encoding="utf-8")
+    portable_summary = make_portable(eval_summary)
+    out_path.write_text(json.dumps(portable_summary, indent=2), encoding="utf-8")
     print(f"\nSaved evaluation evidence to {out_path}")
 
 

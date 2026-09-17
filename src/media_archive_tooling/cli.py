@@ -6,13 +6,16 @@ from typing import Optional, Any
 from pathlib import Path
 
 from .config import load_config
-from .renamer.models import RenameMode
+from .renamer.models import RenameMode, ParserResult
 from .renamer.registry.registry import LocalRegistry
 from .renamer.logging.logger import RenamerLogger
 from .renamer.planner.executor import BatchExecutor
+from .renamer.service import RenamerApplicationService
 from .adapters.baserow import BaserowReferenceProvider
 from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
 from .media_db_reviewer.service import MediaDatabaseReviewService
+from .travel_reviewer.reference_store import TravelReferenceStore
+from .travel_reviewer.service import TravelScheduleReviewService
 from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
 
 
@@ -69,17 +72,83 @@ def run_renamer(args):
         config=config,
     )
 
-    executor = BatchExecutor(
-        registry=registry,
-        logger=logger,
-        provider=provider,
-        mode=mode,
-        media_db_updater_service=updater_service,
-    )
+    if mode == RenameMode.FINALIZE:
+        # Full authoritative pipeline (amendment section 2):
+        # 1. Tool 1 Initial Scan
+        # 2. Tool 2 Live Read-Only Query / Candidate Check & Enrichment
+        # 3. Tool 3 Offline Travel Schedule Corroboration
+        # 4. Tool 1 Final Proposal Generation
+        # 5. Commit (if requested) -> Tool 4 Sync
+        print(f"=== Step 1: Initial Scan & Parse: {target_path} ===")
+        init_executor = BatchExecutor(
+            registry=registry,
+            logger=logger,
+            provider=provider,
+            mode=RenameMode.INITIAL,
+            media_db_updater_service=updater_service,
+        )
+        proposals = init_executor.scan_directory(target_path)
+        print(f"Discovered and analyzed {len(proposals)} media files.")
 
-    print(f"=== Scanning Directory: {target_path} (Mode: {mode.value}) ===")
-    proposals = executor.scan_directory(target_path)
-    print(f"Discovered and analyzed {len(proposals)} media files.")
+        print("=== Step 2: Tool 2 Media Database Candidate Review & Enrichment ===")
+        t2_results = []
+        if updater_service.tool2_service is not None:
+            try:
+                t2_results = updater_service.tool2_service.review_batch(force_refresh=False, auto_enrich=True)
+                print(f"Reviewed {len(t2_results)} files through Tool 2.")
+            except Exception as e:
+                print(f"Warning: Tool 2 review encountered error: {e}")
+
+        t2_by_id = {r.tracking_id: r for r in t2_results}
+
+        print("=== Step 3: Tool 3 Travel Schedule Corroboration ===")
+        ref_store = TravelReferenceStore(reference_path=Path(".renamer/reference/travel_schedule.json"), provider=None)
+        if ref_store.reference_path.exists():
+            t3_renamer = RenamerApplicationService(registry=registry)
+            t3_service = TravelScheduleReviewService(
+                registry=registry,
+                reference_store=ref_store,
+                renamer_service=t3_renamer,
+            )
+            for p in proposals:
+                t2_ctx = t2_by_id.get(p.tracking_id)
+                try:
+                    t3_service.review_file(p.tracking_id, tool2_context=t2_ctx, auto_enrich=True)
+                except Exception as e:
+                    logger.warning(f"Tool 3 review failed for {p.tracking_id}: {e}")
+            print("Completed Tool 3 schedule corroboration.")
+
+        print("=== Step 4: Final Proposal Generation ===")
+        final_executor = BatchExecutor(
+            registry=registry,
+            logger=logger,
+            provider=provider,
+            mode=RenameMode.FINALIZE,
+            media_db_updater_service=updater_service,
+        )
+        final_proposals = []
+        for p in proposals:
+            rec = registry.get_file(p.tracking_id)
+            if rec and rec.get("parser_result"):
+                pr = ParserResult.model_validate(rec["parser_result"])
+                prop = final_executor.planner.plan_rename(pr)
+                registry.save_proposal(prop)
+                final_proposals.append(prop)
+            else:
+                final_proposals.append(p)
+        proposals = final_proposals
+        executor = final_executor
+    else:
+        executor = BatchExecutor(
+            registry=registry,
+            logger=logger,
+            provider=provider,
+            mode=mode,
+            media_db_updater_service=updater_service,
+        )
+        print(f"=== Scanning Directory: {target_path} (Mode: {mode.value}) ===")
+        proposals = executor.scan_directory(target_path)
+        print(f"Discovered and analyzed {len(proposals)} media files.")
 
     review_needed = sum(1 for p in proposals if p.needs_review)
     collisions = sum(1 for p in proposals if p.is_collision)

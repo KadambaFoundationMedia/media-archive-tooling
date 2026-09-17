@@ -33,6 +33,10 @@ from media_archive_tooling.renamer.planner.executor import BatchExecutor
 from media_archive_tooling.renamer.logging.logger import RenamerLogger
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+from media_archive_tooling.media_db_reviewer.models import (
+    MediaDatabaseReviewResult,
+    ReviewDecision,
+)
 from media_archive_tooling.media_db_reviewer.service import MediaDatabaseReviewService
 from media_archive_tooling.travel_reviewer.models import (
     NormalizedTravelRow,
@@ -59,24 +63,32 @@ def make_mock_tool2(
     snapshot_complete: bool = True,
     baserow_check_complete: bool = True,
     database_state: str = "LIVE_CURRENT",
+    tracking_id: Optional[str] = None,
 ):
     mock_t2 = MagicMock()
-    mock_res = MagicMock()
-    mock_res.decision = decision
-    mock_res.selected_media_row_id = row_id
-    mock_res.live_read_complete = live_read_complete
-    mock_res.snapshot_complete = snapshot_complete
-    mock_res.baserow_check_complete = baserow_check_complete
-    mock_res.database_state = database_state
-    mock_res.model_dump.return_value = {
-        "decision": decision,
-        "selected_media_row_id": row_id,
-        "live_read_complete": live_read_complete,
-        "snapshot_complete": snapshot_complete,
-        "baserow_check_complete": baserow_check_complete,
-        "database_state": database_state,
-    }
-    mock_t2.review_file.return_value = mock_res
+
+    def _review_file(tid: str, force_refresh: bool = False):
+        dec_enum = None
+        for d in ReviewDecision:
+            if d.value == decision:
+                dec_enum = d
+                break
+        if dec_enum is None:
+            dec_enum = ReviewDecision.DATABASE_UNAVAILABLE
+        return MediaDatabaseReviewResult(
+            tracking_id=tracking_id or tid,
+            decision=dec_enum,
+            selected_media_row_id=row_id,
+            live_read_complete=live_read_complete,
+            snapshot_complete=snapshot_complete,
+            baserow_check_complete=baserow_check_complete,
+            database_state=database_state,
+            baserow_read_at="2026-09-17T12:00:00Z",
+            database_snapshot_at="2026-09-17T12:00:00Z",
+        )
+
+    mock_t2.review_file.side_effect = _review_file
+    mock_t2.review_file.return_value = _review_file(tracking_id or "default")
     return mock_t2
 
 

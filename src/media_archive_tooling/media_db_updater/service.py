@@ -50,22 +50,28 @@ class MediaDatabaseUpdaterService:
         self.renamer_service = renamer_service
         self.engine = MediaDatabaseUpdateEngine(write_adapter=write_adapter, tool2_service=tool2_service)
 
-    def build_sync_request(self, tracking_id: str) -> Optional[MediaDbSyncRequest]:
+    def build_sync_request(self, tracking_id: str, force_refresh: bool = False) -> Optional[MediaDbSyncRequest]:
         """Construct a structured MediaDbSyncRequest from local registry state."""
         file_rec = self.registry.get_file(tracking_id)
         if not file_rec:
             return None
 
-        # Fetch Tool 2 review
-        t2_rec = self.registry.get_media_db_review(tracking_id)
-        if not t2_rec and self.tool2_service:
+        # Fetch Tool 2 review (R-031: force fresh live review on commit or retry)
+        t2_rec = None
+        if not force_refresh:
+            t2_rec = self.registry.get_media_db_review(tracking_id)
+
+        if (t2_rec is None or force_refresh) and self.tool2_service:
             try:
-                t2_res = self.tool2_service.review_file(tracking_id)
+                t2_res = self.tool2_service.review_file(tracking_id, force_refresh=force_refresh)
                 if t2_res:
+                    dec_val = t2_res.decision.value if hasattr(t2_res.decision, "value") else str(t2_res.decision)
                     t2_rec = {
-                        "decision": t2_res.decision,
+                        "decision": dec_val,
                         "selected_media_row_id": t2_res.selected_media_row_id,
-                        "result": t2_res.model_dump(),
+                        "database_state": t2_res.database_state,
+                        "snapshot_timestamp": t2_res.database_snapshot_at,
+                        "result": t2_res.model_dump() if hasattr(t2_res, "model_dump") else t2_res,
                     }
             except Exception as e:
                 logger.warning(f"Failed to fetch Tool 2 review for {tracking_id}: {e}")
@@ -270,7 +276,7 @@ class MediaDatabaseUpdaterService:
         request: Optional[MediaDbSyncRequest] = None,
     ) -> MediaDbSyncResult:
         """Synchronize a local file state with Baserow Media database."""
-        req = request or self.build_sync_request(tracking_id)
+        req = request or self.build_sync_request(tracking_id, force_refresh=commit)
         if not req:
             res = MediaDbSyncResult(
                 tracking_id=tracking_id,
@@ -327,8 +333,8 @@ class MediaDatabaseUpdaterService:
             tids = [p["tracking_id"] for p in pending]
 
         for tid in tids:
-            # Rebuild fresh request from latest state
-            req = self.build_sync_request(tid)
+            # Rebuild fresh request from latest live state (R-031)
+            req = self.build_sync_request(tid, force_refresh=True)
             if req:
                 res = self.synchronize(tid, commit=True, request=req)
                 results.append(res)

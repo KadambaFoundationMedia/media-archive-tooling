@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from media_archive_tooling.media_db_reviewer.models import MediaDatabaseReviewResult, ReviewDecision
 from media_archive_tooling.media_db_updater.models import (
     FieldAction,
     FieldDiff,
@@ -63,24 +64,31 @@ def make_mock_tool2(
     snapshot_complete: bool = True,
     baserow_check_complete: bool = True,
     database_state: str = "LIVE_CURRENT",
+    tracking_id: Optional[str] = None,
 ):
     mock_t2 = MagicMock()
-    mock_res = MagicMock()
-    mock_res.decision = decision
-    mock_res.selected_media_row_id = row_id
-    mock_res.live_read_complete = live_read_complete
-    mock_res.snapshot_complete = snapshot_complete
-    mock_res.baserow_check_complete = baserow_check_complete
-    mock_res.database_state = database_state
-    mock_res.model_dump.return_value = {
-        "decision": decision,
-        "selected_media_row_id": row_id,
-        "live_read_complete": live_read_complete,
-        "snapshot_complete": snapshot_complete,
-        "baserow_check_complete": baserow_check_complete,
-        "database_state": database_state,
-    }
-    mock_t2.review_file.return_value = mock_res
+
+    def _review_file(tid: str, force_refresh: bool = False):
+        dec_enum = None
+        for d in ReviewDecision:
+            if d.value == decision:
+                dec_enum = d
+                break
+        if dec_enum is None:
+            dec_enum = ReviewDecision.DATABASE_UNAVAILABLE
+        return MediaDatabaseReviewResult(
+            tracking_id=tracking_id or tid,
+            decision=dec_enum,
+            selected_media_row_id=row_id,
+            live_read_complete=live_read_complete,
+            snapshot_complete=snapshot_complete,
+            baserow_check_complete=baserow_check_complete,
+            database_state=database_state,
+            baserow_read_at="2026-09-17T12:00:00Z",
+            database_snapshot_at="2026-09-17T12:00:00Z",
+        )
+
+    mock_t2.review_file.side_effect = _review_file
     return mock_t2
 
 
@@ -497,10 +505,17 @@ def test_10_collaborator_created_matching_row_before_create_prevents_duplicate(t
 
     # Tool 2 mock that detects new row on pre-create revalidation
     mock_t2 = MagicMock()
-    # Initially NEW_MEDIA_CANDIDATE, then during pre-create fresh check returns EXISTING_MEDIA_MATCH
-    mock_res = MagicMock()
-    mock_res.decision = "EXISTING_MEDIA_MATCH"
-    mock_res.selected_media_row_id = 999
+    mock_res = MediaDatabaseReviewResult(
+        tracking_id="trk0010",
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=999,
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-17T12:00:00Z",
+        database_snapshot_at="2026-09-17T12:00:00Z",
+    )
     mock_t2.review_file.return_value = mock_res
 
     service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
@@ -588,9 +603,39 @@ def test_14_timeout_uncertain_create_outcome_is_reconciled(tmp_path):
     fake_db.simulate_timeout_on_create = True
 
     mock_t2 = MagicMock()
-    rev_cand1 = MagicMock(decision="NEW_MEDIA_CANDIDATE", selected_media_row_id=None, review_reasons=[], live_read_complete=True, snapshot_complete=True, baserow_check_complete=True, database_state="LIVE_CURRENT")
-    rev_cand2 = MagicMock(decision="NEW_MEDIA_CANDIDATE", selected_media_row_id=None, review_reasons=[], live_read_complete=True, snapshot_complete=True, baserow_check_complete=True, database_state="LIVE_CURRENT")
-    rev_after = MagicMock(decision="EXISTING_MEDIA_MATCH", selected_media_row_id=1001, review_reasons=[], live_read_complete=True, snapshot_complete=True, baserow_check_complete=True, database_state="LIVE_CURRENT")
+    rev_cand1 = MediaDatabaseReviewResult(
+        tracking_id="trk0014",
+        decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+        selected_media_row_id=None,
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-17T12:00:00Z",
+        database_snapshot_at="2026-09-17T12:00:00Z",
+    )
+    rev_cand2 = MediaDatabaseReviewResult(
+        tracking_id="trk0014",
+        decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+        selected_media_row_id=None,
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-17T12:00:00Z",
+        database_snapshot_at="2026-09-17T12:00:00Z",
+    )
+    rev_after = MediaDatabaseReviewResult(
+        tracking_id="trk0014",
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        selected_media_row_id=1001,
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-17T12:00:00Z",
+        database_snapshot_at="2026-09-17T12:00:00Z",
+    )
     mock_t2.review_file.side_effect = [rev_cand1, rev_cand2, rev_after]
 
     service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
@@ -1110,13 +1155,17 @@ def test_41_tool_1_successful_commit_initiates_tool_4_sync(tmp_path):
         current_filename="orig.mp3",
         proposed_filename=target_filename,
         proposed_path=str(target_file),
-        mode=RenameMode.INITIAL,
+        mode=RenameMode.FINALIZE,
         status="approved",
         parser_result=make_parser_result(tracking_id="trk0041", orig_filename="orig.mp3"),
     ))
 
     mock_updater = MagicMock()
-    commit_svc = RenameCommitService(registry, media_db_updater_service=mock_updater)
+    commit_svc = RenameCommitService(
+        registry,
+        mode=RenameMode.FINALIZE,
+        media_db_updater_service=mock_updater,
+    )
 
     commit_svc.commit_file("trk0041")
     assert mock_updater.synchronize.called
@@ -1142,7 +1191,7 @@ def test_42_tool_1_mere_approval_dry_run_does_not_write_baserow(tmp_path):
 def test_43_tool_4_failure_after_rename_leaves_pending_sync_without_revert(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     src_file = tmp_path / "source.mp3"
-    target_filename = "target_ID-trk0043.mp3"
+    target_filename = "2014-08-04_KKS_BG-01-18_Leipzig-de.mp3"
     target_file = tmp_path / target_filename
     src_file.write_text("content")
 
@@ -1153,14 +1202,18 @@ def test_43_tool_4_failure_after_rename_leaves_pending_sync_without_revert(tmp_p
         current_filename="source.mp3",
         proposed_filename=target_filename,
         proposed_path=str(target_file),
-        mode=RenameMode.INITIAL,
+        mode=RenameMode.FINALIZE,
         status="approved",
         parser_result=make_parser_result(tracking_id="trk0043", orig_filename="source.mp3"),
     ))
 
     mock_updater = MagicMock()
     mock_updater.synchronize.side_effect = BaserowUnavailableError("Network cut")
-    commit_svc = RenameCommitService(registry, media_db_updater_service=mock_updater)
+    commit_svc = RenameCommitService(
+        registry,
+        mode=RenameMode.FINALIZE,
+        media_db_updater_service=mock_updater,
+    )
 
     # Commit succeeds on disk despite updater failure!
     commit_svc.commit_file("trk0043")
@@ -1941,6 +1994,7 @@ def test_66_r024_valid_association_approval_succeeds(tmp_path):
     req.association_approval = {
         "selected_media_row_id": 7,
         "reviewed_candidate_row_id": 7,
+        "reviewed_precondition_filename": "old.mp3",
         "has_reviewed_precondition": True,
         "action": "choose_association",
         "reviewer": "human_reviewer",
@@ -2219,3 +2273,279 @@ def test_69_q001_media_archive_link_policy(tmp_path):
     }
     res_u_mod = service.preview("trk0069_u", request=req_u)
     assert any("Media Archive link modification is unsupported" in c for c in res_u_mod.conflicts)
+
+
+# ---------------------------------------------------------------------------
+# Test 70: Stored match changes to blocking decisions or different row ID (R-031)
+# ---------------------------------------------------------------------------
+def test_70_stored_match_changes_to_blocking_decisions_or_different_row_id(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[
+        {"id": 500, "Filename": "2014-08-04_kks.mp3"},
+        {"id": 501, "Filename": "other.mp3"},
+    ])
+    save_test_file(registry, tracking_id="trk0070")
+
+    # 1. Fresh Tool 2 returns MULTIPLE_CANDIDATES -> blocked
+    mock_t2_multi = make_mock_tool2(decision="MULTIPLE_CANDIDATES", row_id=None, tracking_id="trk0070")
+    svc_multi = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_multi)
+    req_multi = svc_multi.build_sync_request("trk0070")
+    req_multi.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_multi.selected_media_row_id = 500
+    res_multi = svc_multi.synchronize("trk0070", commit=True, request=req_multi)
+    assert res_multi.status == SyncStatus.REVIEW_REQUIRED
+    assert res_multi.operation == SyncOperation.CONFLICT
+    assert any("TOOL2_DECISION_CHANGED" in c for c in res_multi.conflicts)
+
+    # 2. Fresh Tool 2 returns CONFLICT_WITH_EXISTING -> blocked
+    mock_t2_conf = make_mock_tool2(decision="CONFLICT_WITH_EXISTING", row_id=500, tracking_id="trk0070")
+    svc_conf = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_conf)
+    req_conf = svc_conf.build_sync_request("trk0070")
+    req_conf.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_conf.selected_media_row_id = 500
+    res_conf = svc_conf.synchronize("trk0070", commit=True, request=req_conf)
+    assert res_conf.status == SyncStatus.REVIEW_REQUIRED
+    assert any("TOOL2_DECISION_CHANGED" in c for c in res_conf.conflicts)
+
+    # 3. Fresh Tool 2 returns INSUFFICIENT_EVIDENCE -> blocked
+    mock_t2_insuff = make_mock_tool2(decision="INSUFFICIENT_EVIDENCE", row_id=None, tracking_id="trk0070")
+    svc_insuff = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_insuff)
+    req_insuff = svc_insuff.build_sync_request("trk0070")
+    req_insuff.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_insuff.selected_media_row_id = 500
+    res_insuff = svc_insuff.synchronize("trk0070", commit=True, request=req_insuff)
+    assert res_insuff.status == SyncStatus.REVIEW_REQUIRED
+    assert any("TOOL2_DECISION_CHANGED" in c for c in res_insuff.conflicts)
+
+    # 4. Fresh Tool 2 returns DATABASE_UNAVAILABLE -> database unavailable
+    mock_t2_unavail = make_mock_tool2(decision="DATABASE_UNAVAILABLE", row_id=500, database_state="DATABASE_UNAVAILABLE", tracking_id="trk0070")
+    svc_unavail = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_unavail)
+    req_unavail = svc_unavail.build_sync_request("trk0070")
+    req_unavail.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_unavail.selected_media_row_id = 500
+    res_unavail = svc_unavail.synchronize("trk0070", commit=True, request=req_unavail)
+    assert res_unavail.status == SyncStatus.DATABASE_UNAVAILABLE
+
+    # 5. Fresh Tool 2 returns DIFFERENT selected row ID -> blocked
+    mock_t2_diff_row = make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=501, tracking_id="trk0070")
+    svc_diff = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_diff_row)
+    req_diff = svc_diff.build_sync_request("trk0070")
+    req_diff.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_diff.selected_media_row_id = 500
+    res_diff = svc_diff.synchronize("trk0070", commit=True, request=req_diff)
+    assert res_diff.status == SyncStatus.REVIEW_REQUIRED
+    assert any("TOOL2_SELECTED_ROW_CHANGED" in c for c in res_diff.conflicts)
+
+    # 6. Fresh Tool 2 confirms SAME row ID 500 -> update succeeds
+    mock_t2_ok = make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=500, tracking_id="trk0070")
+    svc_ok = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_ok)
+    req_ok = svc_ok.build_sync_request("trk0070")
+    req_ok.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_ok.selected_media_row_id = 500
+    res_ok = svc_ok.synchronize("trk0070", commit=True, request=req_ok)
+    assert res_ok.status == SyncStatus.SYNCED
+    assert res_ok.operation == SyncOperation.UPDATE
+
+
+# ---------------------------------------------------------------------------
+# Test 71: retry_pending uses fresh Tool 2 gate (R-031)
+# ---------------------------------------------------------------------------
+def test_71_retry_pending_uses_fresh_tool2_gate(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[
+        {"id": 550, "Filename": "2014-08-04_kks.mp3"},
+    ])
+    save_test_file(registry, tracking_id="trk0071")
+
+    # Stored sync record in pending state with old match decision
+    registry.save_media_db_sync(
+        tracking_id="trk0071",
+        sync_status="PENDING_SYNC",
+        attempt_count=1,
+    )
+
+    # Live Tool 2 fresh review now reports CONFLICT_WITH_EXISTING
+    mock_t2_fresh = make_mock_tool2(decision="CONFLICT_WITH_EXISTING", row_id=550, tracking_id="trk0071")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_fresh)
+
+    results = service.retry_pending(["trk0071"])
+    assert len(results) == 1
+    res = results[0]
+    # Fresh check must block the update rather than relying on stale cached review
+    assert res.status == SyncStatus.REVIEW_REQUIRED
+    assert res.operation == SyncOperation.BLOCKED
+
+
+# ---------------------------------------------------------------------------
+# Test 72: RenameCommitService never calls Tool 4 on INITIAL mode (R-032)
+# ---------------------------------------------------------------------------
+def test_72_rename_commit_service_never_calls_tool4_on_initial_mode(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    f = media_dir / "test.mp3"
+    f.write_text("data")
+
+    save_test_file(registry, tracking_id="trk0072", original_path=str(f), current_path=str(f), status="approved")
+    registry.save_proposal(RenameProposal(
+        tracking_id="trk0072",
+        original_path=str(f),
+        current_filename="test.mp3",
+        proposed_filename="renamed_test_ID-trk0072.mp3",
+        proposed_path=str(media_dir / "renamed_test_ID-trk0072.mp3"),
+        mode=RenameMode.INITIAL,
+        status="approved",
+        parser_result=make_parser_result(tracking_id="trk0072", orig_filename="test.mp3"),
+    ))
+
+    mock_updater = MagicMock()
+
+    # Case A: RenameMode.INITIAL must NOT trigger Tool 4
+    svc_init = RenameCommitService(registry, mode=RenameMode.INITIAL, media_db_updater_service=mock_updater)
+    svc_init.commit_file("trk0072")
+    assert mock_updater.synchronize.call_count == 0
+    assert registry.get_media_db_sync("trk0072") is None
+
+    # Case B: RenameMode.FINALIZE DOES trigger Tool 4
+    f_fin = media_dir / "test_fin.mp3"
+    f_fin.write_text("data")
+    save_test_file(registry, tracking_id="trk0072_fin", original_path=str(f_fin), current_path=str(f_fin), status="approved")
+    registry.save_proposal(RenameProposal(
+        tracking_id="trk0072_fin",
+        original_path=str(f_fin),
+        current_filename="test_fin.mp3",
+        proposed_filename="renamed_fin.mp3",
+        proposed_path=str(media_dir / "renamed_fin.mp3"),
+        mode=RenameMode.FINALIZE,
+        status="approved",
+        parser_result=make_parser_result(tracking_id="trk0072_fin", orig_filename="test_fin.mp3"),
+    ))
+    svc_fin = RenameCommitService(registry, mode=RenameMode.FINALIZE, media_db_updater_service=mock_updater)
+    svc_fin.commit_file("trk0072_fin")
+    assert mock_updater.synchronize.call_count == 1
+    assert registry.get_media_db_sync("trk0072_fin") is not None
+
+
+# ---------------------------------------------------------------------------
+# Test 73: CLI run_renamer production pipeline orchestration (R-032)
+# ---------------------------------------------------------------------------
+def test_73_cli_run_renamer_production_pipeline_orchestration(tmp_path):
+    from media_archive_tooling.cli import run_renamer
+
+    registry_path = tmp_path / "cli.db"
+    media_dir = tmp_path / "media_cli"
+    media_dir.mkdir()
+    f1 = media_dir / "2014-08-04_sample.mp3"
+    f1.write_text("data")
+
+    class Args:
+        pass
+
+    args = Args()
+    args.target = str(media_dir)
+    args.mode = "initial"
+    args.commit = False
+    args.registry_path = str(registry_path)
+    args.log_dir = str(tmp_path / "logs")
+
+    # Initial mode scan runs without error and leaves zero Tool 4 sync records
+    run_renamer(args)
+    reg = LocalRegistry(registry_path)
+    assert len(reg.list_files()) == 1
+    assert len(reg.list_pending_media_db_syncs()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 74: Tool 2 contract validation rejects non-models and missing timestamps (R-033)
+# ---------------------------------------------------------------------------
+def test_74_tool2_contract_validation_rejects_non_models_and_missing_timestamps(tmp_path):
+    from media_archive_tooling.media_db_updater.engine import validate_tool2_review_result
+
+    # 1. Arbitrary non-model object without contract -> rejected
+    class FakeBag:
+        tracking_id = "trk0074"
+        decision = "NEW_MEDIA_CANDIDATE"
+        live_read_complete = True
+        snapshot_complete = True
+        baserow_check_complete = True
+        database_state = "LIVE_CURRENT"
+
+    res, err = validate_tool2_review_result(FakeBag(), "trk0074")
+    assert res is None
+    assert "not MediaDatabaseReviewResult" in err
+
+    # 2. Missing/empty live read timestamp -> rejected
+    real_res_no_ts = MediaDatabaseReviewResult(
+        tracking_id="trk0074",
+        decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="",
+        database_snapshot_at="",
+    )
+    res_ts, err_ts = validate_tool2_review_result(real_res_no_ts, "trk0074")
+    assert res_ts is None
+    assert "live-read timestamp is missing" in err_ts
+
+    # 3. Valid model with timestamp -> accepted
+    real_res_ok = MediaDatabaseReviewResult(
+        tracking_id="trk0074",
+        decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+        baserow_read_at="2026-09-17T12:00:00Z",
+    )
+    res_ok, err_ok = validate_tool2_review_result(real_res_ok, "trk0074")
+    assert res_ok is not None
+    assert err_ok is None
+
+
+# ---------------------------------------------------------------------------
+# Test 75: Association approval precondition filename validation (R-033)
+# ---------------------------------------------------------------------------
+def test_75_association_approval_precondition_filename_validation(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[
+        {"id": 600, "Filename": "expected_file.mp3"},
+    ])
+    save_test_file(registry, tracking_id="trk0075")
+
+    mock_t2 = make_mock_tool2(decision="CONFLICT_WITH_EXISTING", row_id=600, tracking_id="trk0075")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    # 1. Missing reviewed_precondition_filename -> blocked
+    res_missing = service.apply_association_approval(
+        tracking_id="trk0075",
+        selected_media_row_id=600,
+        reviewed_candidate_row_id=600,
+        reviewed_precondition_filename=None,
+        commit=False,
+    )
+    assert res_missing.status == SyncStatus.REVIEW_REQUIRED
+    assert any("ASSOCIATION_PRECONDITION_FAILED" in c for c in res_missing.conflicts)
+
+    # 2. Mismatched reviewed_precondition_filename -> blocked
+    res_mismatch = service.apply_association_approval(
+        tracking_id="trk0075",
+        selected_media_row_id=600,
+        reviewed_candidate_row_id=600,
+        reviewed_precondition_filename="different_file.mp3",
+        commit=False,
+    )
+    assert res_mismatch.status == SyncStatus.REVIEW_REQUIRED
+    assert any("ASSOCIATION_PRECONDITION_FAILED" in c for c in res_mismatch.conflicts)
+
+    # 3. Matching reviewed_precondition_filename -> allowed
+    res_match = service.apply_association_approval(
+        tracking_id="trk0075",
+        selected_media_row_id=600,
+        reviewed_candidate_row_id=600,
+        reviewed_precondition_filename="expected_file.mp3",
+        commit=True,
+    )
+    assert res_match.status == SyncStatus.SYNCED
+    assert res_match.operation == SyncOperation.UPDATE
