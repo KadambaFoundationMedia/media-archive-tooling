@@ -10,7 +10,7 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `ACCEPTED`
 
 Implementation branch: `tool-4-implementation`
 Builder implementation commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
@@ -22,6 +22,9 @@ Last planning/review update: 2026-09-17
 
 Latest independently reviewed PR head: `fd55ea6080e4d9f2bd579dcb8e9afceb3bd7b949`
 Exact-head required CI: PASS (Run 35252570279: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252570279)
+
+Final accepted PR head: `f589a55d0db2a15afb3fabbf69199459c2a35a1f`
+Final exact-head CI: PASS (Run 35256216391: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35256216391)
 
 ## Third independent review checkpoint
 
@@ -639,3 +642,7 @@ Verification:
 - Package build: `uv build --offline` PASS.
 - Shell scripts: `sh -n` PASS.
 - `git diff --check origin/main` PASS.
+
+## Final planning/review acceptance
+
+R-040 was independently reviewed at `f589a55d0db2a15afb3fabbf69199459c2a35a1f`. The focused failure/success regressions passed locally (**5 passed**), helper syntax passed, the working tree was clean, and the exact-head required GitHub Actions check passed. All Tool 4 findings R-001 through R-040 are resolved or explicitly withdrawn. Tool 4 is accepted for merge and practical single-file testing.
