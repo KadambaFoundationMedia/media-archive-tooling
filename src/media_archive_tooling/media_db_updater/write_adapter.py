@@ -53,13 +53,23 @@ ALLOWED_SELECT_CREATION_FIELDS = {
 SECRET_PATTERNS = [
     re.compile(r"(Token\s+)[A-Za-z0-9_\-\.]+", re.IGNORECASE),
     re.compile(r"(Bearer\s+)[A-Za-z0-9_\-\.]+", re.IGNORECASE),
-    re.compile(r"((?:password|api[_-]?token|api[_-]?key|secret)\s*[:=]\s*)[^\s&\"']+", re.IGNORECASE),
+    re.compile(r"((?:password|api[_-]?token|api[_-]?key|secret|access[_-]?token|auth[_-]?token)\s*[:=]\s*)[^\s&\"',;]+", re.IGNORECASE),
+    re.compile(r"([?&](?:key|api_key|token|access_token|password|secret)=)[^&\s\"']+", re.IGNORECASE),
 ]
 
 
 def redact_secrets(val: Any) -> Any:
-    """Redact API tokens, bearer tokens, or secrets from strings or recursive structures."""
+    """Redact API tokens, bearer tokens, or secrets from strings, JSON, or recursive structures."""
     if isinstance(val, str):
+        # Check if the string is serialized JSON
+        clean_s = val.strip()
+        if (clean_s.startswith("{") and clean_s.endswith("}")) or (clean_s.startswith("[") and clean_s.endswith("]")):
+            try:
+                parsed = json.loads(clean_s)
+                redacted_parsed = redact_secrets(parsed)
+                return json.dumps(redacted_parsed)
+            except Exception:
+                pass
         res = val
         for pat in SECRET_PATTERNS:
             res = pat.sub(r"\1[REDACTED]", res)
@@ -76,7 +86,7 @@ def _normalize_option_text(text: str) -> str:
     return to_ascii_latin(text).strip().lower()
 
 
-def validate_field_schema(field_name: str, value: Any, live_field: Dict[str, Any]) -> None:
+def validate_field_schema(field_name: str, value: Any, live_field: Dict[str, Any], allow_new_options: bool = False) -> None:
     """Validate that value is compatible with the live field definition in Baserow.
     Raises BaserowSchemaError on incompatible types or unpermitted values.
     """
@@ -84,6 +94,9 @@ def validate_field_schema(field_name: str, value: Any, live_field: Dict[str, Any
         return
 
     f_type = live_field.get("type", "text")
+    norm_fname = _normalize_option_text(field_name)
+    can_create_option = allow_new_options or (norm_fname in ALLOWED_SELECT_CREATION_FIELDS)
+
     if f_type in ("text", "long_text", "url"):
         if not isinstance(value, str):
             raise BaserowSchemaError(f"Field '{field_name}' expects string type, got {type(value).__name__}")
@@ -99,17 +112,45 @@ def validate_field_schema(field_name: str, value: Any, live_field: Dict[str, Any
             raise BaserowSchemaError(f"Field '{field_name}' expects single_select option string, got {type(value).__name__}")
         valid_opts = {_normalize_option_text(opt.get("value", "")) for opt in live_field.get("select_options", [])}
         if _normalize_option_text(value) not in valid_opts:
-            raise BaserowSchemaError(f"Field '{field_name}' value '{value}' is not among live select options")
+            if not can_create_option:
+                raise BaserowSchemaError(f"Field '{field_name}' value '{value}' is not among live select options")
+            if norm_fname == "country":
+                from .country_mapper import is_valid_country_display_name
+                if not is_valid_country_display_name(value):
+                    raise BaserowSchemaError(f"Field '{field_name}' value '{value}' is not an authoritative country display name")
     elif f_type == "multiple_select":
         if not isinstance(value, list):
             raise BaserowSchemaError(f"Field '{field_name}' expects list for multiple_select, got {type(value).__name__}")
         valid_opts = {_normalize_option_text(opt.get("value", "")) for opt in live_field.get("select_options", [])}
         for item in value:
-            if not isinstance(item, str) or _normalize_option_text(item) not in valid_opts:
-                raise BaserowSchemaError(f"Field '{field_name}' contains option '{item}' not in live select options")
+            if not isinstance(item, str):
+                raise BaserowSchemaError(f"Field '{field_name}' items must be strings, got {type(item).__name__}")
+            if _normalize_option_text(item) not in valid_opts:
+                if not can_create_option:
+                    raise BaserowSchemaError(f"Field '{field_name}' contains option '{item}' not in live select options")
     elif f_type == "file":
         if not isinstance(value, list):
             raise BaserowSchemaError(f"Field '{field_name}' is a file field and cannot be assigned a raw scalar")
+    else:
+        # Incompatible or unsupported live column type (e.g. number, boolean, formula)
+        raise BaserowSchemaError(f"Field '{field_name}' has unsupported or incompatible live type '{f_type}'")
+
+
+def index_fields_by_name(live_fields: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Index fields by normalized lowercase name.
+    Raises BaserowSchemaError if duplicate or ambiguous column names exist in schema after normalization.
+    """
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for f in live_fields:
+        raw_name = f.get("name", "")
+        norm_name = raw_name.strip().lower()
+        if norm_name in indexed:
+            existing_raw = indexed[norm_name].get("name", "")
+            raise BaserowSchemaError(
+                f"Duplicate or ambiguous field name in live schema: '{raw_name}' conflicts with '{existing_raw}'"
+            )
+        indexed[norm_name] = f
+    return indexed
 
 
 

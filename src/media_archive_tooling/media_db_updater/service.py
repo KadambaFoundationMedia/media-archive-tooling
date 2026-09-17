@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..renamer.registry.registry import LocalRegistry
-from .country_mapper import get_country_name_for_iso, normalize_country_name
+from .country_mapper import get_country_name_for_iso, normalize_country_name, is_valid_country_display_name
 from .engine import MediaDatabaseUpdateEngine
 from .models import (
     MediaDbSyncRequest,
@@ -76,15 +76,20 @@ class MediaDatabaseUpdaterService:
         where_data = parser_res.get("where") or {}
         context_data = parser_res.get("context") or {}
 
-        # Resolve country ISO vs Country Name (R-005)
+        # Resolve country ISO vs Country Name (R-005, R-020)
+        # Never treat an unknown two-letter code as a country display name
         raw_country = where_data.get("country")
         raw_iso = where_data.get("country_iso2") or file_rec.get("where_val")
         country_name = None
         if raw_country:
-            country_name = str(raw_country).strip()
+            clean_c = str(raw_country).strip()
+            if len(clean_c) == 2:
+                country_name = get_country_name_for_iso(clean_c)
+            elif is_valid_country_display_name(clean_c) or len(clean_c) > 2:
+                country_name = clean_c
         elif raw_iso:
-            iso_name = get_country_name_for_iso(str(raw_iso).strip())
-            country_name = iso_name if iso_name else str(raw_iso).strip()
+            clean_iso = str(raw_iso).strip()
+            country_name = get_country_name_for_iso(clean_iso)
 
         # Parent folder context
         parent_ctx = context_data.get("parent_folder") or Path(file_rec["current_path"]).parent.name
@@ -92,13 +97,35 @@ class MediaDatabaseUpdaterService:
         t2_decision = t2_rec.get("decision") if t2_rec else None
         selected_row_id = t2_rec.get("selected_media_row_id") if t2_rec else None
 
+        current_path = file_rec.get("current_path") or ""
         current_fn = file_rec.get("current_filename") or ""
+        orig_path = file_rec.get("original_path") or ""
+        orig_fn = file_rec.get("original_filename") or ""
         when_val = when_data.get("selected_value") or file_rec.get("when_val") or ""
         what_val = what_data.get("selected_value") or file_rec.get("what_val") or ""
-        fp_str = f"{tracking_id}|{current_fn}|{when_val}|{what_val}|{country_name}|{where_data.get('place_location')}"
+        row_id_str = str(selected_row_id or "")
+
+        # Section 16/19 fingerprinting: full committed archive state + association context (R-019)
+        fp_str = f"{tracking_id}|{current_path}|{current_fn}|{orig_path}|{orig_fn}|{row_id_str}|{when_val}|{what_val}|{country_name}|{where_data.get('place_location')}"
         req_fingerprint = hashlib.sha256(fp_str.encode("utf-8")).hexdigest()
         req_id = f"req_{tracking_id}_{int(datetime.now(timezone.utc).timestamp())}"
         table_id = str(getattr(self.write_adapter, "media_table_id", "") or "")
+
+        # Carry Tool 1 evidence into structured provenance fields (R-014)
+        when_prov = when_data.get("evidence") or when_data.get("provenance")
+        what_prov = what_data.get("evidence") or what_data.get("provenance")
+        where_prov = where_data.get("evidence") or where_data.get("provenance")
+
+        # Retain prior field approvals and review notes if present
+        prior_sync = self.registry.get_media_db_sync(tracking_id)
+        prior_req = prior_sync.get("request") if prior_sync else None
+        field_approvals = {}
+        reviewer_notes = None
+        is_human_approved = False
+        if prior_req:
+            field_approvals = prior_req.get("field_approvals") or {}
+            reviewer_notes = prior_req.get("reviewer_notes")
+            is_human_approved = bool(prior_req.get("is_human_approved", False))
 
         return MediaDbSyncRequest(
             tracking_id=tracking_id,
@@ -111,25 +138,64 @@ class MediaDatabaseUpdaterService:
             table_id=table_id,
             when_val=when_data.get("selected_value") or file_rec.get("when_val"),
             when_state=when_data.get("state"),
-            when_provenance=when_data.get("provenance"),
+            when_provenance=when_prov,
             what_val=what_data.get("selected_value") or file_rec.get("what_val"),
             what_category=what_data.get("category"),
             what_verse=what_data.get("verse"),
             what_state=what_data.get("state"),
-            what_provenance=what_data.get("provenance"),
+            what_provenance=what_prov,
             who_val=parser_res.get("who") or file_rec.get("who_val"),
             where_val=file_rec.get("where_val"),
             where_place=where_data.get("place_location"),
             where_country=country_name,
             where_country_iso=where_data.get("country_iso2"),
             where_state=where_data.get("state"),
-            where_provenance=where_data.get("provenance"),
+            where_provenance=where_prov,
             parent_folder_context=parent_ctx,
             tool2_decision=t2_decision,
             selected_media_row_id=selected_row_id,
             tool3_decision=t3_rec.get("decision") if t3_rec else None,
             tool3_evidence=t3_rec.get("result") if t3_rec else None,
+            is_human_approved=is_human_approved,
+            field_approvals=field_approvals,
+            reviewer_notes=reviewer_notes,
         )
+
+    def apply_field_approval(
+        self,
+        tracking_id: str,
+        field_name: str,
+        action: str = "apply_correction",
+        approved_value: Optional[Any] = None,
+        reviewed_precondition_value: Optional[Any] = None,
+        has_reviewed_precondition: Optional[bool] = None,
+        reviewer: str = "human_reviewer",
+        notes: Optional[str] = None,
+        commit: bool = False,
+    ) -> MediaDbSyncResult:
+        """Apply an explicit field-level review action with reviewed precondition (R-016, Section 18)."""
+        req = self.build_sync_request(tracking_id)
+        if not req:
+            return MediaDbSyncResult(
+                tracking_id=tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                error_message=f"File {tracking_id} not found in registry",
+            )
+
+        has_pre = has_reviewed_precondition if has_reviewed_precondition is not None else True
+        req.field_approvals[field_name] = {
+            "action": action,
+            "approved_value": approved_value,
+            "has_reviewed_precondition": has_pre,
+            "reviewed_precondition_value": reviewed_precondition_value,
+            "reviewer": reviewer,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "notes": notes,
+        }
+
+        return self.synchronize(tracking_id, commit=commit, request=req)
+
 
     def preview(self, tracking_id: str, request: Optional[MediaDbSyncRequest] = None) -> MediaDbSyncResult:
         """Dry-run preview computing field diffs and actions without performing Baserow mutations."""

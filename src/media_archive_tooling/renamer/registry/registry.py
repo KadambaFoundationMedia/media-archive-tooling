@@ -512,6 +512,15 @@ class LocalRegistry:
         request_json: Optional[str] = None,
         result_json: Optional[str] = None,
     ):
+        from ...media_db_updater.write_adapter import redact_secrets
+
+        if request_json is not None:
+            request_json = redact_secrets(request_json)
+        if result_json is not None:
+            result_json = redact_secrets(result_json)
+        if error_message is not None:
+            error_message = redact_secrets(error_message)
+
         now = datetime.now(timezone.utc).isoformat()
         last_attempt = last_attempt_at or now
         with self._get_conn() as conn:

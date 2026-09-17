@@ -40,12 +40,14 @@ def configure_review_context(
     media_db_service: Optional[Any] = None,
     media_db_provider: Optional[Any] = None,
     media_db_updater_service: Optional[Any] = None,
+    registry: Optional[LocalRegistry] = None,
 ) -> None:
     """Configure the portal to use the same local review registry/root as the scan."""
     global _service, _commit_service, _review_root, _media_db_service, _media_db_provider, _media_db_updater_service
     config = load_config()
-    selected_registry = Path(registry_path) if registry_path else config.registry_path
-    registry = LocalRegistry(selected_registry)
+    if registry is None:
+        selected_registry = Path(registry_path) if registry_path else config.registry_path
+        registry = LocalRegistry(selected_registry)
     _service = RenamerApplicationService(registry=registry)
     _media_db_service = media_db_service
     _media_db_provider = media_db_provider
@@ -106,19 +108,14 @@ def get_media_db_updater_service() -> Any:
     if _media_db_updater_service is not None:
         return _media_db_updater_service
 
-    from ..media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
+    from ..cli import create_media_db_updater_service
 
     config = load_config()
     registry = get_registry()
-    write_adapter = BaserowWriteAdapter(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-    )
     tool2_svc = get_media_db_service()
-    return MediaDatabaseUpdaterService(
+    return create_media_db_updater_service(
         registry=registry,
-        write_adapter=write_adapter,
+        config=config,
         tool2_service=tool2_svc,
     )
 
@@ -215,6 +212,39 @@ def media_db_sync(
     commit = (action in ("commit", "retry"))
     try:
         updater.synchronize(tracking_id, commit=commit)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+
+
+@app.post("/file/{tracking_id}/media-db-field-approval")
+def media_db_field_approval(
+    tracking_id: str,
+    field_name: str = Form(...),
+    action: str = Form(...),
+    approved_value: Optional[str] = Form(None),
+    reviewed_precondition_value: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    commit: bool = Form(False),
+):
+    from ..media_db_updater.models import FieldApprovalAction
+    updater = get_media_db_updater_service()
+    try:
+        approval_action = FieldApprovalAction(action)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid field approval action: {action}")
+
+    try:
+        updater.apply_field_approval(
+            tracking_id=tracking_id,
+            field_name=field_name,
+            action=approval_action,
+            approved_value=approved_value,
+            reviewed_precondition_value=reviewed_precondition_value,
+            notes=notes,
+            commit=commit,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

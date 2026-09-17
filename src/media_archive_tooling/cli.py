@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+from typing import Optional, Any
 from pathlib import Path
 
 from .config import load_config
@@ -13,6 +14,36 @@ from .adapters.baserow import BaserowReferenceProvider
 from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
 from .media_db_reviewer.service import MediaDatabaseReviewService
 from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
+
+
+def create_media_db_updater_service(
+    registry: LocalRegistry,
+    config: Optional[Any] = None,
+    write_adapter: Optional[BaserowWriteAdapter] = None,
+    tool2_service: Optional[MediaDatabaseReviewService] = None,
+) -> MediaDatabaseUpdaterService:
+    """Construct one correctly configured Tool 2 + Tool 4 service composition."""
+    if config is None:
+        config = load_config()
+    if write_adapter is None:
+        write_adapter = BaserowWriteAdapter(
+            api_url=config.baserow_api_url,
+            api_token=config.baserow_api_token,
+            media_table_id=config.baserow_media_table_id,
+        )
+    if tool2_service is None:
+        tool2_provider = BaserowSnapshotProvider(
+            api_url=config.baserow_api_url,
+            api_token=config.baserow_api_token,
+            media_table_id=config.baserow_media_table_id,
+            category_table_id=config.baserow_category_table_id,
+        )
+        tool2_service = MediaDatabaseReviewService(registry=registry, provider=tool2_provider)
+    return MediaDatabaseUpdaterService(
+        registry=registry,
+        write_adapter=write_adapter,
+        tool2_service=tool2_service,
+    )
 
 
 def run_renamer(args):
@@ -37,14 +68,9 @@ def run_renamer(args):
         category_table_id=config.baserow_category_table_id,
     )
 
-    write_adapter = BaserowWriteAdapter(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-    )
-    updater_service = MediaDatabaseUpdaterService(
+    updater_service = create_media_db_updater_service(
         registry=registry,
-        write_adapter=write_adapter,
+        config=config,
     )
 
     executor = BatchExecutor(
@@ -387,22 +413,9 @@ def run_media_db_update(args):
     reg_path = Path(args.registry_path) if getattr(args, "registry_path", None) else config.registry_path
     registry = LocalRegistry(reg_path)
 
-    write_adapter = BaserowWriteAdapter(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-    )
-    tool2_provider = BaserowSnapshotProvider(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-        category_table_id=config.baserow_category_table_id,
-    )
-    tool2_service = MediaDatabaseReviewService(registry=registry, provider=tool2_provider)
-    updater_service = MediaDatabaseUpdaterService(
+    updater_service = create_media_db_updater_service(
         registry=registry,
-        write_adapter=write_adapter,
-        tool2_service=tool2_service,
+        config=config,
     )
 
     commit = getattr(args, "commit", False)

@@ -1,6 +1,6 @@
 """Typed data models and contracts for Tool 4 — Media Database Updater."""
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -34,6 +34,29 @@ class FieldAction(str, Enum):
     SKIPPED = "SKIPPED"
 
 
+class FieldApprovalAction(str, Enum):
+    """Section 18 explicit field-level review actions."""
+    KEEP_DATABASE = "keep_database"
+    APPLY_CORRECTION = "apply_correction"
+    CHOOSE_ASSOCIATION = "choose_association"
+    DEFER = "defer"
+    CONFIRM_NEW = "confirm_new"
+
+
+class FieldApproval(BaseModel):
+    """Explicit human approval for a single field with reviewed precondition and action provenance."""
+    field_name: str
+    action: FieldApprovalAction = FieldApprovalAction.APPLY_CORRECTION
+    approved_value: Optional[Any] = None
+    # Must be explicitly true when the reviewer inspected the live database value
+    has_reviewed_precondition: bool = False
+    # Exact reviewed database value (can be None or "" for an explicitly reviewed blank precondition)
+    reviewed_precondition_value: Optional[Any] = None
+    reviewer: Optional[str] = "human_reviewer"
+    reviewed_at: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class FieldDiff(BaseModel):
     """Audit diff for a single field modified, preserved, or conflicting."""
     field_name: str
@@ -59,13 +82,13 @@ class MediaDbSyncRequest(BaseModel):
     # Tool 1 metadata & resolution states
     when_val: Optional[str] = None
     when_state: Optional[str] = None
-    when_provenance: Optional[Dict[str, Any]] = None
+    when_provenance: Optional[List[Dict[str, Any]]] = None
 
     what_val: Optional[str] = None
     what_category: Optional[str] = None
     what_verse: Optional[str] = None
     what_state: Optional[str] = None
-    what_provenance: Optional[Dict[str, Any]] = None
+    what_provenance: Optional[List[Dict[str, Any]]] = None
 
     who_val: Optional[str] = None
 
@@ -74,7 +97,7 @@ class MediaDbSyncRequest(BaseModel):
     where_country: Optional[str] = None
     where_country_iso: Optional[str] = None
     where_state: Optional[str] = None
-    where_provenance: Optional[Dict[str, Any]] = None
+    where_provenance: Optional[List[Dict[str, Any]]] = None
 
     # Contextual fallbacks & tool evidence
     parent_folder_context: Optional[str] = None
@@ -86,9 +109,45 @@ class MediaDbSyncRequest(BaseModel):
     live_query_timestamp: Optional[str] = None
 
     # Field-specific human review intent and preconditions
+    # NOTE: is_human_approved is purely informational / legacy. It NEVER authorizes semantic field writes.
     is_human_approved: bool = False
-    field_approvals: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    field_approvals: Dict[str, Union[FieldApproval, Dict[str, Any]]] = Field(default_factory=dict)
     reviewer_notes: Optional[str] = None
+
+    def get_approval(self, field_name: str) -> Optional[FieldApproval]:
+        """Extract and validate field approval for a specific field name."""
+        raw = self.field_approvals.get(field_name)
+        if raw is None:
+            # Check case-insensitively
+            for k, v in self.field_approvals.items():
+                if k.strip().lower() == field_name.strip().lower():
+                    raw = v
+                    break
+        if raw is None:
+            return None
+        if isinstance(raw, FieldApproval):
+            return raw
+        if not isinstance(raw, dict):
+            return None
+
+        has_pre = bool(raw.get("has_reviewed_precondition", False)) or ("reviewed_precondition_value" in raw)
+        action_val = raw.get("action", FieldApprovalAction.APPLY_CORRECTION)
+        if isinstance(action_val, str):
+            try:
+                action_val = FieldApprovalAction(action_val.lower())
+            except ValueError:
+                action_val = FieldApprovalAction.APPLY_CORRECTION
+
+        return FieldApproval(
+            field_name=field_name,
+            action=action_val,
+            approved_value=raw.get("approved_value"),
+            has_reviewed_precondition=has_pre,
+            reviewed_precondition_value=raw.get("reviewed_precondition_value") if has_pre else None,
+            reviewer=raw.get("reviewer", "human_reviewer"),
+            reviewed_at=raw.get("reviewed_at"),
+            notes=raw.get("notes"),
+        )
 
 
 class MediaDbSyncResult(BaseModel):

@@ -56,12 +56,30 @@ from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.review_portal.app import app, configure_review_context
 
 
-def make_mock_tool2(decision: str = "NEW_MEDIA_CANDIDATE", row_id: Optional[int] = None):
+def make_mock_tool2(
+    decision: str = "NEW_MEDIA_CANDIDATE",
+    row_id: Optional[int] = None,
+    live_read_complete: bool = True,
+    snapshot_complete: bool = True,
+    baserow_check_complete: bool = True,
+    database_state: str = "LIVE_CURRENT",
+):
     mock_t2 = MagicMock()
     mock_res = MagicMock()
     mock_res.decision = decision
     mock_res.selected_media_row_id = row_id
-    mock_res.model_dump.return_value = {"decision": decision, "selected_media_row_id": row_id}
+    mock_res.live_read_complete = live_read_complete
+    mock_res.snapshot_complete = snapshot_complete
+    mock_res.baserow_check_complete = baserow_check_complete
+    mock_res.database_state = database_state
+    mock_res.model_dump.return_value = {
+        "decision": decision,
+        "selected_media_row_id": row_id,
+        "live_read_complete": live_read_complete,
+        "snapshot_complete": snapshot_complete,
+        "baserow_check_complete": baserow_check_complete,
+        "database_state": database_state,
+    }
     mock_t2.review_file.return_value = mock_res
     return mock_t2
 
@@ -349,7 +367,25 @@ def test_06_explicit_human_overwrite_is_live_revalidated_before_write(tmp_path):
     req = service.build_sync_request("trk0006")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 105
+
+    # Bare is_human_approved=True must NOT authorize overwrite of conflicting Date (R-016)
     req.is_human_approved = True
+    res_bare = service.synchronize("trk0006", commit=True, request=req)
+    assert res_bare.status == SyncStatus.REVIEW_REQUIRED
+    assert fake_db.rows[105]["Date"] == "2015-09-09"
+
+    # Field-specific approval with matching precondition authorizes write
+    from media_archive_tooling.media_db_updater.models import FieldApproval, FieldApprovalAction
+    req.field_approvals = {
+        "Date": FieldApproval(
+            field_name="Date",
+            action=FieldApprovalAction.APPLY_CORRECTION,
+            approved_value="2014-08-04",
+            has_reviewed_precondition=True,
+            reviewed_precondition_value="2015-09-09",
+            reviewer="reviewer1",
+        )
+    }
 
     res = service.synchronize("trk0006", commit=True, request=req)
     assert res.status == SyncStatus.SYNCED
@@ -792,10 +828,10 @@ def test_27_missing_required_status_language_blocks_rather_than_inventing(tmp_pa
     save_test_file(registry, tracking_id="trk0027")
 
     # Schema missing Language option 'English'
-    custom_fields = [
-        {"id": 105, "name": "Language", "type": "single_select", "select_options": []}
-    ]
-    fake_db = FakeBaserowWriteAdapter(initial_fields=custom_fields)
+    fake_db = FakeBaserowWriteAdapter()
+    for f in fake_db.fields:
+        if f["name"] == "Language":
+            f["select_options"] = []
     service = MediaDatabaseUpdaterService(registry, fake_db)
     req = service.build_sync_request("trk0027")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
@@ -1370,4 +1406,388 @@ def test_55_category_normalization_and_equivalence():
     assert _normalize_category_key("Bhagavad-gita") == _normalize_category_key("BG")
     assert _normalize_category_key("Bhagavad Gita") == _normalize_category_key("BG")
     assert _normalize_category_key("Srimad-Bhagavatam") == _normalize_category_key("SB")
+
+
+# ---------------------------------------------------------------------------
+# Test 56 (R-013): Pre-create revalidation rejects incomplete or non-live Tool 2 results
+# ---------------------------------------------------------------------------
+def test_56_precreate_revalidation_rejects_incomplete_tool2_results(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0056")
+    fake_db = FakeBaserowWriteAdapter()
+
+    # Incomplete: live_read_complete is False
+    t2_partial = make_mock_tool2(
+        decision="NEW_MEDIA_CANDIDATE",
+        live_read_complete=False,
+        snapshot_complete=False,
+        baserow_check_complete=False,
+        database_state="LIVE_PARTIAL_OR_FAILED",
+    )
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=t2_partial)
+    req = service.build_sync_request("trk0056")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0056", commit=True, request=req)
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED
+    assert res.review_required is True
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+
+    # Incomplete: snapshot_complete is False
+    t2_snap_fail = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", snapshot_complete=False)
+    service_snap = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=t2_snap_fail)
+    res_snap = service_snap.synchronize("trk0056", commit=True, request=req)
+    assert res_snap.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res_snap.operation == SyncOperation.BLOCKED
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+
+    # Incomplete: database_state is OFFLINE
+    t2_offline = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", database_state="OFFLINE")
+    service_off = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=t2_offline)
+    res_off = service_off.synchronize("trk0056", commit=True, request=req)
+    assert res_off.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res_off.operation == SyncOperation.BLOCKED
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 57 (R-014): Parameterized semantic state positive eligibility
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("state_val,should_be_eligible", [
+    ("exact", True),
+    ("strong", True),
+    ("provisional", False),
+    ("ambiguous", False),
+    ("unresolved", False),
+    (None, False),
+    ("", False),
+    ("unexpected", False),
+])
+def test_57_positive_semantic_eligibility(tmp_path, state_val, should_be_eligible):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id=f"trk_{state_val}")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 201,
+        "Date": None,
+        "Category": None,
+        "Country": None,
+        "Place, location": None,
+        "Filename": "test.mp3",
+    }])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+    req = service.build_sync_request(f"trk_{state_val}")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 201
+
+    req.when_state = state_val
+    req.when_val = "2014-08-04"
+    req.what_state = state_val
+    req.what_category = "Bhagavad-gita"
+    req.where_state = state_val
+    req.where_country = "Germany"
+    req.where_place = "Leipzig"
+
+    res = service.preview(f"trk_{state_val}", request=req)
+    diff_actions = {d.field_name: d.action for d in res.field_diffs}
+
+    if should_be_eligible:
+        assert diff_actions.get("Date") == FieldAction.SET
+        assert diff_actions.get("Category") == FieldAction.SET
+        assert diff_actions.get("Country") == FieldAction.SET
+        assert diff_actions.get("Place, location") == FieldAction.SET
+    else:
+        assert diff_actions.get("Date") != FieldAction.SET
+        assert diff_actions.get("Category") != FieldAction.SET
+        assert diff_actions.get("Country") != FieldAction.SET
+        assert diff_actions.get("Place, location") != FieldAction.SET
+
+
+# ---------------------------------------------------------------------------
+# Test 58 (R-014): Tool 1 evidence preservation in structured provenance
+# ---------------------------------------------------------------------------
+def test_58_tool1_evidence_preservation(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk_ev_01")
+    record = registry.get_file("trk_ev_01")
+    pr_dict = record["parser_result"]
+    pr_dict["when"]["evidence"] = [{"source": "folder", "raw_value": "2014-08-04", "details": "parsed from folder"}]
+    pr_dict["what"]["evidence"] = [{"source": "filename", "raw_value": "BG-01-18", "details": "parsed code"}]
+    pr_dict["where"]["evidence"] = [{"source": "folder", "raw_value": "Leipzig-de", "details": "parsed where"}]
+    with registry._get_conn() as conn:
+        conn.cursor().execute("UPDATE files SET parser_result_json = ? WHERE tracking_id = ?", (json.dumps(pr_dict), "trk_ev_01"))
+        conn.commit()
+
+    fake_db = FakeBaserowWriteAdapter()
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+    req = service.build_sync_request("trk_ev_01")
+
+    assert req.when_provenance is not None
+    assert len(req.when_provenance) == 1
+    assert req.when_provenance[0]["raw_value"] == "2014-08-04"
+
+    assert req.what_provenance is not None
+    assert len(req.what_provenance) == 1
+    assert req.what_provenance[0]["raw_value"] == "BG-01-18"
+
+    assert req.where_provenance is not None
+    assert len(req.where_provenance) == 1
+    assert req.where_provenance[0]["raw_value"] == "Leipzig-de"
+
+
+# ---------------------------------------------------------------------------
+# Test 59 (R-015): Real renamer commit composition and durable synchronization
+# ---------------------------------------------------------------------------
+def test_59_renamer_commit_creates_configured_tool2_and_tool4(tmp_path):
+    from media_archive_tooling.cli import create_media_db_updater_service
+
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter()
+    mock_t2 = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE")
+
+    # Factory correctly wires tool2_service
+    service = create_media_db_updater_service(
+        registry=registry,
+        write_adapter=fake_db,
+        tool2_service=mock_t2,
+    )
+    assert service.tool2_service is mock_t2
+    assert service.write_adapter is fake_db
+
+    save_test_file(registry, tracking_id="trk0059")
+    req = service.build_sync_request("trk0059")
+    res = service.synchronize("trk0059", commit=True, request=req)
+    assert res.status == SyncStatus.SYNCED
+    assert any(c["action"] == "create_row" for c in fake_db.calls)
+
+    persisted = registry.get_media_db_sync("trk0059")
+    assert persisted is not None
+    assert persisted["sync_status"] == "SYNCED"
+
+
+# ---------------------------------------------------------------------------
+# Test 60 (R-016): Field approval partial isolation, missing and stale preconditions
+# ---------------------------------------------------------------------------
+def test_60_field_approvals_safeguards(tmp_path):
+    from media_archive_tooling.media_db_updater.models import FieldApproval, FieldApprovalAction
+
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0060", date_val="2014-08-04", what_category="Bhagavad-gita")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 305,
+        "Date": "2015-09-09",
+        "Category": "Srimad Bhagavatam",
+        "Filename": "test.mp3",
+    }])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    # Missing precondition triggers CONFLICT and is not applied
+    req = service.build_sync_request("trk0060")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 305
+    req.field_approvals = {
+        "Date": {
+            "action": "APPLY_CORRECTION",
+            "approved_value": "2014-08-04",
+            "has_reviewed_precondition": False,  # Missing precondition!
+        }
+    }
+    res_miss = service.synchronize("trk0060", commit=True, request=req)
+    assert res_miss.status == SyncStatus.REVIEW_REQUIRED
+    assert fake_db.rows[305]["Date"] == "2015-09-09"
+
+    # Stale precondition: reviewed value "2015-01-01" != DB live "2015-09-09"
+    req.field_approvals = {
+        "Date": FieldApproval(
+            field_name="Date",
+            action=FieldApprovalAction.APPLY_CORRECTION,
+            approved_value="2014-08-04",
+            has_reviewed_precondition=True,
+            reviewed_precondition_value="2015-01-01",  # Stale!
+        )
+    }
+    res_stale = service.synchronize("trk0060", commit=True, request=req)
+    assert res_stale.status == SyncStatus.REVIEW_REQUIRED
+    assert fake_db.rows[305]["Date"] == "2015-09-09"
+
+    # Partial approval: approved Date does NOT unlock unapproved Category conflict
+    req.field_approvals = {
+        "Date": FieldApproval(
+            field_name="Date",
+            action=FieldApprovalAction.APPLY_CORRECTION,
+            approved_value="2014-08-04",
+            has_reviewed_precondition=True,
+            reviewed_precondition_value="2015-09-09",
+        )
+    }
+    res_part = service.synchronize("trk0060", commit=True, request=req)
+    # Overall status is still REVIEW_REQUIRED due to unapproved Category conflict
+    assert res_part.status == SyncStatus.REVIEW_REQUIRED
+    # But Date was resolved and Category remains CONFLICT
+    date_diff = next(d for d in res_part.field_diffs if d.field_name == "Date")
+    cat_diff = next(d for d in res_part.field_diffs if d.field_name == "Category")
+    assert date_diff.action == FieldAction.SET
+    assert cat_diff.action == FieldAction.CONFLICT
+
+    # Resolve Category with KEEP_DATABASE
+    req.field_approvals["Category"] = FieldApproval(
+        field_name="Category",
+        action=FieldApprovalAction.KEEP_DATABASE,
+        has_reviewed_precondition=True,
+        reviewed_precondition_value="Srimad Bhagavatam",
+    )
+    res_all = service.synchronize("trk0060", commit=True, request=req)
+    assert res_all.status == SyncStatus.SYNCED
+    assert fake_db.rows[305]["Date"] == "2014-08-04"
+    assert fake_db.rows[305]["Category"] == "Srimad Bhagavatam"
+
+
+# ---------------------------------------------------------------------------
+# Test 61 (R-017): Live schema mismatch handling and no partial option mutation
+# ---------------------------------------------------------------------------
+def test_61_schema_mismatches_and_no_partial_mutation(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0061")
+    fake_db = FakeBaserowWriteAdapter()
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
+
+    # Case A: Column removed from live schema
+    fake_db.fields = [f for f in fake_db.fields if f["name"] != "Date"]
+    req = service.build_sync_request("trk0061")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res_missing = service.synchronize("trk0061", commit=True, request=req)
+    assert res_missing.status == SyncStatus.FAILED_BLOCKED
+    assert "Missing field in schema" in (res_missing.error_message or "")
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+
+    # Case B: Column type changed to incompatible type (Title changed to number)
+    fake_db2 = FakeBaserowWriteAdapter()
+    for f in fake_db2.fields:
+        if f["name"] == "Title":
+            f["type"] = "number"
+    service2 = MediaDatabaseUpdaterService(registry, fake_db2, tool2_service=make_mock_tool2())
+    res_type = service2.synchronize("trk0061", commit=True, request=req)
+    assert res_type.status == SyncStatus.FAILED_BLOCKED
+    assert "unsupported or incompatible" in (res_type.error_message or "")
+    # Verify no country/place select option was created
+    assert not any(c["action"] == "add_select_option" for c in fake_db2.calls)
+
+    # Case C: Duplicate column names after normalization
+    fake_db3 = FakeBaserowWriteAdapter()
+    fake_db3.fields.append({"id": 999, "name": "title", "type": "text"})  # duplicate of Title
+    service3 = MediaDatabaseUpdaterService(registry, fake_db3, tool2_service=make_mock_tool2())
+    res_dup = service3.synchronize("trk0061", commit=True, request=req)
+    assert res_dup.status == SyncStatus.FAILED_BLOCKED
+    assert "Duplicate or ambiguous" in (res_dup.error_message or "")
+
+
+# ---------------------------------------------------------------------------
+# Test 62 (R-018): Portal retry parity and preview badge
+# ---------------------------------------------------------------------------
+def test_62_portal_retry_parity_and_preview_badge(tmp_path):
+    try:
+        registry = LocalRegistry(tmp_path / "test.db")
+        save_test_file(registry, tracking_id="trk0062")
+        configure_review_context(registry_path=tmp_path / "test.db")
+        client = TestClient(app)
+
+        # Save DATABASE_UNAVAILABLE state
+        registry.save_media_db_sync(
+            tracking_id="trk0062",
+            sync_status="DATABASE_UNAVAILABLE",
+            operation_type="BLOCKED",
+        )
+        resp = client.get("/file/trk0062")
+        assert resp.status_code == 200
+        assert "DATABASE_UNAVAILABLE" in resp.text
+        # Retry button must be present for DATABASE_UNAVAILABLE
+        assert "Retry Pending Sync" in resp.text
+
+        # Save PREVIEW state
+        registry.save_media_db_sync(
+            tracking_id="trk0062",
+            sync_status="PREVIEW",
+            operation_type="UPDATE",
+        )
+        resp_prev = client.get("/file/trk0062")
+        assert resp_prev.status_code == 200
+        assert "PREVIEW" in resp_prev.text
+        assert "#0284c7" in resp_prev.text
+    finally:
+        configure_review_context()
+
+
+# ---------------------------------------------------------------------------
+# Test 63 (R-019): Audit persistence secret redaction and fingerprint completeness
+# ---------------------------------------------------------------------------
+def test_63_audit_persistence_secret_redaction_and_fingerprint(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    secret_req = json.dumps({
+        "tracking_id": "trk0063",
+        "api_token": "Token secret_token_value_abc123",
+        "nested": {"bearer": "Bearer topsecretjwt"},
+    })
+    secret_res = json.dumps({
+        "error": "Failed with password: supersecretpass",
+        "headers": "Authorization: Bearer mysecrettoken",
+    })
+    secret_err = "Request error on https://api.baserow.io/?key=verysecretkey"
+
+    registry.save_media_db_sync(
+        tracking_id="trk0063",
+        sync_status="FAILED_BLOCKED",
+        request_json=secret_req,
+        result_json=secret_res,
+        error_message=secret_err,
+    )
+
+    persisted = registry.get_media_db_sync("trk0063")
+    assert persisted is not None
+    assert "secret_token_value_abc123" not in persisted["request_json"]
+    assert "topsecretjwt" not in persisted["request_json"]
+    assert "supersecretpass" not in persisted["result_json"]
+    assert "mysecrettoken" not in persisted["result_json"]
+    assert "verysecretkey" not in persisted["error_message"]
+    assert "[REDACTED]" in persisted["request_json"]
+    assert "[REDACTED]" in persisted["result_json"]
+    assert "[REDACTED]" in persisted["error_message"]
+
+    # Fingerprint includes current_path
+    save_test_file(registry, tracking_id="trk0063_fp1", current_path="/path1/test.mp3")
+    save_test_file(registry, tracking_id="trk0063_fp2", current_path="/path2/test.mp3")
+    fake_db = FakeBaserowWriteAdapter()
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+    req1 = service.build_sync_request("trk0063_fp1")
+    req2 = service.build_sync_request("trk0063_fp2")
+    assert req1.request_fingerprint != req2.request_fingerprint
+
+
+# ---------------------------------------------------------------------------
+# Test 64 (R-020): Complete ISO-3166-1 country mapping and invalid code handling
+# ---------------------------------------------------------------------------
+def test_64_complete_iso_mapping_and_invalid_codes():
+    from media_archive_tooling.media_db_updater.country_mapper import (
+        get_country_name_for_iso,
+        is_valid_country_display_name,
+    )
+
+    # Valid countries
+    assert get_country_name_for_iso("GH") == "Ghana"
+    assert get_country_name_for_iso("gh") == "Ghana"
+    assert get_country_name_for_iso("IS") == "Iceland"
+    assert get_country_name_for_iso("is") == "Iceland"
+    assert get_country_name_for_iso("UK") == "United Kingdom"
+
+    # Unknown or invalid codes
+    assert get_country_name_for_iso("XX") is None
+    assert get_country_name_for_iso("") is None
+    assert get_country_name_for_iso(None) is None
+
+    # Valid display names vs raw two-letter codes
+    assert is_valid_country_display_name("Ghana") is True
+    assert is_valid_country_display_name("Iceland") is True
+    assert is_valid_country_display_name("GH") is False
+    assert is_valid_country_display_name("IS") is False
+    assert is_valid_country_display_name("UnknownCountry") is False
 

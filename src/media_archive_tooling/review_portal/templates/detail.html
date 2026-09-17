@@ -331,6 +331,7 @@
                 <span class="badge" style="
                     {% if s_status == 'SYNCED' %}background: #16a34a;
                     {% elif s_status == 'SYNCING' %}background: #2563eb;
+                    {% elif s_status == 'PREVIEW' %}background: #0284c7;
                     {% elif s_status == 'PENDING_SYNC' %}background: #eab308; color: #713f12;
                     {% elif s_status == 'REVIEW_REQUIRED' %}background: #f97316;
                     {% elif s_status == 'DATABASE_UNAVAILABLE' %}background: #64748b;
@@ -396,6 +397,21 @@
                     <td style="padding: 6px 8px; border: 1px solid #e2e8f0; font-weight: 500;">{{ diff.new_value if diff.new_value is not none else '—' }}</td>
                     <td style="padding: 6px 8px; border: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">{{ diff.details or '—' }}</td>
                 </tr>
+                {% if diff.action == 'CONFLICT' %}
+                <tr>
+                    <td colspan="5" style="background: #fffbeb; padding: 8px; border: 1px solid #fef3c7;">
+                        <form method="POST" action="/file/{{ file.tracking_id }}/media-db-field-approval" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="hidden" name="field_name" value="{{ diff.field_name }}">
+                            <input type="hidden" name="reviewed_precondition_value" value="{{ diff.old_value or '' }}">
+                            <span style="font-weight: 500; font-size: 12px;">Resolve Conflict for {{ diff.field_name }}:</span>
+                            <button type="submit" name="action" value="KEEP_DATABASE" class="btn" style="padding: 2px 8px; font-size: 11px;">Keep Database</button>
+                            <button type="submit" name="action" value="APPLY_CORRECTION" class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;">Apply Archive Value</button>
+                            <input type="hidden" name="approved_value" value="{{ diff.new_value or '' }}">
+                            <button type="submit" name="action" value="DEFER" class="btn" style="padding: 2px 8px; font-size: 11px; background: #94a3b8;">Defer</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endif %}
                 {% endfor %}
             </tbody>
         </table>
@@ -418,7 +434,7 @@
                 <input type="hidden" name="action" value="commit">
                 <button type="submit" class="btn btn-primary">Synchronize Now</button>
             </form>
-            {% if media_db_sync and media_db_sync.sync_status in ['PENDING_SYNC', 'FAILED_RETRYABLE'] %}
+            {% if media_db_sync and media_db_sync.sync_status in ['PENDING_SYNC', 'FAILED_RETRYABLE', 'DATABASE_UNAVAILABLE'] %}
             <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
                 <input type="hidden" name="action" value="retry">
                 <button type="submit" class="btn btn-success">Retry Pending Sync</button>

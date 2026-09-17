@@ -19,6 +19,8 @@ from ..renamer.parser.what import SB_REGEX, BG_REGEX, CC_REGEX
 from .country_mapper import are_countries_equivalent
 from .models import (
     FieldAction,
+    FieldApproval,
+    FieldApprovalAction,
     FieldDiff,
     MediaDbSyncRequest,
     MediaDbSyncResult,
@@ -33,11 +35,26 @@ from .write_adapter import (
     FakeBaserowWriteAdapter,
     TaxonomyForbiddenError,
     _normalize_option_text,
+    index_fields_by_name,
     redact_secrets,
     validate_field_schema,
 )
 
 logger = logging.getLogger(__name__)
+
+# Section 7 positive eligibility: automatic semantic writes require exact/strong (R-014)
+TRUSTED_SEMANTIC_STATES = {"exact", "strong"}
+
+
+def is_semantic_state_eligible(state: Optional[str]) -> bool:
+    """Positive eligibility check for automatic semantic database writes (R-014).
+    Only 'exact' or 'strong' states authorize automatic writes.
+    Missing, empty, provisional, ambiguous, unresolved, unexpected fail closed.
+    """
+    if not state or not isinstance(state, str):
+        return False
+    return state.strip().lower() in TRUSTED_SEMANTIC_STATES
+
 
 # Fields that Tool 4 considers unrelated to local archive file metadata
 UNRELATED_ONLINE_FIELDS = {
@@ -226,15 +243,40 @@ class MediaDatabaseUpdateEngine:
         result.request_id = request.request_id
         result.request_fingerprint = request.request_fingerprint
         result.table_id = request.table_id
+
+        # Build field-specific approvals audit summary with redacted secrets (R-019)
+        approvals_audit: Dict[str, Any] = {}
+        for k in request.field_approvals:
+            appr = request.get_approval(k)
+            if appr:
+                approvals_audit[k] = {
+                    "action": appr.action.value,
+                    "approved_value": redact_secrets(appr.approved_value),
+                    "has_reviewed_precondition": appr.has_reviewed_precondition,
+                    "reviewed_precondition_value": redact_secrets(appr.reviewed_precondition_value),
+                    "reviewer": appr.reviewer,
+                    "reviewed_at": appr.reviewed_at,
+                    "notes": redact_secrets(appr.notes) if appr.notes else None,
+                }
+
         result.audit_provenance = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tracking_id": request.tracking_id,
+            "request_id": request.request_id,
             "rules_version": "v1.0",
+            "operation_type": result.operation.value,
+            "table_id": request.table_id,
+            "media_row_id": result.media_row_id,
+            "live_read_timestamp": request.live_query_timestamp or datetime.now(timezone.utc).isoformat(),
+            "tool2_decision": request.tool2_decision,
             "when_state": request.when_state,
             "what_state": request.what_state,
             "where_state": request.where_state,
             "is_human_approved": request.is_human_approved,
             "field_approvals_count": len(request.field_approvals),
+            "field_approvals": approvals_audit,
+            "fields_modified": result.fields_modified,
+            "fields_preserved": result.fields_preserved,
         }
         if result.error_message:
             result.error_message = redact_secrets(result.error_message)
@@ -286,16 +328,31 @@ class MediaDatabaseUpdateEngine:
             "CONFLICT_WITH_EXISTING",
             "INSUFFICIENT_EVIDENCE",
         ):
+            has_assoc_approval = any(
+                appr and appr.action == FieldApprovalAction.CHOOSE_ASSOCIATION
+                for appr in [request.get_approval(k) for k in request.field_approvals]
+            )
+            if not has_assoc_approval:
+                return self._enrich_result(MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.REVIEW_REQUIRED,
+                    operation=SyncOperation.BLOCKED,
+                    review_required=True,
+                    diagnostic_notes=[f"Tool 2 decision {t2_decision} requires review; automatic mutation disallowed"],
+                ), request)
+
+        # Map field schema rejecting normalized duplicate column names (R-017)
+        try:
+            fields_by_name = index_fields_by_name(live_fields)
+        except BaserowSchemaError as e:
             return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
-                status=SyncStatus.REVIEW_REQUIRED,
+                status=SyncStatus.FAILED_BLOCKED,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
-                diagnostic_notes=[f"Tool 2 decision {t2_decision} requires review; automatic mutation disallowed"],
+                error_message=str(e),
+                diagnostic_notes=[f"Deterministic schema error: {e}"],
             ), request)
-
-        # Map field schema
-        fields_by_name = {f["name"].strip().lower(): f for f in live_fields}
 
         # Handle CREATE
         if t2_decision == "NEW_MEDIA_CANDIDATE":
@@ -303,7 +360,16 @@ class MediaDatabaseUpdateEngine:
             return self._enrich_result(res, request)
 
         # Handle UPDATE
-        if t2_decision == "EXISTING_MEDIA_MATCH" or (request.is_human_approved and request.selected_media_row_id):
+        # Note: request.is_human_approved NEVER authorizes semantic writes or bypasses association checks (R-016)
+        if t2_decision == "EXISTING_MEDIA_MATCH" or (
+            request.selected_media_row_id and (
+                any(
+                    getattr(a, "action", None) == FieldApprovalAction.CHOOSE_ASSOCIATION
+                    for a in [request.get_approval(f) for f in request.field_approvals]
+                )
+                or t2_decision != "NEW_MEDIA_CANDIDATE"
+            )
+        ):
             target_id = request.selected_media_row_id
             if not target_id:
                 return self._enrich_result(MediaDbSyncResult(
@@ -332,6 +398,7 @@ class MediaDatabaseUpdateEngine:
             diagnostic_notes=[f"Unrecognized Tool 2 decision '{request.tool2_decision}'"],
         ), request)
 
+
     def _plan_create(
         self,
         request: MediaDbSyncRequest,
@@ -344,30 +411,93 @@ class MediaDatabaseUpdateEngine:
 
         # 1. Title
         title_val = _resolve_title(request)
-        if request.what_val and title_val == request.what_val:
-            what_st = str(request.what_state or "").lower()
-            if what_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Title" not in request.field_approvals:
+        appr_title = request.get_approval("Title")
+        if appr_title:
+            if not appr_title.has_reviewed_precondition:
+                conflicts.append("Title approval missing required reviewed precondition value")
+            elif appr_title.action == FieldApprovalAction.DEFER:
+                conflicts.append("Title review action is DEFER; manual resolution required")
+            elif appr_title.approved_value:
+                title_val = appr_title.approved_value
+        elif request.what_val and title_val == request.what_val:
+            if not is_semantic_state_eligible(request.what_state):
                 title_val = _resolve_title(MediaDbSyncRequest(
                     tracking_id=request.tracking_id,
                     current_filename=request.current_filename,
                     current_path=request.current_path,
                     parent_folder_context=request.parent_folder_context,
                 ))
-                diag_notes.append(f"Provisional WHAT state '{what_st}' excluded from authoritative Title; used fallback")
+                diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from authoritative Title; used fallback")
 
         if "title" in fields_by_name:
             diffs.append(FieldDiff(field_name="Title", old_value=None, new_value=title_val, action=FieldAction.SET))
+        else:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                error_message="Missing field in schema: Title",
+                diagnostic_notes=["Intended field 'Title' missing from schema"],
+            )
 
         # 2. Date / Incomplete Date
         date_written: Optional[str] = None
         incomplete_marker: Optional[str] = None
-        when_st = str(request.when_state or "").lower()
-        if when_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Date" not in request.field_approvals:
-            diag_notes.append(f"WHEN state '{when_st}' excluded from authoritative Date field")
+        appr_date = request.get_approval("Date")
+        if appr_date:
+            if not appr_date.has_reviewed_precondition:
+                conflicts.append("Date approval missing required reviewed precondition value")
+            elif appr_date.action == FieldApprovalAction.DEFER:
+                conflicts.append("Date review action is DEFER; manual resolution required")
+            elif appr_date.approved_value:
+                if _is_complete_date(appr_date.approved_value):
+                    date_written = appr_date.approved_value.strip().replace("/", "-")
+                    if "date" in fields_by_name:
+                        diffs.append(FieldDiff(field_name="Date", old_value=None, new_value=date_written, action=FieldAction.SET))
+                    else:
+                        return MediaDbSyncResult(
+                            tracking_id=request.tracking_id,
+                            status=SyncStatus.FAILED_BLOCKED,
+                            operation=SyncOperation.BLOCKED,
+                            review_required=True,
+                            error_message="Missing field in schema: Date",
+                            diagnostic_notes=["Intended field 'Date' missing from schema"],
+                        )
+                else:
+                    incomplete_marker = str(appr_date.approved_value).strip()
+                    if "date" in fields_by_name:
+                        diffs.append(FieldDiff(
+                            field_name="Date",
+                            old_value=None,
+                            new_value=None,
+                            action=FieldAction.PRESERVED,
+                            details=f"Incomplete date stored in Notes: {incomplete_marker}",
+                        ))
+                    else:
+                        return MediaDbSyncResult(
+                            tracking_id=request.tracking_id,
+                            status=SyncStatus.FAILED_BLOCKED,
+                            operation=SyncOperation.BLOCKED,
+                            review_required=True,
+                            error_message="Missing field in schema: Date",
+                            diagnostic_notes=["Intended field 'Date' missing from schema"],
+                        )
+        elif not is_semantic_state_eligible(request.when_state):
+            diag_notes.append(f"WHEN state '{request.when_state}' not positively eligible ('exact'/'strong'); excluded from authoritative Date field")
         elif _is_complete_date(request.when_val):
             date_written = request.when_val.strip().replace("/", "-")
             if "date" in fields_by_name:
                 diffs.append(FieldDiff(field_name="Date", old_value=None, new_value=date_written, action=FieldAction.SET))
+            else:
+                return MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.FAILED_BLOCKED,
+                    operation=SyncOperation.BLOCKED,
+                    review_required=True,
+                    error_message="Missing field in schema: Date",
+                    diagnostic_notes=["Intended field 'Date' missing from schema"],
+                )
         elif request.when_val and request.when_val.strip():
             incomplete_marker = request.when_val.strip()
             if "date" in fields_by_name:
@@ -380,35 +510,57 @@ class MediaDatabaseUpdateEngine:
                 ))
 
         # 3. Category
-        what_st = str(request.what_state or "").lower()
+        appr_cat = request.get_approval("Category")
         cat_fld = fields_by_name.get("category")
-        if cat_fld and request.what_category:
-            if what_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Category" not in request.field_approvals:
-                diag_notes.append(f"WHAT state '{what_st}' excluded from Category field")
+        target_cat = None
+        if appr_cat:
+            if not appr_cat.has_reviewed_precondition:
+                conflicts.append("Category approval missing required reviewed precondition value")
+            elif appr_cat.action == FieldApprovalAction.DEFER:
+                conflicts.append("Category review action is DEFER; manual resolution required")
             else:
-                matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), request.what_category, is_category=True)
-                if matched_cat:
-                    diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
-                elif ambig:
-                    conflicts.append(f"Ambiguous Category option for '{request.what_category}'")
-                else:
-                    conflicts.append(f"Category option '{request.what_category}' not found in live schema (creation disallowed)")
+                target_cat = appr_cat.approved_value or request.what_category
+        elif not is_semantic_state_eligible(request.what_state):
+            diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from Category field")
+        else:
+            target_cat = request.what_category
+
+        if cat_fld and target_cat:
+            matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), target_cat, is_category=True)
+            if matched_cat:
+                diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
+            elif ambig:
+                conflicts.append(f"Ambiguous Category option for '{target_cat}'")
+            else:
+                conflicts.append(f"Category option '{target_cat}' not found in live schema (creation disallowed)")
 
         # 4. Tag (Scripture verse)
         verse = _extract_scripture_verse(request.what_val, request.what_verse)
+        appr_tag = request.get_approval("Tag")
         tag_fld = fields_by_name.get("tag")
-        if tag_fld and verse:
-            if what_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Tag" not in request.field_approvals:
-                diag_notes.append(f"WHAT state '{what_st}' excluded from Tag field")
+        target_verse = None
+        if appr_tag:
+            if not appr_tag.has_reviewed_precondition:
+                conflicts.append("Tag approval missing required reviewed precondition value")
+            elif appr_tag.action == FieldApprovalAction.DEFER:
+                conflicts.append("Tag review action is DEFER; manual resolution required")
             else:
-                if tag_fld.get("type") == "multiple_select":
-                    matched_tag, _ = self._match_select_option(tag_fld.get("select_options", []), verse)
-                    if matched_tag:
-                        diffs.append(FieldDiff(field_name="Tag", old_value=None, new_value=[matched_tag], action=FieldAction.SET))
-                    else:
-                        conflicts.append(f"Scripture Tag option '{verse}' not found in live schema (creation disallowed)")
+                target_verse = appr_tag.approved_value or verse
+        elif not is_semantic_state_eligible(request.what_state):
+            diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from Tag field")
+        else:
+            target_verse = verse
+
+        if tag_fld and target_verse:
+            if tag_fld.get("type") == "multiple_select":
+                matched_tag, _ = self._match_select_option(tag_fld.get("select_options", []), target_verse)
+                if matched_tag:
+                    diffs.append(FieldDiff(field_name="Tag", old_value=None, new_value=[matched_tag], action=FieldAction.SET))
                 else:
-                    diffs.append(FieldDiff(field_name="Tag", old_value=None, new_value=verse, action=FieldAction.SET))
+                    conflicts.append(f"Scripture Tag option '{target_verse}' not found in live schema (creation disallowed)")
+            else:
+                diffs.append(FieldDiff(field_name="Tag", old_value=None, new_value=target_verse, action=FieldAction.SET))
+
 
         # 5. Language (defaults to English)
         lang_fld = fields_by_name.get("language")
@@ -432,8 +584,26 @@ class MediaDatabaseUpdateEngine:
         # 7. Filename & media_archive_path
         if "filename" in fields_by_name:
             diffs.append(FieldDiff(field_name="Filename", old_value=None, new_value=request.current_filename, action=FieldAction.SET))
+        else:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                error_message="Missing field in schema: Filename",
+                diagnostic_notes=["Intended field 'Filename' missing from schema"],
+            )
         if "media_archive_path" in fields_by_name:
             diffs.append(FieldDiff(field_name="media_archive_path", old_value=None, new_value=request.current_path, action=FieldAction.SET))
+        else:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                error_message="Missing field in schema: media_archive_path",
+                diagnostic_notes=["Intended field 'media_archive_path' missing from schema"],
+            )
 
         # 8. Notes
         notes_val = merge_notes(existing_notes=None, incomplete_date=incomplete_marker, full_date_resolved=bool(date_written))
@@ -446,14 +616,60 @@ class MediaDatabaseUpdateEngine:
                 diffs.append(FieldDiff(field_name=d_fld, old_value=None, new_value=today, action=FieldAction.SET))
 
         # 10. Country & Place, location
-        where_st = str(request.where_state or "").lower()
-        if where_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Country" not in request.field_approvals and "Place, location" not in request.field_approvals:
-            diag_notes.append(f"WHERE state '{where_st}' excluded from authoritative location fields")
-        else:
-            if request.where_country and "country" in fields_by_name:
-                diffs.append(FieldDiff(field_name="Country", old_value=None, new_value=request.where_country, action=FieldAction.SET))
-            if request.where_place and "place, location" in fields_by_name:
-                diffs.append(FieldDiff(field_name="Place, location", old_value=None, new_value=request.where_place, action=FieldAction.SET))
+        appr_country = request.get_approval("Country")
+        appr_place = request.get_approval("Place, location")
+        target_country = None
+        target_place = None
+
+        if appr_country:
+            if not appr_country.has_reviewed_precondition:
+                conflicts.append("Country approval missing required reviewed precondition value")
+            elif appr_country.action == FieldApprovalAction.DEFER:
+                conflicts.append("Country review action is DEFER; manual resolution required")
+            else:
+                target_country = appr_country.approved_value or request.where_country
+        elif is_semantic_state_eligible(request.where_state):
+            target_country = request.where_country
+
+        if appr_place:
+            if not appr_place.has_reviewed_precondition:
+                conflicts.append("Place, location approval missing required reviewed precondition value")
+            elif appr_place.action == FieldApprovalAction.DEFER:
+                conflicts.append("Place, location review action is DEFER; manual resolution required")
+            else:
+                target_place = appr_place.approved_value or request.where_place
+        elif is_semantic_state_eligible(request.where_state):
+            target_place = request.where_place
+
+        if not is_semantic_state_eligible(request.where_state) and not appr_country and not appr_place:
+            diag_notes.append(f"WHERE state '{request.where_state}' not positively eligible ('exact'/'strong'); excluded from location fields")
+
+        if target_country:
+            if "country" in fields_by_name:
+                diffs.append(FieldDiff(field_name="Country", old_value=None, new_value=target_country, action=FieldAction.SET))
+            else:
+                return MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.FAILED_BLOCKED,
+                    operation=SyncOperation.BLOCKED,
+                    review_required=True,
+                    error_message="Missing field in schema: Country",
+                    diagnostic_notes=["Intended field 'Country' missing from schema"],
+                )
+        if target_place:
+            place_fld = fields_by_name.get("place, location") or fields_by_name.get("place_location") or fields_by_name.get("location")
+            if place_fld:
+                diffs.append(FieldDiff(field_name="Place, location", old_value=None, new_value=target_place, action=FieldAction.SET))
+            else:
+                return MediaDbSyncResult(
+                    tracking_id=request.tracking_id,
+                    status=SyncStatus.FAILED_BLOCKED,
+                    operation=SyncOperation.BLOCKED,
+                    review_required=True,
+                    error_message="Missing field in schema: Place, location",
+                    diagnostic_notes=["Intended field 'Place, location' missing from schema"],
+                )
+
 
         # Preserved fields on create (unrelated fields)
         preserved = list(UNRELATED_ONLINE_FIELDS)
@@ -542,20 +758,31 @@ class MediaDatabaseUpdateEngine:
         date_needs_update = False
         new_date_val: Optional[str] = None
         date_is_incomplete = False
-        when_st = str(request.when_state or "").lower()
 
-        if "Date" in request.field_approvals:
-            appr = request.field_approvals["Date"]
-            expected_pre = appr.get("reviewed_precondition_value")
-            appr_val = appr.get("approved_value")
-            if expected_pre is None or curr_date == expected_pre:
-                date_needs_update = True
-                new_date_val = appr_val
+        appr_date = request.get_approval("Date")
+        if appr_date:
+            if not appr_date.has_reviewed_precondition:
+                conflicts.append("Date approval missing required reviewed precondition value")
+                diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=appr_date.approved_value, action=FieldAction.CONFLICT))
             else:
-                conflicts.append(f"Date approval precondition failed: DB has '{curr_date}', expected '{expected_pre}'")
-                diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=appr_val, action=FieldAction.CONFLICT))
-        elif when_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved:
-            diag_notes.append(f"WHEN state '{when_st}' excluded from authoritative Date field")
+                expected_pre = appr_date.reviewed_precondition_value
+                pre_matches = (not curr_date and not expected_pre) or (str(curr_date or "").strip() == str(expected_pre or "").strip())
+                if pre_matches:
+                    if appr_date.action == FieldApprovalAction.KEEP_DATABASE:
+                        diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=curr_date, action=FieldAction.PRESERVED))
+                    elif appr_date.action == FieldApprovalAction.DEFER:
+                        conflicts.append("Date review action is DEFER; manual resolution required")
+                        diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=curr_date, action=FieldAction.CONFLICT))
+                    else:
+                        date_needs_update = True
+                        new_date_val = appr_date.approved_value
+                else:
+                    conflicts.append(f"Date approval precondition failed: DB has '{curr_date}', expected '{expected_pre}'")
+                    diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=appr_date.approved_value, action=FieldAction.CONFLICT))
+        elif not is_semantic_state_eligible(request.when_state):
+            diag_notes.append(f"WHEN state '{request.when_state}' not positively eligible ('exact'/'strong'); excluded from Date field")
+            if curr_date:
+                diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=curr_date, action=FieldAction.PRESERVED))
         else:
             if _is_complete_date(request.when_val):
                 clean_incoming_date = request.when_val.strip().replace("/", "-")
@@ -565,135 +792,183 @@ class MediaDatabaseUpdateEngine:
                 elif curr_date == clean_incoming_date:
                     diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=curr_date, action=FieldAction.PRESERVED))
                 else:
-                    if request.is_human_approved:
-                        date_needs_update = True
-                        new_date_val = clean_incoming_date
-                    else:
-                        conflicts.append(f"Date conflict: DB has '{curr_date}', incoming is '{clean_incoming_date}'")
-                        diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=clean_incoming_date, action=FieldAction.CONFLICT))
+                    conflicts.append(f"Date conflict: DB has '{curr_date}', incoming is '{clean_incoming_date}'")
+                    diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=clean_incoming_date, action=FieldAction.CONFLICT))
             elif request.when_val and request.when_val.strip():
                 date_is_incomplete = True
+                if curr_date:
+                    diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=curr_date, action=FieldAction.PRESERVED))
 
         if date_needs_update and new_date_val and "date" in fields_by_name:
             diffs.append(FieldDiff(field_name="Date", old_value=curr_date, new_value=new_date_val, action=FieldAction.SET))
 
         # Title
         curr_title = _get_text("Title")
-        title_val = _resolve_title(request, for_create=False)
-        if "Title" in request.field_approvals:
-            title_val = request.field_approvals["Title"].get("approved_value") or title_val
-        what_st = str(request.what_state or "").lower()
-        if request.what_val and title_val == request.what_val:
-            if what_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Title" not in request.field_approvals:
-                title_val = None
-                diag_notes.append(f"WHAT state '{what_st}' excluded from Title field")
-
-        if title_val:
-            if not curr_title:
-                if "title" in fields_by_name:
-                    diffs.append(FieldDiff(field_name="Title", old_value=None, new_value=title_val, action=FieldAction.SET))
-            elif _normalize_title_text(curr_title) == _normalize_title_text(title_val):
-                diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
+        appr_title = request.get_approval("Title")
+        if appr_title:
+            if not appr_title.has_reviewed_precondition:
+                conflicts.append("Title approval missing required reviewed precondition value")
+                diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=appr_title.approved_value, action=FieldAction.CONFLICT))
             else:
-                if "Title" in request.field_approvals:
-                    appr = request.field_approvals["Title"]
-                    expected_pre = appr.get("reviewed_precondition_value")
-                    appr_val = appr.get("approved_value")
-                    if expected_pre is None or _normalize_title_text(curr_title) == _normalize_title_text(expected_pre):
-                        diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=appr_val, action=FieldAction.SET))
+                expected_pre = appr_title.reviewed_precondition_value
+                pre_matches = (not curr_title and not expected_pre) or (_normalize_title_text(curr_title) == _normalize_title_text(expected_pre))
+                if pre_matches:
+                    if appr_title.action == FieldApprovalAction.KEEP_DATABASE:
+                        diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
+                    elif appr_title.action == FieldApprovalAction.DEFER:
+                        conflicts.append("Title review action is DEFER; manual resolution required")
+                        diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.CONFLICT))
                     else:
-                        conflicts.append(f"Title approval precondition failed: DB has '{curr_title}', expected '{expected_pre}'")
-                        diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=appr_val, action=FieldAction.CONFLICT))
-                elif request.is_human_approved:
-                    diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=title_val, action=FieldAction.SET))
+                        diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=appr_title.approved_value, action=FieldAction.SET))
+                else:
+                    conflicts.append(f"Title approval precondition failed: DB has '{curr_title}', expected '{expected_pre}'")
+                    diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=appr_title.approved_value, action=FieldAction.CONFLICT))
+        else:
+            title_val = _resolve_title(request, for_create=False)
+            if request.what_val and title_val == request.what_val and not is_semantic_state_eligible(request.what_state):
+                title_val = None
+                diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from Title field")
+
+            if title_val:
+                if not curr_title:
+                    if "title" in fields_by_name:
+                        diffs.append(FieldDiff(field_name="Title", old_value=None, new_value=title_val, action=FieldAction.SET))
+                elif _normalize_title_text(curr_title) == _normalize_title_text(title_val):
+                    diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
                 else:
                     conflicts.append(f"Title conflict: DB has '{curr_title}', incoming resolved '{title_val}'")
                     diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=title_val, action=FieldAction.CONFLICT))
-        else:
-            if curr_title:
-                diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
+            else:
+                if curr_title:
+                    diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
 
         # Category
         curr_cat = _get_text("Category")
-        if request.what_category and "category" in fields_by_name:
-            cat_fld = fields_by_name["category"]
-            if what_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Category" not in request.field_approvals:
-                diag_notes.append(f"WHAT state '{what_st}' excluded from Category field")
+        appr_cat = request.get_approval("Category")
+        if appr_cat:
+            if not appr_cat.has_reviewed_precondition:
+                conflicts.append("Category approval missing required reviewed precondition value")
+                diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=appr_cat.approved_value, action=FieldAction.CONFLICT))
             else:
-                matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), request.what_category, is_category=True)
-                if matched_cat:
-                    if not curr_cat:
-                        diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
-                    elif _normalize_category_key(curr_cat) == _normalize_category_key(matched_cat):
+                expected_pre = appr_cat.reviewed_precondition_value
+                pre_matches = (not curr_cat and not expected_pre) or (_normalize_category_key(curr_cat) == _normalize_category_key(expected_pre))
+                if pre_matches:
+                    if appr_cat.action == FieldApprovalAction.KEEP_DATABASE:
                         diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
+                    elif appr_cat.action == FieldApprovalAction.DEFER:
+                        conflicts.append("Category review action is DEFER; manual resolution required")
+                        diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.CONFLICT))
                     else:
-                        if "Category" in request.field_approvals:
-                            appr = request.field_approvals["Category"]
-                            expected_pre = appr.get("reviewed_precondition_value")
-                            appr_val = appr.get("approved_value")
-                            if expected_pre is None or _normalize_category_key(curr_cat) == _normalize_category_key(expected_pre):
-                                diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=appr_val, action=FieldAction.SET))
+                        target_cat = appr_cat.approved_value or request.what_category
+                        cat_fld = fields_by_name.get("category")
+                        if cat_fld and target_cat:
+                            matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), target_cat, is_category=True)
+                            if matched_cat:
+                                diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=matched_cat, action=FieldAction.SET))
+                            elif ambig:
+                                conflicts.append(f"Ambiguous Category option for '{target_cat}'")
                             else:
-                                conflicts.append(f"Category approval precondition failed: DB has '{curr_cat}', expected '{expected_pre}'")
-                                diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=appr_val, action=FieldAction.CONFLICT))
-                        elif request.is_human_approved:
-                            diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=matched_cat, action=FieldAction.SET))
-                        else:
-                            conflicts.append(f"Category conflict: DB has '{curr_cat}', incoming is '{matched_cat}'")
-                            diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=matched_cat, action=FieldAction.CONFLICT))
-                elif ambig:
-                    conflicts.append(f"Ambiguous Category option for '{request.what_category}'")
+                                conflicts.append(f"Category option '{target_cat}' not found in live schema")
                 else:
-                    conflicts.append(f"Category option '{request.what_category}' not found in live schema")
+                    conflicts.append(f"Category approval precondition failed: DB has '{curr_cat}', expected '{expected_pre}'")
+                    diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=appr_cat.approved_value, action=FieldAction.CONFLICT))
+        elif not is_semantic_state_eligible(request.what_state):
+            diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from Category field")
+            if curr_cat:
+                diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
+        elif request.what_category and "category" in fields_by_name:
+            cat_fld = fields_by_name["category"]
+            matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), request.what_category, is_category=True)
+            if matched_cat:
+                if not curr_cat:
+                    diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
+                elif _normalize_category_key(curr_cat) == _normalize_category_key(matched_cat):
+                    diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
+                else:
+                    conflicts.append(f"Category conflict: DB has '{curr_cat}', incoming is '{matched_cat}'")
+                    diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=matched_cat, action=FieldAction.CONFLICT))
+            elif ambig:
+                conflicts.append(f"Ambiguous Category option for '{request.what_category}'")
+            else:
+                conflicts.append(f"Category option '{request.what_category}' not found in live schema")
+        else:
+            if curr_cat:
+                diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
 
         # Country & Place, location
-        where_st = str(request.where_state or "").lower()
-        if where_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Country" not in request.field_approvals and "Place, location" not in request.field_approvals:
-            diag_notes.append(f"WHERE state '{where_st}' excluded from authoritative location fields")
+        appr_country = request.get_approval("Country")
+        curr_country = _get_text("Country")
+        if appr_country:
+            if not appr_country.has_reviewed_precondition:
+                conflicts.append("Country approval missing required reviewed precondition value")
+                diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=appr_country.approved_value, action=FieldAction.CONFLICT))
+            else:
+                expected_pre = appr_country.reviewed_precondition_value
+                pre_matches = (not curr_country and not expected_pre) or are_countries_equivalent(curr_country, expected_pre)
+                if pre_matches:
+                    if appr_country.action == FieldApprovalAction.KEEP_DATABASE:
+                        diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.PRESERVED))
+                    elif appr_country.action == FieldApprovalAction.DEFER:
+                        conflicts.append("Country review action is DEFER; manual resolution required")
+                        diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.CONFLICT))
+                    else:
+                        target_c = appr_country.approved_value or request.where_country
+                        diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=target_c, action=FieldAction.SET))
+                else:
+                    conflicts.append(f"Country approval precondition failed: DB has '{curr_country}', expected '{expected_pre}'")
+                    diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=appr_country.approved_value, action=FieldAction.CONFLICT))
+        elif not is_semantic_state_eligible(request.where_state):
+            diag_notes.append(f"WHERE state '{request.where_state}' not positively eligible ('exact'/'strong'); excluded from Country field")
+            if curr_country:
+                diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.PRESERVED))
+        elif request.where_country and "country" in fields_by_name:
+            if not curr_country:
+                diffs.append(FieldDiff(field_name="Country", old_value=None, new_value=request.where_country, action=FieldAction.SET))
+            elif are_countries_equivalent(curr_country, request.where_country):
+                diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.PRESERVED))
+            else:
+                conflicts.append(f"Country conflict: DB has '{curr_country}', incoming is '{request.where_country}'")
+                diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=request.where_country, action=FieldAction.CONFLICT))
         else:
-            curr_country = _get_text("Country")
-            if request.where_country and "country" in fields_by_name:
-                if not curr_country:
-                    diffs.append(FieldDiff(field_name="Country", old_value=None, new_value=request.where_country, action=FieldAction.SET))
-                elif are_countries_equivalent(curr_country, request.where_country):
-                    diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.PRESERVED))
-                else:
-                    if "Country" in request.field_approvals:
-                        appr = request.field_approvals["Country"]
-                        expected_pre = appr.get("reviewed_precondition_value")
-                        appr_val = appr.get("approved_value")
-                        if expected_pre is None or are_countries_equivalent(curr_country, expected_pre):
-                            diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=appr_val, action=FieldAction.SET))
-                        else:
-                            conflicts.append(f"Country approval precondition failed: DB has '{curr_country}', expected '{expected_pre}'")
-                            diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=appr_val, action=FieldAction.CONFLICT))
-                    elif request.is_human_approved:
-                        diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=request.where_country, action=FieldAction.SET))
-                    else:
-                        conflicts.append(f"Country conflict: DB has '{curr_country}', incoming is '{request.where_country}'")
-                        diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=request.where_country, action=FieldAction.CONFLICT))
+            if curr_country:
+                diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.PRESERVED))
 
-            curr_place = _get_text("Place, location")
-            if request.where_place and "place, location" in fields_by_name:
-                if not curr_place:
-                    diffs.append(FieldDiff(field_name="Place, location", old_value=None, new_value=request.where_place, action=FieldAction.SET))
-                elif _normalize_option_text(curr_place) == _normalize_option_text(request.where_place):
-                    diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
-                else:
-                    if "Place, location" in request.field_approvals:
-                        appr = request.field_approvals["Place, location"]
-                        expected_pre = appr.get("reviewed_precondition_value")
-                        appr_val = appr.get("approved_value")
-                        if expected_pre is None or _normalize_option_text(curr_place) == _normalize_option_text(expected_pre):
-                            diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=appr_val, action=FieldAction.SET))
-                        else:
-                            conflicts.append(f"Place approval precondition failed: DB has '{curr_place}', expected '{expected_pre}'")
-                            diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=appr_val, action=FieldAction.CONFLICT))
-                    elif request.is_human_approved:
-                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=request.where_place, action=FieldAction.SET))
+        appr_place = request.get_approval("Place, location")
+        curr_place = _get_text("Place, location")
+        if appr_place:
+            if not appr_place.has_reviewed_precondition:
+                conflicts.append("Place, location approval missing required reviewed precondition value")
+                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=appr_place.approved_value, action=FieldAction.CONFLICT))
+            else:
+                expected_pre = appr_place.reviewed_precondition_value
+                pre_matches = (not curr_place and not expected_pre) or (_normalize_option_text(curr_place) == _normalize_option_text(expected_pre))
+                if pre_matches:
+                    if appr_place.action == FieldApprovalAction.KEEP_DATABASE:
+                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+                    elif appr_place.action == FieldApprovalAction.DEFER:
+                        conflicts.append("Place, location review action is DEFER; manual resolution required")
+                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.CONFLICT))
                     else:
-                        conflicts.append(f"Place conflict: DB has '{curr_place}', incoming is '{request.where_place}'")
-                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=request.where_place, action=FieldAction.CONFLICT))
+                        target_p = appr_place.approved_value or request.where_place
+                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=target_p, action=FieldAction.SET))
+                else:
+                    conflicts.append(f"Place approval precondition failed: DB has '{curr_place}', expected '{expected_pre}'")
+                    diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=appr_place.approved_value, action=FieldAction.CONFLICT))
+        elif not is_semantic_state_eligible(request.where_state):
+            diag_notes.append(f"WHERE state '{request.where_state}' not positively eligible ('exact'/'strong'); excluded from Place, location field")
+            if curr_place:
+                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+        elif request.where_place and "place, location" in fields_by_name:
+            if not curr_place:
+                diffs.append(FieldDiff(field_name="Place, location", old_value=None, new_value=request.where_place, action=FieldAction.SET))
+            elif _normalize_option_text(curr_place) == _normalize_option_text(request.where_place):
+                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+            else:
+                conflicts.append(f"Place conflict: DB has '{curr_place}', incoming is '{request.where_place}'")
+                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=request.where_place, action=FieldAction.CONFLICT))
+        else:
+            if curr_place:
+                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
 
         # Tag (Additive / union)
         verse = _extract_scripture_verse(request.what_val, request.what_verse)
@@ -708,25 +983,60 @@ class MediaDatabaseUpdateEngine:
         elif isinstance(curr_tags_raw, str) and curr_tags_raw.strip():
             curr_tags.append(curr_tags_raw.strip())
 
-        if verse and "tag" in fields_by_name:
-            tag_fld = fields_by_name["tag"]
-            if what_st in ("provisional", "ambiguous", "unresolved") and not request.is_human_approved and "Tag" not in request.field_approvals:
-                diag_notes.append(f"WHAT state '{what_st}' excluded from Tag field")
+        appr_tag = request.get_approval("Tag")
+        if appr_tag:
+            if not appr_tag.has_reviewed_precondition:
+                conflicts.append("Tag approval missing required reviewed precondition value")
+                diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=appr_tag.approved_value, action=FieldAction.CONFLICT))
             else:
-                if tag_fld.get("type") == "multiple_select":
-                    matched_verse_opt, _ = self._match_select_option(tag_fld.get("select_options", []), verse)
-                    if matched_verse_opt:
-                        if matched_verse_opt not in curr_tags:
-                            new_tags = list(curr_tags) + [matched_verse_opt]
-                            diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=new_tags, action=FieldAction.SET))
-                        else:
-                            diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
+                expected_pre = appr_tag.reviewed_precondition_value
+                pre_matches = (not curr_tags and not expected_pre) or (curr_tags == expected_pre) or (isinstance(expected_pre, str) and expected_pre in curr_tags)
+                if pre_matches:
+                    if appr_tag.action == FieldApprovalAction.KEEP_DATABASE:
+                        diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
+                    elif appr_tag.action == FieldApprovalAction.DEFER:
+                        conflicts.append("Tag review action is DEFER; manual resolution required")
+                        diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.CONFLICT))
                     else:
-                        conflicts.append(f"Scripture Tag option '{verse}' not found in live schema")
+                        t_val = appr_tag.approved_value or verse
+                        tag_fld = fields_by_name.get("tag")
+                        if tag_fld:
+                            if tag_fld.get("type") == "multiple_select":
+                                matched_verse_opt, _ = self._match_select_option(tag_fld.get("select_options", []), t_val)
+                                if matched_verse_opt:
+                                    new_tags = list(curr_tags) + ([matched_verse_opt] if matched_verse_opt not in curr_tags else [])
+                                    diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=new_tags, action=FieldAction.SET))
+                                else:
+                                    conflicts.append(f"Scripture Tag option '{t_val}' not found in live schema")
+                            else:
+                                diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=[t_val], action=FieldAction.SET))
                 else:
-                    if verse not in curr_tags:
-                        new_tags = list(curr_tags) + [verse]
+                    conflicts.append(f"Tag approval precondition failed: DB has '{curr_tags}', expected '{expected_pre}'")
+                    diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=appr_tag.approved_value, action=FieldAction.CONFLICT))
+        elif not is_semantic_state_eligible(request.what_state):
+            diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from Tag field")
+            if curr_tags:
+                diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
+        elif verse and "tag" in fields_by_name:
+            tag_fld = fields_by_name["tag"]
+            if tag_fld.get("type") == "multiple_select":
+                matched_verse_opt, _ = self._match_select_option(tag_fld.get("select_options", []), verse)
+                if matched_verse_opt:
+                    if matched_verse_opt not in curr_tags:
+                        new_tags = list(curr_tags) + [matched_verse_opt]
                         diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=new_tags, action=FieldAction.SET))
+                    else:
+                        diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
+                else:
+                    conflicts.append(f"Scripture Tag option '{verse}' not found in live schema")
+            else:
+                if verse not in curr_tags:
+                    new_tags = list(curr_tags) + [verse]
+                    diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=new_tags, action=FieldAction.SET))
+        else:
+            if curr_tags:
+                diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
+
 
         # Notes Merge
         curr_notes = _get_text("Notes")
@@ -875,7 +1185,16 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=[redact_secrets(f"Pre-create live check failed with exception: {e}")],
             )
 
-        if not fresh_rev or fresh_rev.decision != "NEW_MEDIA_CANDIDATE":
+        if not fresh_rev:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                diagnostic_notes=["Pre-create race guard: Tool 2 returned no review result"],
+            )
+
+        if fresh_rev.decision != "NEW_MEDIA_CANDIDATE":
             decision_str = fresh_rev.decision if fresh_rev else "None"
             return MediaDbSyncResult(
                 tracking_id=request.tracking_id,
@@ -888,7 +1207,29 @@ class MediaDatabaseUpdateEngine:
                 ],
             )
 
-        # 2. Re-fetch live table fields to build payload with valid field existence (R-006)
+        # R-013: Strict Tool 2 verification of live and complete candidate check
+        live_read_complete = getattr(fresh_rev, "live_read_complete", None)
+        snapshot_complete = getattr(fresh_rev, "snapshot_complete", None)
+        baserow_check_complete = getattr(fresh_rev, "baserow_check_complete", None)
+        database_state = getattr(fresh_rev, "database_state", "LIVE_HEALTHY")
+
+        if (
+            live_read_complete is False
+            or snapshot_complete is False
+            or baserow_check_complete is False
+            or database_state in ("LIVE_PARTIAL_OR_FAILED", "OFFLINE", "UNAVAILABLE", "PARTIAL", "STALE_OR_INCOMPLETE")
+        ):
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                diagnostic_notes=[
+                    f"Pre-create race guard: Tool 2 check incomplete or non-live (live_read={live_read_complete}, snapshot={snapshot_complete}, baserow_check={baserow_check_complete}, state={database_state})"
+                ],
+            )
+
+        # 2. Re-fetch live table fields to build payload with valid field existence (R-006, R-017)
         try:
             live_fields = self.write_adapter.fetch_table_fields()
         except BaserowUnavailableError as e:
@@ -908,18 +1249,56 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=[f"Failed to fetch live schema in commit_create: {e}"],
             )
 
-        fields_by_name = {f["name"].strip().lower(): f for f in live_fields}
+        try:
+            fields_by_name = index_fields_by_name(live_fields)
+        except BaserowSchemaError as e:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                error_message=str(e),
+                diagnostic_notes=[f"Ambiguous or duplicate field in live schema: {e}"],
+            )
 
+        # Pre-validate EVERY planned SET field against the live schema snapshot BEFORE any option creation or DB write (R-017)
         payload: Dict[str, Any] = {}
         for diff in plan.field_diffs:
             if diff.action == FieldAction.SET:
-                f_def = fields_by_name.get(diff.field_name.strip().lower())
-                if not f_def:
-                    logger.warning(f"Field '{diff.field_name}' not found in live table schema; skipping from create payload")
-                    continue
+                norm_name = diff.field_name.strip().lower()
+                if norm_name not in fields_by_name:
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        review_required=True,
+                        error_message=f"Intended field '{diff.field_name}' not found in live table schema",
+                        diagnostic_notes=[f"Schema mismatch: field '{diff.field_name}' missing from live table"],
+                    )
+                f_def = fields_by_name[norm_name]
+                if f_def.get("read_only"):
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        review_required=True,
+                        error_message=f"Field '{diff.field_name}' is read-only",
+                        diagnostic_notes=[f"Schema error: field '{diff.field_name}' is read-only"],
+                    )
+                try:
+                    validate_field_schema(f_def["name"], diff.new_value, f_def)
+                except BaserowSchemaError as e:
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        review_required=True,
+                        error_message=str(e),
+                        diagnostic_notes=[f"Deterministic schema validation error on field '{diff.field_name}': {e}"],
+                    )
                 payload[f_def["name"]] = diff.new_value
 
-        # 3. Ensure Country / Place, location select options if needed
+        # 3. Ensure Country / Place, location select options only after full payload schema validation
         for fld_name in ("Country", "Place, location"):
             val = payload.get(fld_name)
             if val and isinstance(val, str):
@@ -935,6 +1314,15 @@ class MediaDatabaseUpdateEngine:
                         conflicts=[str(e)],
                         diagnostic_notes=[f"Ambiguous select option in {fld_name}: {e}"],
                     )
+                except (BaserowSchemaError, TaxonomyForbiddenError) as e:
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        review_required=True,
+                        error_message=str(e),
+                        diagnostic_notes=[f"Schema error ensuring select option for {fld_name}: {e}"],
+                    )
                 except Exception as e:
                     return MediaDbSyncResult(
                         tracking_id=request.tracking_id,
@@ -944,28 +1332,7 @@ class MediaDatabaseUpdateEngine:
                         diagnostic_notes=[f"Failed to ensure select option for {fld_name}: {e}"],
                     )
 
-        # 4. Live Schema Type Validation (R-006)
-        try:
-            live_fields = self.write_adapter.fetch_table_fields()
-            fields_by_name = {f["name"].strip().lower(): f for f in live_fields}
-        except Exception:
-            pass
-
-        for f_name, val in list(payload.items()):
-            f_def = fields_by_name[f_name.strip().lower()]
-            try:
-                validate_field_schema(f_name, val, f_def)
-            except BaserowSchemaError as e:
-                return MediaDbSyncResult(
-                    tracking_id=request.tracking_id,
-                    status=SyncStatus.FAILED_BLOCKED,
-                    operation=SyncOperation.BLOCKED,
-                    review_required=True,
-                    error_message=str(e),
-                    diagnostic_notes=[f"Deterministic schema validation error on field '{f_name}': {e}"],
-                )
-
-        # 5. Perform write
+        # 4. Perform write
         try:
             created_row = self.write_adapter.create_row(payload)
             new_id = created_row.get("id")
@@ -1052,7 +1419,7 @@ class MediaDatabaseUpdateEngine:
                         diagnostic_notes=["Pre-update revalidation failed: collaborator changed planned-modified field"],
                     )
 
-        # 3. Build minimal PATCH payload, verifying existence against live schema (R-006)
+        # 3. Build minimal PATCH payload, verifying existence against fresh live schema (R-006, R-017)
         try:
             live_fields = self.write_adapter.fetch_table_fields()
         except BaserowUnavailableError as e:
@@ -1072,15 +1439,54 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=[f"Failed to fetch live schema in commit_update: {e}"],
             )
 
-        fields_by_name = {f["name"].strip().lower(): f for f in live_fields}
+        try:
+            fields_by_name = index_fields_by_name(live_fields)
+        except BaserowSchemaError as e:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                error_message=str(e),
+                diagnostic_notes=[f"Deterministic schema error in commit_update: {e}"],
+            )
 
+        # Pre-validate EVERY planned SET field against the live schema snapshot BEFORE any option creation or DB write (R-017)
         payload: Dict[str, Any] = {}
         for diff in plan.field_diffs:
             if diff.action == FieldAction.SET:
-                f_def = fields_by_name.get(diff.field_name.strip().lower())
-                if not f_def:
-                    logger.warning(f"Field '{diff.field_name}' not found in live table schema; skipping from update payload")
-                    continue
+                norm_name = diff.field_name.strip().lower()
+                if norm_name not in fields_by_name:
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        review_required=True,
+                        error_message=f"Intended field '{diff.field_name}' not found in live table schema",
+                        diagnostic_notes=[f"Schema mismatch: field '{diff.field_name}' missing from live table"],
+                    )
+                f_def = fields_by_name[norm_name]
+                if f_def.get("read_only"):
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        review_required=True,
+                        error_message=f"Field '{diff.field_name}' is read-only",
+                        diagnostic_notes=[f"Schema error: field '{diff.field_name}' is read-only"],
+                    )
+                try:
+                    validate_field_schema(f_def["name"], diff.new_value, f_def)
+                except BaserowSchemaError as e:
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        media_row_id=row_id,
+                        review_required=True,
+                        error_message=str(e),
+                        diagnostic_notes=[f"Deterministic schema validation error on field '{diff.field_name}': {e}"],
+                    )
                 payload[f_def["name"]] = diff.new_value
 
         # 4. Ensure select options if country / location are being set
@@ -1100,30 +1506,18 @@ class MediaDatabaseUpdateEngine:
                         conflicts=[str(e)],
                         diagnostic_notes=[f"Ambiguous select option in {fld_name}: {e}"],
                     )
+                except (BaserowSchemaError, TaxonomyForbiddenError) as e:
+                    return MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.FAILED_BLOCKED,
+                        operation=SyncOperation.BLOCKED,
+                        media_row_id=row_id,
+                        review_required=True,
+                        error_message=str(e),
+                        diagnostic_notes=[f"Schema error ensuring select option for {fld_name}: {e}"],
+                    )
 
-        # 5. Live Schema Type Validation (R-006)
-        try:
-            live_fields = self.write_adapter.fetch_table_fields()
-            fields_by_name = {f["name"].strip().lower(): f for f in live_fields}
-        except Exception:
-            pass
-
-        for f_name, val in list(payload.items()):
-            f_def = fields_by_name[f_name.strip().lower()]
-            try:
-                validate_field_schema(f_name, val, f_def)
-            except BaserowSchemaError as e:
-                return MediaDbSyncResult(
-                    tracking_id=request.tracking_id,
-                    status=SyncStatus.FAILED_BLOCKED,
-                    operation=SyncOperation.BLOCKED,
-                    media_row_id=row_id,
-                    review_required=True,
-                    error_message=str(e),
-                    diagnostic_notes=[f"Deterministic schema validation error on field '{f_name}': {e}"],
-                )
-
-        # 6. Send minimal PATCH
+        # 5. Send minimal PATCH
         try:
             self.write_adapter.patch_row(row_id, payload)
             plan.status = SyncStatus.SYNCED

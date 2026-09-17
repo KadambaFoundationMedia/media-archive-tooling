@@ -201,24 +201,27 @@ def run_evaluation():
         if has_path_conflict:
             archive_path_conflicts += 1
 
-        # Representative diffs collection (R-011)
+        # Representative diffs collection (R-011, R-021)
         if res.operation == SyncOperation.UPDATE and len(representative_diffs["matched_updates"]) < 3:
             representative_diffs["matched_updates"].append({
                 "tracking_id": tid,
                 "filename": p.current_filename,
                 "media_row_id": res.media_row_id,
+                "fields_preserved": res.fields_preserved,
                 "field_diffs": [d.model_dump() for d in res.field_diffs],
             })
         if res.operation == SyncOperation.CREATE and len(representative_diffs["candidate_creates"]) < 3:
             representative_diffs["candidate_creates"].append({
                 "tracking_id": tid,
                 "filename": p.current_filename,
+                "fields_preserved": res.fields_preserved,
                 "field_diffs": [d.model_dump() for d in res.field_diffs],
             })
         if (has_partial_date or has_partial_date_note) and len(representative_diffs["partial_date_notes"]) < 3:
             representative_diffs["partial_date_notes"].append({
                 "tracking_id": tid,
                 "filename": p.current_filename,
+                "fields_preserved": res.fields_preserved,
                 "field_diffs": [d.model_dump() for d in res.field_diffs],
             })
         if res.status == SyncStatus.REVIEW_REQUIRED and len(representative_diffs["conflict_blocked"]) < 3:
@@ -226,6 +229,7 @@ def run_evaluation():
                 "tracking_id": tid,
                 "filename": p.current_filename,
                 "conflicts": res.conflicts,
+                "fields_preserved": res.fields_preserved,
                 "field_diffs": [d.model_dump() for d in res.field_diffs],
             })
 
@@ -237,6 +241,7 @@ def run_evaluation():
             "operation": res.operation.value,
             "media_row_id": res.media_row_id,
             "fields_modified": res.fields_modified,
+            "fields_preserved": res.fields_preserved,
             "conflicts": res.conflicts,
             "diagnostic_notes": res.diagnostic_notes,
         })
@@ -257,7 +262,22 @@ def run_evaluation():
     print(f"country/location option additions proposed: {country_location_options_proposed}")
     print(f"archive-path representation conflicts: {archive_path_conflicts}")
 
+    import subprocess
+    from datetime import datetime, timezone
+    try:
+        commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        commit_sha = "unknown"
+
     eval_summary = {
+        "evaluated_commit": commit_sha,
+        "run_timestamp": datetime.now(timezone.utc).isoformat(),
+        "live_reference_info": {
+            "media_table_id": config.baserow_media_table_id,
+            "category_table_id": config.baserow_category_table_id,
+            "travel_schedule_table_id": config.baserow_travel_schedule_table_id,
+            "snapshot_path": str(config.baserow_snapshot_path) if config.baserow_snapshot_path else None,
+        },
         "total_files": total_files,
         "would_update_existing_rows": would_update,
         "would_create_new_rows": would_create,
