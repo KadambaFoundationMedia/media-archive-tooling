@@ -68,7 +68,7 @@ def make_mock_tool2(
 ):
     mock_t2 = MagicMock()
 
-    def _review_file(tid: str, force_refresh: bool = False):
+    def _review_file(tid: str, force_refresh: bool = False, auto_enrich: bool = True):
         dec_enum = None
         for d in ReviewDecision:
             if d.value == decision:
@@ -2716,7 +2716,7 @@ def test_73_cli_run_renamer_production_pipeline_orchestration(tmp_path, monkeypa
         ]
     mock_t2.review_batch.side_effect = fake_review_batch
 
-    def fake_review_file(tid: str, force_refresh: bool = False):
+    def fake_review_file(tid: str, force_refresh: bool = False, auto_enrich: bool = True):
         return MediaDatabaseReviewResult(
             tracking_id=tid,
             decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
@@ -3212,7 +3212,7 @@ def test_73_g_cli_run_renamer_allows_valid_no_schedule_support_to_continue(tmp_p
         ]
     mock_t2.review_batch.side_effect = fake_review_batch
 
-    def fake_t2_review_file(tid, force_refresh=False):
+    def fake_t2_review_file(tid, force_refresh=False, auto_enrich=True):
         return MediaDatabaseReviewResult(
             tracking_id=tid,
             decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
@@ -3484,6 +3484,41 @@ def test_80_r036_build_sync_request_force_refresh_failure(tmp_path):
     res = service_err.synchronize("trk0080", commit=True, request=req)
     assert res.status == SyncStatus.DATABASE_UNAVAILABLE
     assert res.operation == SyncOperation.BLOCKED
+
+
+def test_80_tool4_tool2_rechecks_never_mutate_finalized_renamer_state(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(
+        registry,
+        tracking_id="trk0080_readonly",
+        filename="2008-04-DD_KKS_SB-3-1-20_cz.mp3",
+        date_val="2008-04-DD",
+        what_val="SB-3-1-20",
+        what_category="Srimad Bhagavatam",
+        place=None,
+        country="Czech Republic",
+        country_iso="cz",
+    )
+    live_fields = FakeBaserowWriteAdapter().fields
+    for field in live_fields:
+        if field["name"] == "Tag":
+            field["type"] = "text"
+            field.pop("select_options", None)
+    fake_db = FakeBaserowWriteAdapter(initial_fields=live_fields)
+    mock_t2 = make_mock_tool2(
+        decision="NEW_MEDIA_CANDIDATE",
+        tracking_id="trk0080_readonly",
+    )
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    request = service.build_sync_request("trk0080_readonly", force_refresh=True)
+    result = service.synchronize("trk0080_readonly", commit=True, request=request)
+
+    assert result.status == SyncStatus.SYNCED
+    assert result.operation == SyncOperation.CREATE
+    assert mock_t2.review_file.call_count >= 2
+    for call in mock_t2.review_file.call_args_list:
+        assert call.kwargs.get("auto_enrich") is False
 
 
 # ---------------------------------------------------------------------------

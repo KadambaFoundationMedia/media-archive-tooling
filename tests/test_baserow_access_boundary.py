@@ -67,7 +67,7 @@ def make_mock_tool2(
 ):
     mock_t2 = MagicMock()
 
-    def _review_file(tid: str, force_refresh: bool = False):
+    def _review_file(tid: str, force_refresh: bool = False, auto_enrich: bool = True):
         dec_enum = None
         for d in ReviewDecision:
             if d.value == decision:
