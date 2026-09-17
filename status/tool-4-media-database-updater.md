@@ -199,7 +199,7 @@ GitHub Actions failed on correction commit `fb9cb72` and again on branch tip `b2
 - failing test: `tests/test_baserow_access_boundary.py::test_rule_5_tool3_operates_offline_from_verified_artifact`;
 - failure: `TravelReferenceStore(provider=None).load_reference()` returned `None` because the clean checkout has no default `.renamer/reference/travel_schedule.json` artifact.
 
-The test currently passes only in an environment that already has the developer's local verified schedule file. GitHub Actions starts from a clean checkout, so this is a non-hermetic test. The Node.js 20 deprecation annotation is a warning and is not the cause of the failed run.
+The test currently passes only in an environment that already has the developer's local verified schedule file. GitHub Actions starts from a clean checkout, so this is a non-hermetic test. The Node.js 20 deprecation annotation was a warning and was not the cause of the failed run.
 
 Resolution:
 
@@ -212,6 +212,10 @@ Resolution:
 - GitHub Actions `Python 3.12 tests`: PASS on exact fix commit `ce01d85` — https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35231148945/job/105235270006.
 
 The Builder must preserve this hermetic fixture behavior and must not restore reliance on ignored developer-local `.renamer/` state.
+
+## Planner CI maintenance
+
+Following the successful R-030 correction, the planner updated the workflow from `actions/checkout@v4` to `actions/checkout@v5` and from `actions/setup-python@v5` to `actions/setup-python@v6`. These are the minimal official Node.js 24 runtime upgrades for the two actions and remove the Node.js 20 deprecation warning. The Builder must preserve these versions or a later reviewed Node.js 24-compatible major.
 
 ## Resolved requirement clarification
 
