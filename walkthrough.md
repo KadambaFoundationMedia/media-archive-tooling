@@ -1,194 +1,90 @@
-# Tool 3 — Travel Schedule Reviewer Implementation Walkthrough
+# Tool 4 (Media Database Updater) Walkthrough & Verification
 
-Tool 3 (Travel Schedule Reviewer) has been implemented, refined, and verified against test suite and evaluation protocol on branch `tool-3-implementation` (PR #26) in accordance with:
-- `docs/tool-3-travel-schedule-reviewer-build-plan.md`
-- `docs/baserow-live-data-policy.md` (static reference bootstrap exception)
-- `docs/builder-git-sandbox-policy.md`
-- `docs/implementation-protocol.md`
+All 12 independent review findings (R-001 through R-012) from `status/tool-4-media-database-updater.md` have been resolved on branch `tool-4-implementation`.
 
-Historical walkthrough documentation for previous tools is preserved in:
-- [docs/tool-1-renamer-walkthrough.md](docs/tool-1-renamer-walkthrough.md)
-- [docs/tool-2-media-database-reviewer-walkthrough.md](docs/tool-2-media-database-reviewer-walkthrough.md)
-- [docs/tool-3-travel-schedule-reviewer-walkthrough.md](docs/tool-3-travel-schedule-reviewer-walkthrough.md)
+## Changes Summary
 
----
+### 1. Pre-Create Tool 2 Revalidation Race Guard (R-001)
+- In `MediaDatabaseUpdateEngine._commit_create()`, invocation of Tool 2's fresh review (`review_file(..., force_refresh=True)`) is now a hard precondition.
+- If `tool2_service` is absent, or if the live check raises an exception or returns an incomplete decision, the create commit fails immediately with `DATABASE_UNAVAILABLE` / `operation=BLOCKED` / `review_required=True`. `create_row` is never reached.
+- If the live Tool 2 check resolves to anything other than `NEW_MEDIA_CANDIDATE`, the operation is blocked with `COLLABORATOR_NEW_ROW_CREATED`.
+- Added unit regressions: `test_49_pre_create_missing_tool2_service_blocks_with_database_unavailable`, `test_50_pre_create_tool2_exception_blocks_safely`.
 
-## 1. Summary of Architecture & Component Implementation
+### 2. Pre-Update Dynamic Relevant-Field Comparison (R-002)
+- In `_commit_update()`, replaced the fixed field list with dynamic inspection of all fields Tool 4 intends to modify (`plan.field_diffs` where `action == FieldAction.SET`), explicitly including `Notes` and `Tag`.
+- Concurrent modifications on planned fields block the update with `COLLABORATOR_CONFLICT` and route to review. Unrelated concurrent edits (e.g. `Youtube`) remain untouched and safe.
+- Verified in `test_07_collaborator_relevant_field_change_blocks_stale_write` and `test_08_collaborator_unrelated_field_change_preserved_by_minimal_patch`.
 
-Tool 3 provides supporting and contextual evidence by evaluating planned travel schedule data against local audio files and upstream Tool 1 / Tool 2 metadata:
+### 3. Resolution State Eligibility & Provenance (R-003)
+- Carried Tool 1 resolution states (`when_state`, `what_state`, `where_state`) through `MediaDbSyncRequest`.
+- Allowed automatic writes only for exact/strong evidence. Excluded provisional, ambiguous, and unresolved evidence from authoritative database writes.
+- Verified in `test_19_provisional_schedule_derived_date_location_not_written`.
 
-1. **Baserow Provider Extension (`media_db_reviewer/baserow_provider.py`)**:
-   - Added `fetch_all_travel_schedule_rows()` to retrieve the complete static `travel_schedule` table via paginated read-only HTTP GET requests.
-   - Enforces required `travel_schedule_table_id`; missing configuration cleanly raises `BaserowUnavailableError`.
+### 4. Post-Commit Outbox Integration into Real Production Paths (R-004)
+- Added `media_db_updater_service` injection into `BatchExecutor.commit_proposals()`, recording `PENDING_SYNC` outbox entries for successful renames.
+- Wired updater service into CLI entry points (`run_renamer`, `run_review`) and Review Portal composition root (`configure_review_context`).
+- Maintained zero mutations on dry-run and approval paths. Verified in `test_41`, `test_42`, `test_43`.
 
-2. **Data Models (`travel_reviewer/models.py`)**:
-   - `TravelReviewDecision`: `CORROBORATED`, `PROVISIONAL_ENRICHMENT`, `MULTIPLE_SCHEDULE_CANDIDATES`, `SCHEDULE_CONFLICT`, `NO_SCHEDULE_SUPPORT`, `INSUFFICIENT_EVIDENCE`, and `REFERENCE_UNAVAILABLE`.
-   - `NormalizedTravelRow`: Deterministic representation of schedule rows with ISO dates (`start_date`, `end_date`), place, country, and normalized text.
-   - `TravelCandidate`: Candidate representation with match rationale, exact/partial date boundaries, and field support indicators.
-   - `TravelScheduleManifest`: Metadata container holding schema format version, source table ID, row count, deterministic SHA-256 (including `country_iso2`), and normalized row records.
-   - `TravelRenamerEnrichment`: Structured payload specifying provisional WHEN/WHERE enrichments.
-   - `TravelReviewResult`: Comprehensive per-file evaluation result with decision, candidate list, notes, conflicts, `tool2_decision`, and selected Media row ID.
+### 5. Authoritative Country and Category/Title Semantics (R-005)
+- Created `src/media_archive_tooling/media_db_updater/country_mapper.py` with complete ISO-3166-1 alpha-2 mapping and semantic equivalence checking (`are_countries_equivalent()`).
+- Added flexible Category matching (supporting abbreviations `bg`, `sb`, `cc` and hyphen/space variations) and title text equivalence comparison (`_normalize_title_text()`).
+- Verified in `test_04`, `test_21`, `test_30`, `test_54`, `test_55`.
 
-3. **Local Reference Store (`travel_reviewer/reference_store.py`)**:
-   - Manages bootstrap and verified local persistence in `.renamer/reference/travel_schedule.json`.
-   - `compute_canonical_sha256()`: Calculates deterministic SHA-256 strictly over sorted normalized rows including `country_iso2` (excluding volatile timestamps such as `retrieved_at`).
-   - Validates deterministic recomputation of `country_iso2` from `country` during reference loading.
-   - Atomic disk writes via temporary file renaming to prevent corrupt state.
-   - Zero-network normal reuse: normal per-file operations load and verify the local cache without remote network requests.
-   - Administrative verification: `verify_remote_reference()` compares remote table state against local cache, detecting unexpected schema or data drift without silent replacement.
-   - Deliberate acceptance semantics: `accept_remote_reference()` requires explicit administrator confirmation.
+### 6. Live Schema Field Existence & Type Validation (R-006)
+- Implemented `validate_field_schema()` in `write_adapter.py` validating that every payload key exists in the live Baserow schema and conforms to target column types before issuing network writes.
+- Deterministic schema errors classified as `FAILED_BLOCKED` with review required. Verified in `test_28`, `test_29`, `test_51`.
 
-4. **In-Memory Multi-Key Index & Matching Engine (`travel_reviewer/engine.py`)**:
-   - `TravelScheduleIndex`: Multi-key index indexing schedule entries by exact dates, normalized places, and sorted chronological ranges for fast lookups.
-   - Structured location parsing: `parse_structured_where()` extracts trailing 2-letter ISO country codes while preserving hyphenated places (`Villa-Vrindavan`, `Serbia-summer-camp`, `New-York`, `Krsna-Dvur`).
-   - Long range support: Unbounded date containment for valid ranges longer than 366 days via interval lookups without memory bloat.
-   - Strict input validation: Detects malformed explicit range endpoints (`end_date` non-empty but unparseable) and inverted intervals (`end < start`), isolating them in `invalid_rows` so they cannot authorize enrichments.
-   - Semantic candidate grouping: `group_candidates_semantically()` collapses duplicate rows using canonical place aliases and effective intervals (`eff_end = end or start`), preserving the complete union of contributing Baserow row IDs and schedule texts with deterministic multi-key ordering.
-   - Safety guards: Structured location identity `(canonical_place, country_iso)` protects against conflating same-name places across different countries; media authority guard protects confirmed Media WHERE and WHEN.
+### 7. Field-Specific Human Approvals & Precondition Verification (R-007)
+- Replaced global `is_human_approved` boolean with `field_approvals: Dict[str, Dict[str, Any]]` tracking `approved_value`, `reviewed_precondition_value`, and approval provenance.
+- Engine verifies live DB value against `reviewed_precondition_value` before applying each approved field. Verified in `test_06`, `test_07`.
 
-5. **Cross-Tool Renamer Compatibility (`renamer/models.py`, `renamer/service.py`)**:
-   - Extended `EnrichmentEvidence` with `when_state` and `where_state` fields.
-   - Modified `RenamerApplicationService.apply_enrichment()` to preserve caller-provided resolution states (e.g. `PROVISIONAL`), ensuring schedule-derived metadata is never promoted to `EXACT` or `STRONG`.
-   - Prevents duplicate evidence tokens on repeated runs.
+### 8. Review Portal Live Preview Parity & Retry Coverage (R-008)
+- Persisted preview with `SyncStatus.PREVIEW` so portal immediately renders exact before/after field diffs.
+- `list_pending_media_db_syncs()` now queries `PENDING_SYNC`, `FAILED_RETRYABLE`, and `DATABASE_UNAVAILABLE`. Verified in `test_44`, `test_45`.
 
-6. **Application Service (`travel_reviewer/service.py`)**:
-   - `TravelScheduleReviewService`: High-level service handling `review_file()` and `review_batch()`.
-   - Passes engine index to public search helpers (`search_by_when`, `search_by_where`).
-   - Live Media authority incorporation: Integrates `MediaDatabaseReviewService` to obtain current live Media review context when not provided.
-   - Strict authority hierarchy:
-     - Confirmed Tool 2 Media associations and high-authority local values (full 10-char date, exact location) are protected and never overwritten.
-     - Only safe, unique schedule candidates authorize automatic provisional enrichment (`when_state=PROVISIONAL` or `where_state=PROVISIONAL`).
-     - Ambiguous matches (`MULTIPLE_SCHEDULE_CANDIDATES`), conflicts (`SCHEDULE_CONFLICT`), and unconstrained records (`INSUFFICIENT_EVIDENCE`) do not alter proposals.
-   - Truthful error classification: Per-file exceptions during batch runs are recorded cleanly as `INSUFFICIENT_EVIDENCE` with distinct diagnostics when reference is healthy (never misclassified as `REFERENCE_UNAVAILABLE`).
+### 9. Section 17 Audit Write Provenance Contract & Secret Redaction (R-009)
+- Enriched `MediaDbSyncRequest` and `MediaDbSyncResult` with `request_id`, sha256 `request_fingerprint`, `table_id`, and `audit_provenance`.
+- Added generic `redact_secrets()` masking tokens, bearer credentials, passwords, and API keys. Verified in `test_48`, `test_52`, `test_53`.
 
-7. **Registry & Audit Integration (`renamer/registry/registry.py`)**:
-   - SQLite `travel_reviews` table storing Tool 3 decision state, `tool2_decision`, candidates, notes, and conflicts.
-   - Schema migration check supporting `tool2_decision TEXT` column.
-   - Implemented `save_travel_review()`, `get_travel_review()`, and `list_travel_reviews()`.
+### 10. Real Calendar Date Validation & Idempotent Notes (R-010)
+- `_is_complete_date()` validates real calendar dates with `datetime.strptime()` (rejecting invalid dates such as `2024-02-31`).
+- `merge_notes()` ensures `Added from archive` is at the beginning at most once and deduplicates any existing occurrences while preserving all human notes. Verified in `test_33`, `test_51`.
 
-8. **CLI Interface (`cli.py`)**:
-   - Added `media-archive travel-review` command with `--registry-path`, `--reference-path`, positional `TRACKING_ID`, `--no-enrich`, and table output.
-   - Added `media-archive travel-reference {init,status,verify}` for administrative lifecycle management with protections against overwriting existing verified references.
+### 11. Representative 260-File Evaluation (R-011)
+- Re-run `scripts/run_tool_4_evaluation.py` in preview mode (`commit=False`) across Tool 1 -> Tool 2 -> Tool 3 -> Tool 4 without production writes.
+- Output recorded in `docs/eval_summary_tool4.json` with summary counts and exact representative before/after diffs for matched updates, candidate creates, partial date notes, and conflict blocked items.
 
-9. **Review Portal Integration (`review_portal/`)**:
-   - `app.py`: Loads Tool 3 review results into template context for file details.
-   - `templates/detail.html`: Renders Tool 3 Travel Schedule card with decision badges, `tool2_decision`, selected media row, candidate comparison states (`date_comparison`, `place_comparison`, `country_comparison`), rationale, notes, and conflict warnings.
+### 12. Two-Step Commit Protocol & Status Update (R-012)
+- Step 1: Implementation commit `70c0c35` pushed to `origin/tool-4-implementation`.
+- Step 2: Status update commit `caad457` pushed to `origin/tool-4-implementation`.
 
 ---
 
-## 2. Review Findings Addressed (R-001 through R-012)
+## Verification Results
 
-### Round 1 Corrections (R-001 through R-007)
-- **R-001 (Confirmed Tool 2 Media Authority)**: Incorporated confirmed Tool 2 Media WHEN/WHERE values as authoritative recording evidence in `TravelScheduleEngine.evaluate()`. Added `_apply_media_authority_guard()` preventing schedule evidence from contradicting, overwriting, or downgrading confirmed Media dates/locations. Wired `TravelScheduleReviewService` to obtain live Tool 2 context via `MediaDatabaseReviewService`. Added regressions `test_r001_local_date_missing_confirmed_media_date_no_contradictory_when_enrichment` and `test_r001_local_place_missing_confirmed_media_where_no_contradictory_where_enrichment`.
-- **R-002 (Representative Evaluation with Live Media Context)**: Re-ran the 260-file acceptance evaluation with live Tool 2 Media access, recording exact Tool 2 decision breakdowns, 133 files routed downstream, zero database failures, and zero high-authority overwrites.
-- **R-003 (Immutable Schedule Reference Replacement Protection)**: Updated `TravelReferenceStore.ensure_reference()` to never overwrite an existing verified reference. Updated `travel-reference init` CLI to refuse replacement of verified references, directing administrators to `verify`. Created `accept_remote_reference()` for deliberate acceptance. Added regression `test_r003_verified_reference_not_overwritten_by_init_when_remote_checksum_differs`.
-- **R-004 (Malformed Explicit End Date Validation)**: Modified `TravelScheduleIndex._build_index()` to detect non-empty unparseable end dates, routing them to `invalid_rows` so they cannot be treated as 1-day visits or authorize enrichment. Added regression `test_r004_valid_start_with_malformed_nonempty_end_date_cannot_authorize_enrichment`.
-- **R-005 (Canonical Place Alias & Interval Grouping)**: Updated `group_candidates_semantically()` to use `index.canonical_place()` and effective end dates (`eff_end = end or start`), preserving all contributing Baserow row IDs and schedule texts. Added regressions `test_r005_alias_equivalent_places_grouped_with_all_row_ids_and_text_preserved` and `test_r005_missing_end_vs_explicit_single_day_grouped_with_both_row_ids`.
-- **R-006 (Unbounded Long Range Support)**: Extended `TravelScheduleIndex` with `self.long_ranges` and interval containment checks in `get_rows_by_date()`, `get_rows_by_month()`, and `get_rows_by_year()` for ranges spanning > 366 days. Added regression `test_r006_valid_explicit_range_longer_than_366_days_indexed_and_found`.
-- **R-007 (Configuration & Branch Hygiene)**: Synchronized `tool-3-implementation` with current `main`, added `BASEROW_TRAVEL_SCHEDULE_TABLE_ID=` to `.env.example`, documented PR #26, and verified required GitHub CI checks.
+### Automated Test Suite
+- `.venv/bin/pytest`: **276 passed, 2 warnings in 2.27s**
+  - `tests/test_media_db_updater.py`: **55/55 passed in 0.95s** (all 48 base tests + 7 new regressions)
+  - Full repo regression suite: **276/276 passed**
 
-### Round 2 Corrections (R-008 through R-012)
-- **R-008 (Media WHERE Authority & Structured Location Parsing)**: Implemented `parse_structured_where()` to extract trailing 2-letter ISO country codes while preserving hyphenated places (`Villa-Vrindavan`, `Serbia-summer-camp`, `New-York`, `Krsna-Dvur`). Extended media authority guard to suppress schedule WHERE enrichment if canonical places differ or if both have known countries that differ. Supported confirmed Media WHERE as Case-B anchor without provisional WHERE enrichment when local lacks anchors. Added regressions `test_r008_hyphenated_confirmed_place_not_truncated`, `test_r008_same_place_different_country_media_guard_suppresses_enrichment`, and `test_r008_confirmed_media_where_only_acts_as_case_b_anchor_without_provisional_where`.
-- **R-009 (Structured-Location Identity, Provenance, & Deterministic Grouping)**: Implemented structured location identity `(canonical_place, country_iso)` in Case C to prevent auto-selecting an ambiguous candidate when the same place name occurs in different countries on the same date. Ensured union of all contributing row IDs and texts across semantic candidates is preserved for the selected candidate. Implemented deterministic sorting for candidates and semantic groups independent of input iteration order. Passed `engine.index` to `search_by_when()` and `search_by_where()` service helpers. Added regressions `test_r009_same_place_different_country_multiple_candidates_in_case_c`, `test_r009_reversed_input_order_deterministic_grouping_and_provenance`, and `test_r009_union_of_row_ids_and_texts_preserved_for_selected_candidate`.
-- **R-010 (Canonical Checksum Inclusion & Validation of `country_iso2`)**: Included `country_iso2` in `compute_canonical_sha256()` and added deterministic recomputation and validation of `country_iso2` from `country` during reference loading. Added regression `test_r010_tampered_country_iso2_rejected_by_load_reference`.
-- **R-011 (Tool 2 Decision Snapshot & Candidate Explainability Contract)**: Added `tool2_decision` to `TravelReviewResult` and SQLite schema migration in `registry.py`. Populated candidate comparison states (`date_comparison`, `place_comparison`, `country_comparison`) and `match_reasons` for Cases B and C. Displayed `tool2_decision` and candidate comparison states in detail portal template. Added regressions `test_r011_tool2_decision_snapshotted_in_result_and_registry` and `test_r011_candidate_comparison_states_populated_in_cases_b_and_c`.
-- **R-012 (Truthful Failure Classification & Live Evaluation Metrics)**: Reclassified per-file batch errors as `INSUFFICIENT_EVIDENCE` with distinct diagnostics when reference is healthy. Extended 260-file acceptance evaluation to verify and assert zero overwrites for both local high-authority values and confirmed Tool 2 Media values (`overwritten_high_authority = 0`, `overwritten_confirmed_media_authority = 0`). Updated walkthroughs, CLI syntax, score wording, and representative tracking IDs. Added regression `test_r012_batch_error_does_not_produce_reference_unavailable_when_reference_healthy`.
+### Shell Syntax and Package Build
+- `sh -n scripts/builder-start.sh scripts/review-tool-1.sh`: **PASS**
+- `uv build --offline`: **PASS** (successfully built `dist/media_archive_tooling-0.1.0.tar.gz` and `.whl`)
 
----
-
-## 3. Test Suite & Verification Results
-
-### Test Execution
-```bash
-.venv/bin/pytest -q
-```
-**Result**: **214 passed, 2 warnings** across the entire project:
-- `tests/test_travel_reviewer.py`: **57/57 passed** (40 required base tests + 7 Round 1 regression tests + 10 Round 2 regression tests)
-- `tests/test_media_db_reviewer.py`: **63/63 passed** (Tool 2 regression suite)
-- `tests/test_renamer.py`: **88/88 passed** (Tool 1 regression suite)
-- `tests/test_cli.py`: **6/6 passed**
-
-### Helper Script Validation
-```bash
-sh -n scripts/builder-start.sh scripts/review-tool-1.sh
-```
-**Result**: **PASS** (Zero syntax errors).
-
-### Package Build Verification
-```bash
-uv build --offline
-```
-**Result**: **PASS**
-- `dist/media_archive_tooling-0.1.0-py3-none-any.whl`
-- `dist/media_archive_tooling-0.1.0.tar.gz`
-
----
-
-## 4. Representative 260-File Evaluation Evidence
-
-A complete evaluation was performed on all 260 representative audio files in `sample-files/` using `scripts/run_tool_3_evaluation.py` with live Tool 2 Media Database Review reconciliation. The results are serialized in `docs/eval_summary_tool3.json`.
-
-### Tool 2 Media Database Review Breakdown
+### Representative 260-File Evaluation
 ```text
-Total files evaluated:                260
-- CONFLICT_WITH_EXISTING:              69 (26.5%)
-- EXISTING_MEDIA_MATCH:                 1 ( 0.4%)
-- INSUFFICIENT_EVIDENCE:               32 (12.3%)
-- MULTIPLE_CANDIDATES:                 99 (38.1%)
-- NEW_MEDIA_CANDIDATE:                 39 (15.0%)
-- PROBABLE_EXISTING_MEDIA:             20 ( 7.7%)
-- DATABASE_UNAVAILABLE:                 0 ( 0.0%)
+==========================================
+TOOL 4 REPRESENTATIVE EVALUATION REPORT
+==========================================
+total files: 260
+would-update existing rows: 1
+would-create new rows: 39
+no-op/already synchronized: 0
+review-required conflicts: 221
+duplicate/multiple-candidate blocked: 99
+insufficient-evidence blocked: 32
+database-unavailable: 0
+partial-date Notes cases: 1
+country/location option additions proposed: 8
+archive-path representation conflicts: 1
 ```
-
-### Tool 3 Travel Schedule Review Breakdown
-```text
-Total files evaluated:                260
-Files entering from Tool 2 routing:   133
-Media context unavailable:              0
-Overwritten high-priority local:        0
-Overwritten confirmed-Media authority:  0
-
-Decision Breakdown:
-- CORROBORATED:                        36 (13.8%)
-- PROVISIONAL_ENRICHMENT:              44 (16.9%)
-  - WHEN enrichments:                  19
-  - WHERE enrichments:                 25
-- MULTIPLE_SCHEDULE_CANDIDATES:         2 ( 0.8%)
-- SCHEDULE_CONFLICT:                   67 (25.8%)
-- NO_SCHEDULE_SUPPORT:                 54 (20.8%)
-- INSUFFICIENT_EVIDENCE:               57 (21.9%)
-- REFERENCE_UNAVAILABLE:                0 ( 0.0%)
-```
-
-### Key Behavioral Verifications
-
-1. **Zero Overwritten High-Authority / Confirmed-Media Values**:
-   - High-authority local metadata (full 10-character dates, exact locations) and confirmed Tool 2 Media rows were untouched.
-   - Counts: `overwritten_high_authority = 0`, `overwritten_confirmed_media_authority = 0`.
-
-2. **Safe Provisional WHERE Enrichment**:
-   - When an audio file had an exact date but missing or generic location, Tool 3 supplied the unique scheduled location with `where_state="provisional"`.
-   - **Example 1** (`bba9fafc`):
-     - Before: `2015-07-10_KKS_SB-1-2-19-Serbia-summer-camp_ID-bba9fafc.mp4`
-     - After: `2015-07-10_KKS_SB-1-2-19-Serbia-summer-camp_Serbian-Summer-Camp-rs_ID-bba9fafc.mp4`
-     - Where: `Serbian-Summer-Camp-rs` (`provisional`)
-   - **Example 2** (`d7986042`):
-     - Before: `2012-01-07_KKS_SB-3-24-45-Leipzig_ID-d7986042.mp3`
-     - After: `2012-01-07_KKS_SB-3-24-45-Leipzig_Radhadesh-be_ID-d7986042.mp3`
-     - Where: `Radhadesh-be` (`provisional`)
-
-3. **Safe Corroboration**:
-   - When audio files possessed exact dates and locations matching the travel schedule, Tool 3 confirmed agreement without mutating proposals.
-   - **Example 1** (`464488ed`): `A024 03-10-26 SB 9.23.32 Praha.mp3` -> Schedule corroborates recording date `2003-10-26` and location `Praha`.
-   - **Example 2** (`c832d03a`): `A021 03-10-24 BG 4.38 Praha.mp3` -> Schedule corroborates recording date `2003-10-24` and location `Praha`.
-
-4. **Conflict Detection**:
-   - When filename locations directly contradicted the travel schedule for the same date, Tool 3 flagged `SCHEDULE_CONFLICT` without modifying metadata.
-   - **Example 1** (`657dc673`): `A022 03-10-25 SB 4.9.11 Farma KD.mp3` -> Flagged conflict: Schedule on `2003-10-25` records speaker in `Prague-cz`, not `Krsna-Dvur`.
-   - **Example 2** (`509d5ffd`): `A025 03-10-26 Govardhana lekce Pruhon.mp3` -> Flagged conflict: Schedule on `2003-10-26` records speaker in `Prague-cz`, not `Pruhonice`.
-
-5. **Multiple Candidates Isolation**:
-   - In ambiguous cases (e.g. `R09_0004.MP3`, tracking ID `7e7faea8`), where a location matched multiple distinct schedule visits without a date to disambiguate, Tool 3 recorded 3 candidates and marked `MULTIPLE_SCHEDULE_CANDIDATES`, safely declining automatic enrichment.
-
-6. **Insufficient Evidence Safeguard**:
-   - Audio files lacking both date and location (or only vague partial markers like `2012-01-XX` with no location, e.g. `e847e7ba`, `1f7f7b01`) were marked `INSUFFICIENT_EVIDENCE`, preventing unconstrained guessing.
