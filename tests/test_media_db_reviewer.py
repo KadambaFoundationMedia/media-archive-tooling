@@ -739,6 +739,60 @@ def test_20_valid_complete_no_match_new_media_candidate_when_discriminating():
     assert result.proposed_tool4_action == Tool4Action.CREATE_NEW
 
 
+def test_20_country_only_evidence_excludes_foreign_partial_date_noise():
+    assert _compare_places(None, "cz", "Amsterdam", "Netherlands") == (
+        FieldComparisonState.CONFLICT,
+        "Country conflict: local 'cz' (CZ) contradicts database 'Netherlands' (NL)",
+    )
+
+    parser_result = make_parser_result(
+        tracking_id="duben02",
+        orig_filename="02 KKS. SB. 3.1.20.mp3",
+        date_val="2008-04-DD",
+        what_val="SB-3-1-20",
+        what_category="Srimad Bhagavatam",
+        place=None,
+        country="cz",
+    )
+    parser_result.when.precision = "month"
+    parser_result.when.state = ResolutionState.STRONG
+    parser_result.where = WhereResult(
+        place_location=None,
+        country="Czech Republic",
+        country_iso2="cz",
+        state=ResolutionState.STRONG,
+    )
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-17T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 3142,
+                "Date": "2008-04-30",
+                "Title": "Queensday",
+                "Category": "Unknown",
+                "Place, location": "ISKCON-Amsterdam",
+                "Country": "Netherlands",
+            },
+            {
+                "id": 3144,
+                "Date": "2008-04-25",
+                "Title": "Leicester",
+                "Category": "Unknown",
+                "Place, location": "Leicester",
+                "Country": "United Kingdom",
+            },
+        ],
+    )
+
+    result = MediaDatabaseReconciliationEngine().reconcile(parser_result, snapshot)
+
+    assert result.decision == ReviewDecision.NEW_MEDIA_CANDIDATE
+    assert result.candidates == []
+    assert result.proposed_tool4_action == Tool4Action.CREATE_NEW
+
+
 # ---------------------------------------------------------------------------
 # Test 21: Sparse no-match -> INSUFFICIENT_EVIDENCE
 # ---------------------------------------------------------------------------
@@ -2746,4 +2800,3 @@ def test_63_r014_defer_on_unconfirmed_stored_review_resets_enrichment_state(tmp_
 
     # Verify apply_enrichment_to_renamer returns None (defense-in-depth)
     assert service.apply_enrichment_to_renamer("defunconf01") is None
-

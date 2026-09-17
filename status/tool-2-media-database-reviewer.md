@@ -110,3 +110,9 @@ None.
 ## Next milestone
 
 Merge accepted PR #19 into protected `main`, close implementation issue #2 as completed, then proceed to Tool 3 planning/implementation when its definition is ready.
+
+## Post-acceptance practical correction — country-only evidence
+
+The `KKS DUBEN 2008 MP3/02 KKS. SB. 3.1.20.mp3` test established Czech Republic / `cz` without a city. Tool 2 previously skipped country comparison whenever the local city was blank, so unrelated April rows in the United Kingdom and Netherlands remained false date-only candidates.
+
+Tool 2 now compares known countries independently of city availability. A foreign-country row supported only by a partial-date overlap is discarded as duplicate-search noise; direct identity or matching WHAT evidence still retains a contradictory row for review. This preserves the leading Baserow-country rule without requiring Tool 1 to invent a location.
