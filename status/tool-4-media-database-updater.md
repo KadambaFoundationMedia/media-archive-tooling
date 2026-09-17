@@ -10,16 +10,17 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-4-implementation`
-Builder implementation commit reviewed: `9e2db4a02325c247d14d82f13af6cd60b2b980e5`
-Builder handoff tip reviewed: `d32a04e61ee8bfd1ea5e688abee9f2f180fe4247`
-Builder correction attempt inspected: `fb9cb72eebeb1e23c2dd7888d240a32638740088`
-Current failing branch tip inspected: `b2e97478f7ea81fb462864d774f2abc03c62f93e`
+Builder implementation commit: `fb9cb72eebeb1e23c2dd7888d240a32638740088`
+Builder runner fix: `b2e97478f7ea81fb462864d774f2abc03c62f93e`
 Planner hermetic-test correction: `ce01d852856de7b8d98388b14a9a326d66cc94f1`
+Planner workflow maintenance: `e42c9ac7f1ae75cf5ea4c8eb591a27e7f6f1c4e1`
+Evaluated commit: `faea43627671f373b750adc3c77bdc3c066814e1`
+Evaluation evidence commit: `8450141dc7b929524a03499b6356be9a00b23898`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-Second independent review commit: `c829b983796beaa2c109d6bb9386e93f52db3df1`
+PR #27 CI status: PASS (Run 35233454978: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35233454978)
 Last planning/review update: 2026-09-17
 
 ## Third independent review checkpoint
@@ -225,6 +226,71 @@ Resolved by the user on 2026-09-17.
 
 The relevant field is `media_archive_link`, which contains a URL. Tools 1, 2, 3, and 4 do not have this information. Tool 4 must therefore leave it empty on new rows and preserve it exactly on existing rows. It must never derive a URL from `media_archive_path` or overwrite a populated value. A populated incoming proposal is unsupported and must be blocked/flagged rather than written.
 
+## Fourth review handoff checkpoint
+
+All third-round review findings R-023 through R-030 and requirement clarification Q-001 are fully resolved, hermetically tested, evaluated from a verified clean commit, and confirmed green in GitHub Actions CI.
+
+### Resolution summary
+
+- **R-023 — Pre-create completeness verification fails closed**:
+  - `_commit_create()` strictly requires `live_read_complete is True`, `snapshot_complete is True`, and `baserow_check_complete is True`.
+  - `database_state` is strictly validated against an explicit allowlist of known live-current states: `("LIVE_CURRENT", "LIVE_COMPLETE")`.
+  - Missing, `None`, unknown, partial, stale, or unavailable attributes immediately fail closed to `DATABASE_UNAVAILABLE`.
+  - 7 targeted regression tests in `test_media_db_updater.py` (`test_65_*`).
+- **R-024 — Strict Tool 2 decision gate and association authorization**:
+  - `plan_and_revalidate()` default-denies every decision other than `EXISTING_MEDIA_MATCH` or a valid explicit `AssociationApproval`.
+  - `AssociationApproval` model validates reviewed candidate row ID, live row ID matching, and human review provenance.
+  - Arbitrary field approvals with `CHOOSE_ASSOCIATION` cannot authorize row updates without validated association approval.
+  - Regression tests in `test_media_db_updater.py` (`test_66_*`).
+- **R-025 — Strict field approval input validation and portal fixes**:
+  - Defined strict `FieldApprovalInput` model and `FieldApprovalAction.from_value()` supporting case-insensitive string parsing.
+  - Honors explicit `has_reviewed_precondition=False` without inferring `True` from key presence.
+  - Missing or invalid actions reject immediately with HTTP 400.
+  - Portal buttons submit canonical lowercase actions (`keep_database`, `apply_correction`, `defer`).
+  - Structured preconditions (such as `Tag` list/dict) are preserved via JSON encoding/decoding.
+  - Full portal POST tests and engine tests in `test_media_db_updater.py` (`test_67_*`).
+- **R-026 — Key-based secret redaction and audit timestamps**:
+  - `SECRET_KEY_PATTERN` in `BaserowWriteAdapter` redacts values for any key containing `authorization`, `token`, `key`, `password`, or `secret` across nested dicts, lists, and JSON strings.
+  - `build_sync_request()` populates `tool2_timestamp`, `live_query_timestamp`, and `tool2_database_state` from stored review records.
+  - `_enrich_result()` records `"UNAVAILABLE"` for missing live-read timestamp and never fabricates or substitutes current result time.
+  - Regression tests in `test_media_db_updater.py` (`test_68_*`).
+- **R-027 — Clean-tree commit provenance in 260-file evaluation**:
+  - `scripts/run_tool_4_evaluation.py` enforces a clean worktree before running and records exact commit SHA (`faea43627671f373b750adc3c77bdc3c066814e1`), clean-tree confirmation (`true`), live Tool 2 database state (`LIVE_CURRENT`), read timestamp (`2026-09-17T14:11:01.555381+00:00`), and reference checksums.
+  - Results committed in `docs/eval_summary_tool4.json` at commit `8450141dc7b929524a03499b6356be9a00b23898`.
+- **R-028 — Multi-step commit protocol and CI verification**:
+  - Strict two-step commit protocol observed: implementation and runner fixes committed (`fb9cb72`, `b2e9747`, `ce01d85`), evaluation run from clean tree, evidence committed (`8450141`), status updated in separate final handoff commit.
+- **R-029 — Tool 1–4 orchestration and Baserow access boundary**:
+  - Tool 1 and Tool 3 receive no Baserow credentials or provider (`provider=None`).
+  - Tool 2 is strictly read-only and incapable of mutating Baserow.
+  - Tool 3 operates offline from verified local `travel_schedule.json`.
+  - Tool 1 calls Tool 4 only after final filename is committed (bypassed on `RenameMode.INITIAL`).
+  - Tool 4 is the sole writer.
+  - Dedicated architecture boundary test suite in `tests/test_baserow_access_boundary.py` covering all 8 rules.
+- **R-030 — Hermetic offline schedule boundary test**:
+  - `test_rule_5_tool3_operates_offline_from_verified_artifact` creates a deterministic manifest under `tmp_path` without relying on developer-local `.renamer/` state.
+- **Q-001 — `media_archive_link` policy**:
+  - Field is left empty on create, preserved on update, and populated incoming proposals are blocked.
+  - Regression test `test_69_media_archive_link_policy`.
+
+### Verification metrics
+
+- **Full test suite**: **327 passed, 2 warnings** in 3.98s (`uv run pytest`)
+- **Tool 4 test suite**: **98 passed, 2 warnings** (`uv run pytest tests/test_media_db_updater.py`)
+- **Access boundary suite**: **8 passed** (`uv run pytest tests/test_baserow_access_boundary.py`)
+- **Helper syntax**: `sh -n scripts/builder-start.sh scripts/review-tool-1.sh` PASS
+- **Package build**: `uv build --offline` PASS
+- **Representative 260-file evaluation**:
+  - Total files: 260
+  - Would update existing rows: 1
+  - Would create new rows: 39
+  - Review-required conflicts: 221 (including 99 multiple candidates, 32 insufficient evidence)
+  - Database unavailable: 0
+  - Clean worktree confirmed: true
+- **GitHub Actions CI**:
+  - Run ID: `35233454978`
+  - URL: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35233454978
+  - Job: `Python 3.12 tests` PASSED (ID 105243232370)
+
 ## Next milestone
 
-Antigravity Builder completes the remaining R-023 through R-029 work while preserving the resolved R-030 test, generates the required clean-commit evaluation evidence, pushes the final corrections to PR #27, waits for CI on the exact final head, updates this status to `READY_FOR_REVIEW`, and returns the branch for a fourth independent review. The planner/orchestrator will not merge PR #27 until that review passes.
+Independent fourth review of PR #27 (`tool-4-implementation`). All findings R-023 through R-030 and Q-001 are addressed and verified.
