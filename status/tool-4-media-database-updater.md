@@ -667,3 +667,14 @@ The user identified missing metadata in the first single-file result. The orches
 - the immediately previous committed path/filename is included in the request so a second rename of the same tracked file can safely correct the row without looking like an unrelated archive collision.
 
 Focused verification includes the exact Oslo sample, live schema shapes for Category/Tag/Language, Notes provenance idempotency, existing-language preservation, and repeat-rename reconciliation.
+
+### Practical Oslo sample result
+
+The user-directed correction was exercised against tracking ID `48f52166` and the existing production Media row `3231`:
+
+- Tool 1 committed `2011-08-29_KKS_SB-1-19-31_Oslo-no.wma`, retained `possible_combination=true`, and kept `tool_5_6_split_combination` routing;
+- Tool 2 freshly returned `EXISTING_MEDIA_MATCH` for row `3231`;
+- Tool 3's stored verified-reference result was `NO_SCHEDULE_SUPPORT`;
+- Tool 4 previewed an UPDATE with no conflicts and then updated only Filename, `media_archive_path`, Title, Category, Tag, and Notes;
+- live readback verified Title `SB 1.19.31`, Category `Srimad-bhagavatam`, Tag `1.19.31`, the final filename/path, original filename/path provenance in Notes, and preserved Language `English`;
+- no second Baserow row was created.
