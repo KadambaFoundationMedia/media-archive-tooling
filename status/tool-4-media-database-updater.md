@@ -686,3 +686,12 @@ The Czech sample exposed that Tool 4's mandatory fresh Tool 2 checks used Tool 2
 ### Practical country-option reuse correction
 
 The same sample found established live Country options `Czech-republic` and `Czech-Republic`. Tool 4 previously treated the space-separated ISO display name `Czech Republic` as a missing option and attempted an unnecessary schema mutation. Country option matching now treats spaces, hyphens, underscores, and capitalization as presentation variants, reuses the first established live option, and does not create another duplicate country spelling. Ambiguous Place/location options remain review-blocking.
+
+### Practical Czech sample result
+
+The corrected end-to-end test completed for tracking ID `902b923a`:
+
+- Tool 2 freshly returned `NEW_MEDIA_CANDIDATE`; Tool 3 retained `INSUFFICIENT_EVIDENCE` because the precise day/location is not yet known.
+- Tool 4 created Baserow Media row `3232` and live readback verified Title `SB 3.1.20`, Category `Srimad-bhagavatam`, Tag `3.1.20`, Language `English`, Country `Czech-republic`, blank Date, blank location, and final filename/path.
+- Notes contain `Added from archive`, original filename/path, and `Incomplete recording date: 2008-04-DD`.
+- No partial row was created during either earlier safely blocked attempt.

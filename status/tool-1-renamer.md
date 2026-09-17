@@ -228,3 +228,4 @@ Merge PR #5 after required CI, then re-run `./scripts/review-tool-1.sh` locally 
 - The second practical sample showed that Tool 1 used `DUBEN` for April but discarded its Czech-language country evidence.
 - Tool 1 now resolves country `Czech Republic` / `cz` from this folder context without inventing a location.
 - Exact regression: `02 KKS. SB. 3.1.20.mp3` in `KKS DUBEN 2008 MP3` proposes `2008-04-DD_KKS_SB-3-1-20_cz.mp3`; location remains unresolved for later audio processing or human review.
+- Practical commit completed with tracking ID `902b923a`; the physical file now has that exact final filename, without an internal tracking-ID suffix.
