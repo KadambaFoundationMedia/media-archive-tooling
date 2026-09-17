@@ -8,6 +8,7 @@ from .models import (
     TravelReviewResult,
     TravelScheduleManifest,
 )
+from .service import TravelScheduleReviewService, validate_tool3_review_result
 
 __all__ = [
     "FieldComparisonState",
@@ -17,4 +18,6 @@ __all__ = [
     "TravelReviewDecision",
     "TravelReviewResult",
     "TravelScheduleManifest",
+    "TravelScheduleReviewService",
+    "validate_tool3_review_result",
 ]

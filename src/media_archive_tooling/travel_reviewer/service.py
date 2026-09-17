@@ -1,7 +1,7 @@
 """Application service for Tool 3 — Travel Schedule Reviewer."""
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..config import AppConfig, load_config
 from ..media_db_reviewer.baserow_provider import (
@@ -23,6 +23,56 @@ from .models import (
 from .reference_store import TravelReferenceStore
 
 logger = logging.getLogger(__name__)
+
+
+def validate_tool3_review_result(
+    rev: Any, tracking_id: str
+) -> Tuple[Optional[TravelReviewResult], Optional[str]]:
+    """Strictly validate that Tool 3 returned a typed, valid TravelReviewResult contract.
+
+    Enforces R-040:
+    - Object must be an instance of TravelReviewResult (or validatable via model).
+    - tracking_id must match.
+    - decision must be present and a recognized TravelReviewDecision member.
+    - Returns (result_model, error_message). If invalid contract, returns (None, err_msg).
+    """
+    if rev is None:
+        return None, "Tool 3 returned no review result (None)"
+
+    result_model: Optional[TravelReviewResult] = None
+    if isinstance(rev, TravelReviewResult):
+        result_model = rev
+    elif isinstance(rev, dict):
+        try:
+            result_model = TravelReviewResult.model_validate(rev)
+        except Exception as e:
+            return None, f"Tool 3 review dictionary failed TravelReviewResult contract validation: {e}"
+    else:
+        if hasattr(rev, "model_dump"):
+            try:
+                result_model = TravelReviewResult.model_validate(rev.model_dump())
+            except Exception as e:
+                return None, f"Tool 3 result object failed TravelReviewResult contract: {e}"
+        else:
+            return None, f"Tool 3 result is of type {type(rev).__name__}, not TravelReviewResult"
+
+    if result_model.tracking_id != tracking_id:
+        return None, f"Tool 3 result tracking_id '{result_model.tracking_id}' does not match expected '{tracking_id}'"
+
+    dec = getattr(result_model, "decision", None)
+    if dec is None:
+        return None, "Tool 3 review decision is missing or None"
+
+    if isinstance(dec, TravelReviewDecision):
+        dec_enum = dec
+    else:
+        try:
+            dec_enum = TravelReviewDecision(str(dec).strip())
+        except ValueError:
+            return None, f"Tool 3 decision '{dec}' is not a recognized TravelReviewDecision"
+
+    result_model.decision = dec_enum
+    return result_model, None
 
 
 class TravelScheduleReviewService:

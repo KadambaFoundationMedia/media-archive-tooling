@@ -14,8 +14,9 @@ from .renamer.service import RenamerApplicationService
 from .adapters.baserow import BaserowReferenceProvider
 from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
 from .media_db_reviewer.service import MediaDatabaseReviewService
+from .travel_reviewer.models import TravelReviewDecision
 from .travel_reviewer.reference_store import TravelReferenceStore
-from .travel_reviewer.service import TravelScheduleReviewService
+from .travel_reviewer.service import TravelScheduleReviewService, validate_tool3_review_result
 from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
 
 
@@ -154,11 +155,19 @@ def run_renamer(args):
                     continue
                 t2_ctx = t2_by_id.get(p.tracking_id)
                 try:
-                    t3_res = t3_service.review_file(p.tracking_id, tool2_context=t2_ctx, auto_enrich=True)
-                    if t3_res is None or getattr(t3_res, "decision", None) == "DATABASE_UNAVAILABLE":
+                    t3_raw = t3_service.review_file(p.tracking_id, tool2_context=t2_ctx, auto_enrich=True)
+                    t3_res, val_err = validate_tool3_review_result(t3_raw, p.tracking_id)
+                    if val_err or t3_res is None:
                         p.needs_review = True
                         p.status = "blocked"
-                        p.review_reasons.append("Tool 3 travel schedule review unavailable")
+                        p.review_reasons.append(f"Tool 3 travel schedule review contract invalid: {val_err}")
+                    elif t3_res.decision in (
+                        TravelReviewDecision.REFERENCE_UNAVAILABLE,
+                        TravelReviewDecision.PROCESSING_ERROR,
+                    ):
+                        p.needs_review = True
+                        p.status = "blocked"
+                        p.review_reasons.append(f"Tool 3 travel schedule review failed: {t3_res.decision.value}")
                 except Exception as e:
                     logger.warning(f"Tool 3 review failed for {p.tracking_id}: {e}")
                     p.needs_review = True

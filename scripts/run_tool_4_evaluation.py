@@ -31,8 +31,12 @@ from media_archive_tooling.renamer.models import ParserResult, RenameMode
 from media_archive_tooling.renamer.planner.executor import BatchExecutor
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.renamer.service import RenamerApplicationService
+from media_archive_tooling.travel_reviewer.models import TravelReviewDecision
 from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore
-from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
+from media_archive_tooling.travel_reviewer.service import (
+    TravelScheduleReviewService,
+    validate_tool3_review_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +163,12 @@ def run_evaluation():
             tool2_context=t2_res,
             auto_enrich=True,
         )
-        t3_results.append(t3_res)
+        valid_t3, val_err = validate_tool3_review_result(t3_res, tid)
+        if val_err or valid_t3 is None:
+            raise RuntimeError(f"Tool 3 result for {tid} failed contract validation: {val_err}")
+        if valid_t3.decision in (TravelReviewDecision.REFERENCE_UNAVAILABLE, TravelReviewDecision.PROCESSING_ERROR):
+            raise RuntimeError(f"Tool 3 result for {tid} failed with {valid_t3.decision.value}")
+        t3_results.append(valid_t3)
     print(f"Evaluated {len(t3_results)} files through Tool 3")
 
     print("\n=== Step 4: Final Proposal Generation (RenameMode.FINALIZE) ===")

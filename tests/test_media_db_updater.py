@@ -2656,6 +2656,387 @@ def test_73_c_cli_run_renamer_fails_closed_when_tool3_reference_missing(tmp_path
     assert files[0]["needs_review"] == 1
 
 
+def test_73_d_cli_run_renamer_fails_closed_when_tool3_reference_unavailable(tmp_path, monkeypatch):
+    from media_archive_tooling.cli import run_renamer
+    from media_archive_tooling.travel_reviewer.models import (
+        NormalizedTravelRow,
+        TravelReviewDecision,
+        TravelReviewResult,
+        TravelScheduleManifest,
+    )
+    from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore, compute_canonical_sha256
+    from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
+
+    registry_path = tmp_path / "cli_t3_unavail.db"
+    media_dir = tmp_path / "media_cli_t3_unavail"
+    media_dir.mkdir()
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("audio content")
+
+    ref_path = tmp_path / "travel_schedule.json"
+    rows = [
+        NormalizedTravelRow(
+            id=1,
+            start_date="2014-08-01",
+            end_date="2014-08-10",
+            place="Leipzig",
+            country="Germany",
+            country_iso2="de",
+            schedule_text="Leipzig, Germany",
+        )
+    ]
+    manifest = TravelScheduleManifest(
+        source_table_id="travel-schedule-test",
+        retrieved_at="2026-09-17T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    TravelReferenceStore(reference_path=ref_path).save_reference(manifest)
+
+    reg = LocalRegistry(registry_path)
+    mock_t2 = MagicMock()
+    def fake_review_batch(force_refresh=False, auto_enrich=True):
+        files = reg.list_files()
+        tid = files[0]["tracking_id"] if files else "trk0073"
+        return [
+            MediaDatabaseReviewResult(
+                tracking_id=tid,
+                decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+                live_read_complete=True,
+                snapshot_complete=True,
+                baserow_check_complete=True,
+                database_state="LIVE_CURRENT",
+                baserow_read_at="2026-09-17T12:00:00Z",
+                database_snapshot_at="2026-09-17T12:00:00Z",
+            )
+        ]
+    mock_t2.review_batch.side_effect = fake_review_batch
+
+    def fake_t3_review(self, tracking_id, tool2_context=None, auto_enrich=True):
+        return TravelReviewResult(
+            tracking_id=tracking_id,
+            decision=TravelReviewDecision.REFERENCE_UNAVAILABLE,
+            diagnostic_notes=["Reference corrupted or unavailable"],
+        )
+    monkeypatch.setattr(TravelScheduleReviewService, "review_file", fake_t3_review)
+
+    fake_db = FakeBaserowWriteAdapter()
+    updater = MediaDatabaseUpdaterService(registry=reg, write_adapter=fake_db, tool2_service=mock_t2)
+    mock_updater = MagicMock(wraps=updater)
+
+    class Args:
+        pass
+
+    args = Args()
+    args.target = str(media_dir)
+    args.mode = "finalize"
+    args.commit = True
+    args.registry_path = str(registry_path)
+    args.log_dir = str(tmp_path / "logs")
+    args.updater_service = mock_updater
+    args.travel_schedule_path = str(ref_path)
+
+    run_renamer(args)
+
+    # Fail closed: no renames on disk, zero Tool 4 calls, proposal marked blocked/needs_review
+    assert src_file.exists()
+    assert mock_updater.synchronize.call_count == 0
+    files = reg.list_files()
+    assert len(files) == 1
+    assert files[0]["status"] == "blocked"
+    assert files[0]["needs_review"] == 1
+    assert any("REFERENCE_UNAVAILABLE" in r for r in files[0]["review_reasons"])
+
+
+def test_73_e_cli_run_renamer_fails_closed_when_tool3_processing_error(tmp_path, monkeypatch):
+    from media_archive_tooling.cli import run_renamer
+    from media_archive_tooling.travel_reviewer.models import (
+        NormalizedTravelRow,
+        TravelReviewDecision,
+        TravelReviewResult,
+        TravelScheduleManifest,
+    )
+    from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore, compute_canonical_sha256
+    from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
+
+    registry_path = tmp_path / "cli_t3_proc_err.db"
+    media_dir = tmp_path / "media_cli_t3_proc_err"
+    media_dir.mkdir()
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("audio content")
+
+    ref_path = tmp_path / "travel_schedule.json"
+    rows = [
+        NormalizedTravelRow(
+            id=1,
+            start_date="2014-08-01",
+            end_date="2014-08-10",
+            place="Leipzig",
+            country="Germany",
+            country_iso2="de",
+            schedule_text="Leipzig, Germany",
+        )
+    ]
+    manifest = TravelScheduleManifest(
+        source_table_id="travel-schedule-test",
+        retrieved_at="2026-09-17T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    TravelReferenceStore(reference_path=ref_path).save_reference(manifest)
+
+    reg = LocalRegistry(registry_path)
+    mock_t2 = MagicMock()
+    def fake_review_batch(force_refresh=False, auto_enrich=True):
+        files = reg.list_files()
+        tid = files[0]["tracking_id"] if files else "trk0073"
+        return [
+            MediaDatabaseReviewResult(
+                tracking_id=tid,
+                decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+                live_read_complete=True,
+                snapshot_complete=True,
+                baserow_check_complete=True,
+                database_state="LIVE_CURRENT",
+                baserow_read_at="2026-09-17T12:00:00Z",
+                database_snapshot_at="2026-09-17T12:00:00Z",
+            )
+        ]
+    mock_t2.review_batch.side_effect = fake_review_batch
+
+    def fake_t3_review(self, tracking_id, tool2_context=None, auto_enrich=True):
+        return TravelReviewResult(
+            tracking_id=tracking_id,
+            decision=TravelReviewDecision.PROCESSING_ERROR,
+            diagnostic_notes=["Processing failed"],
+        )
+    monkeypatch.setattr(TravelScheduleReviewService, "review_file", fake_t3_review)
+
+    fake_db = FakeBaserowWriteAdapter()
+    updater = MediaDatabaseUpdaterService(registry=reg, write_adapter=fake_db, tool2_service=mock_t2)
+    mock_updater = MagicMock(wraps=updater)
+
+    class Args:
+        pass
+
+    args = Args()
+    args.target = str(media_dir)
+    args.mode = "finalize"
+    args.commit = True
+    args.registry_path = str(registry_path)
+    args.log_dir = str(tmp_path / "logs")
+    args.updater_service = mock_updater
+    args.travel_schedule_path = str(ref_path)
+
+    run_renamer(args)
+
+    assert src_file.exists()
+    assert mock_updater.synchronize.call_count == 0
+    files = reg.list_files()
+    assert len(files) == 1
+    assert files[0]["status"] == "blocked"
+    assert files[0]["needs_review"] == 1
+    assert any("PROCESSING_ERROR" in r for r in files[0]["review_reasons"])
+
+
+def test_73_f_cli_run_renamer_fails_closed_when_tool3_contract_invalid_or_none(tmp_path, monkeypatch):
+    from media_archive_tooling.cli import run_renamer
+    from media_archive_tooling.travel_reviewer.models import (
+        NormalizedTravelRow,
+        TravelScheduleManifest,
+    )
+    from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore, compute_canonical_sha256
+    from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
+
+    registry_path = tmp_path / "cli_t3_invalid.db"
+    media_dir = tmp_path / "media_cli_t3_invalid"
+    media_dir.mkdir()
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("audio content")
+
+    ref_path = tmp_path / "travel_schedule.json"
+    rows = [
+        NormalizedTravelRow(
+            id=1,
+            start_date="2014-08-01",
+            end_date="2014-08-10",
+            place="Leipzig",
+            country="Germany",
+            country_iso2="de",
+            schedule_text="Leipzig, Germany",
+        )
+    ]
+    manifest = TravelScheduleManifest(
+        source_table_id="travel-schedule-test",
+        retrieved_at="2026-09-17T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    TravelReferenceStore(reference_path=ref_path).save_reference(manifest)
+
+    reg = LocalRegistry(registry_path)
+    mock_t2 = MagicMock()
+    def fake_review_batch(force_refresh=False, auto_enrich=True):
+        files = reg.list_files()
+        tid = files[0]["tracking_id"] if files else "trk0073"
+        return [
+            MediaDatabaseReviewResult(
+                tracking_id=tid,
+                decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+                live_read_complete=True,
+                snapshot_complete=True,
+                baserow_check_complete=True,
+                database_state="LIVE_CURRENT",
+                baserow_read_at="2026-09-17T12:00:00Z",
+                database_snapshot_at="2026-09-17T12:00:00Z",
+            )
+        ]
+    mock_t2.review_batch.side_effect = fake_review_batch
+
+    # Return None
+    monkeypatch.setattr(TravelScheduleReviewService, "review_file", lambda self, tracking_id, tool2_context=None, auto_enrich=True: None)
+
+    fake_db = FakeBaserowWriteAdapter()
+    updater = MediaDatabaseUpdaterService(registry=reg, write_adapter=fake_db, tool2_service=mock_t2)
+    mock_updater = MagicMock(wraps=updater)
+
+    class Args:
+        pass
+
+    args = Args()
+    args.target = str(media_dir)
+    args.mode = "finalize"
+    args.commit = True
+    args.registry_path = str(registry_path)
+    args.log_dir = str(tmp_path / "logs")
+    args.updater_service = mock_updater
+    args.travel_schedule_path = str(ref_path)
+
+    run_renamer(args)
+
+    assert src_file.exists()
+    assert mock_updater.synchronize.call_count == 0
+    files = reg.list_files()
+    assert len(files) == 1
+    assert files[0]["status"] == "blocked"
+    assert files[0]["needs_review"] == 1
+    assert any("contract invalid" in r for r in files[0]["review_reasons"])
+
+
+def test_73_g_cli_run_renamer_allows_valid_no_schedule_support_to_continue(tmp_path, monkeypatch):
+    from media_archive_tooling.cli import run_renamer
+    from media_archive_tooling.travel_reviewer.models import (
+        NormalizedTravelRow,
+        TravelReviewDecision,
+        TravelReviewResult,
+        TravelScheduleManifest,
+    )
+    from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore, compute_canonical_sha256
+    from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
+
+    registry_path = tmp_path / "cli_t3_no_support.db"
+    media_dir = tmp_path / "media_cli_t3_no_support"
+    media_dir.mkdir()
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("audio content")
+
+    ref_path = tmp_path / "travel_schedule.json"
+    rows = [
+        NormalizedTravelRow(
+            id=1,
+            start_date="2014-08-01",
+            end_date="2014-08-10",
+            place="Leipzig",
+            country="Germany",
+            country_iso2="de",
+            schedule_text="Leipzig, Germany",
+        )
+    ]
+    manifest = TravelScheduleManifest(
+        source_table_id="travel-schedule-test",
+        retrieved_at="2026-09-17T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    TravelReferenceStore(reference_path=ref_path).save_reference(manifest)
+
+    reg = LocalRegistry(registry_path)
+    mock_t2 = MagicMock()
+    def fake_review_batch(force_refresh=False, auto_enrich=True):
+        files = reg.list_files()
+        tid = files[0]["tracking_id"] if files else "trk0073"
+        return [
+            MediaDatabaseReviewResult(
+                tracking_id=tid,
+                decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+                live_read_complete=True,
+                snapshot_complete=True,
+                baserow_check_complete=True,
+                database_state="LIVE_CURRENT",
+                baserow_read_at="2026-09-17T12:00:00Z",
+                database_snapshot_at="2026-09-17T12:00:00Z",
+            )
+        ]
+    mock_t2.review_batch.side_effect = fake_review_batch
+
+    def fake_t2_review_file(tid, force_refresh=False):
+        return MediaDatabaseReviewResult(
+            tracking_id=tid,
+            decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+            live_read_complete=True,
+            snapshot_complete=True,
+            baserow_check_complete=True,
+            database_state="LIVE_CURRENT",
+            baserow_read_at="2026-09-17T12:00:00Z",
+            database_snapshot_at="2026-09-17T12:00:00Z",
+        )
+    mock_t2.review_file.side_effect = fake_t2_review_file
+
+    def fake_t3_review(self, tracking_id, tool2_context=None, auto_enrich=True):
+        return TravelReviewResult(
+            tracking_id=tracking_id,
+            decision=TravelReviewDecision.NO_SCHEDULE_SUPPORT,
+            diagnostic_notes=["No schedule support found, valid non-error outcome"],
+        )
+    monkeypatch.setattr(TravelScheduleReviewService, "review_file", fake_t3_review)
+
+    fake_db = FakeBaserowWriteAdapter()
+    updater = MediaDatabaseUpdaterService(registry=reg, write_adapter=fake_db, tool2_service=mock_t2)
+    mock_updater = MagicMock(wraps=updater)
+
+    class Args:
+        pass
+
+    args = Args()
+    args.target = str(media_dir)
+    args.mode = "finalize"
+    args.commit = True
+    args.registry_path = str(registry_path)
+    args.log_dir = str(tmp_path / "logs")
+    args.updater_service = mock_updater
+    args.travel_schedule_path = str(ref_path)
+
+    run_renamer(args)
+
+    # Valid non-error: file IS renamed, Tool 4 sync IS triggered
+    assert not src_file.exists()
+    files = reg.list_files()
+    assert len(files) == 1
+    assert files[0]["status"] == "committed"
+    assert files[0]["needs_review"] == 0
+    dest_file = media_dir / files[0]["proposed_filename"]
+    assert dest_file.exists()
+    assert mock_updater.synchronize.call_count == 1
+
+
 # ---------------------------------------------------------------------------
 # Test 74: Tool 2 contract validation rejects non-models and missing timestamps (R-033)
 # ---------------------------------------------------------------------------
@@ -2878,3 +3259,50 @@ def test_80_r036_build_sync_request_force_refresh_failure(tmp_path):
     res = service_err.synchronize("trk0080", commit=True, request=req)
     assert res.status == SyncStatus.DATABASE_UNAVAILABLE
     assert res.operation == SyncOperation.BLOCKED
+
+
+# ---------------------------------------------------------------------------
+# Test 81: validate_tool3_review_result contract validation (R-040)
+# ---------------------------------------------------------------------------
+def test_81_r040_validate_tool3_review_result_contract():
+    from media_archive_tooling.travel_reviewer.models import (
+        TravelReviewDecision,
+        TravelReviewResult,
+    )
+    from media_archive_tooling.travel_reviewer.service import validate_tool3_review_result
+
+    # 1. None returns error
+    m, err = validate_tool3_review_result(None, "trk01")
+    assert m is None
+    assert "None" in err
+
+    # 2. Valid TravelReviewResult
+    res = TravelReviewResult(tracking_id="trk01", decision=TravelReviewDecision.CORROBORATED)
+    m, err = validate_tool3_review_result(res, "trk01")
+    assert m is not None
+    assert err is None
+    assert m.decision == TravelReviewDecision.CORROBORATED
+
+    # 3. Valid dict
+    d = {"tracking_id": "trk01", "decision": "PROVISIONAL_ENRICHMENT"}
+    m, err = validate_tool3_review_result(d, "trk01")
+    assert m is not None
+    assert err is None
+    assert m.decision == TravelReviewDecision.PROVISIONAL_ENRICHMENT
+
+    # 4. Tracking ID mismatch
+    res_mismatch = TravelReviewResult(tracking_id="trk02", decision=TravelReviewDecision.CORROBORATED)
+    m, err = validate_tool3_review_result(res_mismatch, "trk01")
+    assert m is None
+    assert "tracking_id" in err
+
+    # 5. Invalid decision string
+    d_invalid_dec = {"tracking_id": "trk01", "decision": "UNKNOWN_DECISION"}
+    m, err = validate_tool3_review_result(d_invalid_dec, "trk01")
+    assert m is None
+
+    # 6. Arbitrary non-model object
+    class NonModel:
+        pass
+    m, err = validate_tool3_review_result(NonModel(), "trk01")
+    assert m is None
