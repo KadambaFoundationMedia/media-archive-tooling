@@ -2,7 +2,9 @@
 
 Status: **authoritative project-wide data-authority policy**
 
-This policy applies to Tool 2 and every current or future tool that reads or writes Baserow archive data.
+Access-boundary amendment: `docs/baserow-access-boundary-amendment.md`
+
+This policy applies to every current or future tool that consumes Baserow-derived archive data. The access-boundary amendment is controlling: **Tool 2 has read-only Baserow access; Tool 4 has read-and-write access and is the only writer/schema mutator; Tools 1 and 3 have no Baserow access.**
 
 ## 1. Why this policy exists
 
@@ -88,19 +90,21 @@ A response may of course be reused internally while calculating **that same deci
 
 ## 6. Tool 2 requirements
 
-Tool 2 is read-only, but its conclusions can drive later enrichment and writes, so its mutable current-state checks are live-only.
+Tool 2 owns read-only Baserow Media lookup and reconciliation.
 
-- Candidate retrieval from mutable Media data must query live Baserow.
-- A displayed candidate/result may be stored locally for review, but confirming/choosing a candidate must re-read the relevant row and refresh the comparison if it has changed.
-- `NEW_MEDIA_CANDIDATE` requires a complete live Media search performed for the current decision.
-- `DATABASE_UNAVAILABLE` is returned when a required current mutable review cannot be completed; cached mutable data does not downgrade this to a usable result.
-- Confirmed Renamer enrichment from mutable Media data must identify the live read from which it came.
-- Tool 2 local persistence stores mutable-data results, user choices, and audit provenance only; it is not a current Media database mirror.
-- Tool 2 may expose `travel_schedule` through the same provider/service boundary, but the schedule portion may use a complete verified static snapshot/cache.
+- Tool 2 performs targeted, pagination-complete current candidate retrieval through its read-only provider.
+- Tool 2 must not create, update, delete, or mutate rows, select options, or schema.
+- A displayed candidate/result may be stored locally for review, but confirming/choosing a candidate requires a new Tool 2 live read and refreshed comparison if relevant state changed.
+- `NEW_MEDIA_CANDIDATE` requires a complete Tool 2 live Media search performed for the current decision.
+- `DATABASE_UNAVAILABLE` is returned when Tool 2 cannot complete the required current read; cached mutable data does not downgrade this to a usable result.
+- Confirmed Renamer enrichment must identify the exact Tool 2 live read from which it came.
+- Tool 2 local persistence stores decisions, user choices, and audit provenance only; it is not a current Media database mirror.
 
 ## 7. Tool 3 requirements
 
-Tool 3 consults Baserow `travel_schedule`, but that table is an **immutable static reference dataset**.
+Tool 3 uses data originating from Baserow `travel_schedule`, but that table is an **immutable static reference dataset**.
+
+Tool 3 does not access Baserow. Tool 2's read-only provider boundary owns bootstrap and remote verification and produces the complete verified local schedule reference consumed by Tool 3.
 
 Tool 3 therefore does **not** need a fresh network read for every file, batch, review, or decision. It may use a complete verified local snapshot/cache as authoritative schedule evidence.
 
@@ -116,7 +120,7 @@ The schedule's **evidentiary strength** remains limited even though the data its
 
 ## 8. Tool 4 requirements
 
-Tool 4 is the mutation boundary and must defend against collaborator races.
+Tool 4 is the exclusive Baserow write/schema-mutation boundary and must defend against collaborator races. Tool 2 owns read-only candidate/reconciliation queries; Tool 4 owns the direct live reads needed to validate and execute its mutations.
 
 Before any update to an existing Baserow row, Tool 4 must:
 
@@ -125,7 +129,7 @@ Before any update to an existing Baserow row, Tool 4 must:
 3. if relevant state changed, do not overwrite the collaborator's changes silently; return a stale/re-review conflict;
 4. only write after the live precondition check succeeds.
 
-Before creating a new Media row, Tool 4 must perform a fresh live existence/candidate check so a row created by another collaborator since Tool 2 review is not duplicated.
+Before creating a new Media row, Tool 4 must invoke Tool 2 for a fresh complete live existence/candidate review so a row created by another collaborator since the previous review is not duplicated.
 
 Where Baserow exposes useful row update/version metadata it may be recorded and used as additional evidence, but a live pre-write read remains the required baseline.
 
@@ -133,17 +137,19 @@ Where Baserow exposes useful row update/version metadata it may be recorded and 
 
 Tool 1 may use committed static dictionaries/seed assets as **non-authoritative parsing aids** when useful for filename interpretation.
 
+Tool 1 does not access Baserow. Current Baserow-derived Media data must come through Tool 2's structured read-only review result. Tool 1 must not own credentials, table IDs, clients, or Baserow providers.
+
 Those aids must not be represented as proof of current mutable Baserow contents. If live mutable Baserow is unavailable, fallback reference data may support a provisional parser interpretation, but it cannot satisfy a mutable database-existence check or be labeled as current Media evidence.
 
 A verified `travel_schedule` snapshot is different: it is authoritative as the static schedule dataset, while still carrying only the limited evidentiary strength defined for travel plans.
 
-The existing Tool 1 reference provider's fallback behavior must not be reused by Tool 2 or Tool 4 as an authoritative provider for mutable database state.
+The existing Tool 1 reference provider's fallback behavior must not be used as an authoritative provider for mutable database state. Any runtime Baserow access currently present there must be removed from Tool 1 or moved behind Tool 2's read-only service.
 
 ## 10. Efficient access
 
 Live-only for mutable state does not mean repeatedly downloading every mutable table for every file.
 
-Implementations should prefer efficient current queries:
+Tool 2 read-only lookup and Tool 4 pre-write validation should prefer efficient current queries:
 
 - server-side filters/searches;
 - direct row-ID/source-ID lookups;
@@ -173,7 +179,7 @@ For immutable `travel_schedule`, availability semantics are different: a verifie
 
 ## 12. Testing requirement
 
-Every tool that depends on mutable Baserow state must include race/freshness tests appropriate to its responsibility, including cases where live data changes after an earlier stored result.
+Every tool that depends on mutable Baserow-derived state must include race/freshness tests appropriate to its responsibility, including cases where live data changes after an earlier stored result. Repository architecture tests must additionally prove that Tools 1 and 3 receive no Baserow credentials/providers, Tool 2 remains strictly read-only, and only Tool 4 can mutate Baserow.
 
 At minimum, mutable-state tests must demonstrate that:
 

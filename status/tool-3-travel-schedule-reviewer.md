@@ -10,6 +10,8 @@ Implementation protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
+Post-acceptance architecture note (2026-09-17): Tool 3's accepted schedule reasoning remains approved. `docs/baserow-access-boundary-amendment.md` confirms that Tool 3 consumes a verified local schedule artifact without Baserow access; bootstrap/remote verification occurs through Tool 2's read-only provider boundary. This does not reopen Tool 3's accepted evidence semantics.
+
 Implementation branch: `tool-3-implementation`  
 Implementation PR: #26 — `Tool 3 — Travel Schedule Reviewer implementation`  
 Accepted implementation code/docs commit: `a7184b97f4543defe59274c5ad5d2b9496276d37`  
@@ -22,7 +24,7 @@ All independent review findings R-001 through R-016 are resolved. The final revi
 
 Required CI run #75 passed on the final Builder handoff with **221 passed, 2 warnings**, helper-script validation PASS, and package build PASS. The representative 260-file Tool 1 → live Tool 2 → Tool 3 evaluation reports 133 Tool 2 downstream routes, 44 provisional enrichments, zero high-priority local overwrites, zero confirmed-Media authority overwrites, zero `REFERENCE_UNAVAILABLE`, and zero `PROCESSING_ERROR` results.
 
-Tool 3 is accepted as a read-only Travel Schedule Reviewer. It uses a verified immutable schedule reference, treats schedule evidence as contextual/provisional, preserves stronger Tool 1 and confirmed Tool 2 evidence, and never performs Baserow writes or physical file renames.
+Tool 3 is accepted as a Travel Schedule Reviewer. It uses a verified immutable schedule reference, treats schedule evidence as contextual/provisional, preserves stronger Tool 1 and confirmed Tool 2 evidence, and never performs Baserow access or physical file renames. Tool 2's read-only boundary owns reference bootstrap/remote verification.
 
 ## Open questions / contradictions
 

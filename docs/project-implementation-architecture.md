@@ -4,6 +4,24 @@ Status: **authoritative project-wide implementation decision**
 
 This document defines the implementation shell in which the individual media-archive tools should be built. Tool-specific behavior remains defined by each finalized build plan.
 
+## 0. Baserow access boundary
+
+The authoritative access amendment is `docs/baserow-access-boundary-amendment.md`.
+
+Tool 2 owns read-only Baserow lookup/reconciliation. Tool 4 has read-and-write access and is the only writer/schema mutator. Tools 1 and 3 do not access Baserow. Tool 3 consumes a verified static schedule artifact produced through Tool 2's read-only provider boundary.
+
+The integrated flow is:
+
+```text
+Tool 1 finds/interprets the file and may make an initial rename
+→ Tool 1 asks Tool 2 for a live Baserow Media check
+→ Tool 1 asks Tool 3 for date/schedule evidence
+→ Tool 1 renders and commits the final filename
+→ Tool 1 calls Tool 4 once for that final state
+→ Tool 4 uses Tool 2 for a fresh existing-item check
+→ Tool 4 directly revalidates the write and synchronizes Baserow
+```
+
 ## 1. Application shape
 
 Build the project as a **local Python application/package with two first-class interfaces**:

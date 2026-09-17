@@ -6,11 +6,15 @@ Tracking issue: #2
 
 This document is the authoritative implementation specification for Tool 2. The implementation model must treat it as read-only and use `status/tool-2-media-database-reviewer.md` for progress, questions, review findings, and commit checkpoints.
 
+Post-acceptance architecture amendment: `docs/baserow-access-boundary-amendment.md`
+
+The amendment confirms Tool 2 as the read-only Baserow Media lookup/reconciliation boundary. Tool 2 may read current Baserow data but must never mutate rows, select options, or schema. Tool 4 uses Tool 2 for existing-item/candidate checks and remains the only writer.
+
 ## 1. Purpose
 
-Tool 2 is the project's **read-only Baserow media lookup and reconciliation service**.
+Tool 2 is the project's **read-only Baserow Media lookup and reconciliation service**.
 
-It queries the Media database for relevant media items and metadata so that other tools — especially the Renamer — can:
+It queries current Media data so that other tools — especially the Renamer and Tool 4 — can:
 
 - search for possible matching logical media items;
 - compare Baserow metadata with information already interpreted from the filename/path;

@@ -59,17 +59,20 @@ The implementation uses `uv` for Python environment/dependency management. Tool 
 
 ## Baserow data authority
 
-The mutable Baserow Media database is continuously updated by external collaborators. Any tool that needs to know the **current mutable database state** must perform a live Baserow read for that decision; persisted mutable row copies are audit/history only and must not be used as an authoritative operational cache.
+The mutable Baserow Media database is continuously updated by external collaborators. Tool 2 has read-only Baserow access for current Media lookup/reconciliation. Tool 4 has read-and-write access and is the only tool allowed to mutate rows, select options, or schema. Tools 1 and 3 do not access Baserow. Persisted mutable row copies are audit/history only and must not be used as an authoritative operational cache.
 
 Project-wide policy: `docs/baserow-live-data-policy.md`
+
+Access-boundary amendment: `docs/baserow-access-boundary-amendment.md`
 
 Important consequences include:
 
 - database/network failure is not treated as a valid Media no-match;
 - cached mutable rows cannot produce a current confirmed Media association or enrichment;
-- Tool 2 revalidates mutable live state when a human confirms a candidate/new-item decision;
-- `travel_schedule` is a deliberate exception: it is a static historical reference table that will never be updated, so Tool 3 may use a complete verified local snapshot/cache across files, batches, sessions, and offline runs;
-- Tool 4 re-reads immediately before update and re-checks existence immediately before create so collaborator changes are not silently overwritten or duplicated;
+- Tool 2 performs targeted, pagination-complete live reads and returns structured candidate/reconciliation results;
+- `travel_schedule` is a deliberate exception to per-decision freshness: it is static, so Tool 3 may use a complete verified local snapshot bootstrapped/verified through Tool 2's read-only boundary across files, batches, sessions, and offline runs;
+- Tool 4 uses Tool 2 for a fresh existing-item check, then directly revalidates the exact target/write preconditions so collaborator changes are not silently overwritten or duplicated;
+- Tool 1 calls Tool 4 only after it has combined Tool 2 and Tool 3 evidence and committed the final filename for that stage;
 - stored mutable Baserow values remain useful for audit provenance, but not as a substitute for a fresh current read.
 
 The static nature of `travel_schedule` changes only its freshness/caching semantics. Its evidentiary strength remains limited: planned travel may corroborate or suggest WHEN/WHERE, but it is not absolute proof that a recording occurred at that place/time.
@@ -114,7 +117,7 @@ Implementation tracking/discussion: GitHub issue #1
 
 Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`.
 
-Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger later-tool evidence, handles ambiguous dates and multilingual archive naming patterns, resolves locations against shared Baserow data, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness.
+Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger Tool 2/Tool 3 evidence, handles ambiguous dates and multilingual archive naming patterns, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness. After it commits the final filename for the current stage, Tool 1 calls Tool 4 for Baserow synchronization; Tool 1 itself never accesses Baserow.
 
 The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub Actions CI is now operational for subsequent commits; Tool 1's original acceptance remains based on the reviewed implementation/test evidence recorded in its status file.
 
@@ -160,9 +163,11 @@ Implementation tracking/discussion: GitHub issue #2
 
 Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`.
 
-Tool 2 is the read-only live Baserow Media reconciliation service. It consumes structured Tool 1 filename evidence, performs targeted and pagination-complete live candidate retrieval, compares WHEN/WHAT/WHERE and supporting category/travel evidence, separates confirmed enrichment from candidate-only metadata, and returns structured decisions for the Renamer, Tool 3, Tool 4, CLI, and review portal.
+Tool 2 is the read-only live Baserow Media lookup and reconciliation service. It consumes structured Tool 1 filename evidence, performs targeted and pagination-complete live candidate retrieval, compares WHEN/WHAT/WHERE and supporting category/travel evidence, separates confirmed enrichment from candidate-only metadata, and returns structured decisions for the Renamer, Tool 3, Tool 4, CLI, and review portal. It cannot mutate Baserow.
 
-Every current-state **mutable Media/database** decision is live: persisted mutable Baserow rows/results are audit/history only. Database unavailability cannot be treated as a Media no-match, human confirmations are live-revalidated, and Tool 4 remains the only Baserow writer. The immutable `travel_schedule` reference is exempt from per-decision freshness requirements; Tool 2's existing live schedule reads remain valid but are not a requirement for Tool 3.
+Every current-state **mutable Media/database** decision uses a live Tool 2 read: persisted mutable Baserow rows/results are audit/history only. Database unavailability cannot be treated as a Media no-match, and human confirmations are live-revalidated. Tool 4 uses Tool 2 for the fresh existence/candidate decision before synchronization, then performs its own exact-row/schema/write-precondition reads. The immutable `travel_schedule` reference is exempt from per-decision freshness requirements and may be supplied to Tool 3 as a verified local artifact produced through Tool 2's read-only boundary.
+
+Tool 2's accepted read-only lookup and reconciliation behavior remains approved. Tool 4 remains the sole writer.
 
 The accepted implementation resolved findings R-001 through R-015. Required GitHub CI passed with **157 tests**, helper-script validation, and package build success. A fresh live read-only evaluation across the 260 representative sample files produced 1 confirmed existing match, 20 probable matches, 99 multiple-candidate cases, 39 new-media candidates, 32 insufficient-evidence cases, 69 conflicts, and 0 database failures.
 

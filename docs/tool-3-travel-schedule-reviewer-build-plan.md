@@ -11,6 +11,10 @@ Project-wide Baserow authority policy: `docs/baserow-live-data-policy.md`
 Tool 2 build plan: `docs/tool-2-media-database-reviewer-build-plan.md`  
 Tool 2 accepted implementation status: `status/tool-2-media-database-reviewer.md`
 
+Post-acceptance architecture amendment: `docs/baserow-access-boundary-amendment.md`
+
+The amendment supersedes any requirement below that lets Tool 3 itself receive credentials or contact Baserow. Tool 3 retains its accepted schedule reasoning and consumes a complete integrity-verified local schedule reference bootstrapped or verified through Tool 2's read-only boundary.
+
 ---
 
 ## 1. Purpose
@@ -51,7 +55,7 @@ Tool 3 is reusable by Tool 1 and by later tools that acquire new date/location c
 
 Tool 3 does not physically rename files. Tool 1 remains the canonical filename renderer and validator.
 
-Tool 3 does not write Baserow. Tool 4 remains the only Media database mutation boundary.
+Tool 3 does not access Baserow. Tool 2 owns read-only access; Tool 4 is the only writer.
 
 ---
 
@@ -101,15 +105,15 @@ Mutable Media rows remain under Tool 2's live-data rules. This static-reference 
 
 ## 5. Tool 2 integration boundary
 
-Tool 3 must **reuse Tool 2's Baserow/provider boundary** rather than introducing separate credentials, raw API code, or duplicated schema access.
+Tool 3 must use a Baserow-agnostic schedule-reference interface backed by a complete integrity-verified local artifact bootstrapped or verified through Tool 2's read-only provider boundary.
 
-The Builder may expose/refactor a dedicated read-only method such as a complete travel-schedule fetch on the accepted Tool 2 provider, or factor common Baserow read behavior into a shared adapter, provided Tool 2 behavior and tests remain intact.
+Tool 2 owns any Baserow bootstrap/remote verification of that artifact. Tool 3 only loads and interprets it; the accepted Tool 3 reasoning behavior and tests must remain intact.
 
 Requirements:
 
-- Tool 3 must not read Baserow credentials directly throughout its matching code;
-- Tool 3 must not issue Baserow mutations;
-- complete pagination is required when bootstrapping the schedule reference;
+- Tool 3 must not receive Baserow credentials or table IDs;
+- Tool 3 must not issue any Baserow read or mutation;
+- Tool 2 must use complete pagination when bootstrapping/verifying the schedule reference;
 - the accepted Tool 2 Media-review service remains the owner of Media-row reconciliation;
 - Tool 3 must not reimplement Tool 2's Media candidate engine.
 
@@ -224,8 +228,8 @@ If a verified complete local schedule reference exists and its checksum validate
 
 If no verified local schedule reference exists:
 
-1. use the Tool 2/shared Baserow provider;
-2. fetch the entire configured `travel_schedule` table with complete pagination;
+1. call Tool 2's read-only schedule-reference bootstrap service without receiving its provider or credentials;
+2. have Tool 2 fetch the entire configured `travel_schedule` table with complete pagination;
 3. normalize and validate the dataset;
 4. write the local reference atomically (temporary file then replace);
 5. calculate/store the deterministic checksum and row count;
@@ -651,7 +655,7 @@ Travel review must support:
 
 Reference commands must:
 
-- bootstrap only through the shared Tool 2/Baserow provider;
+- bootstrap only through Tool 2's read-only application service, without exposing its Baserow provider to Tool 3;
 - report row count/checksum/source table/retrieval metadata without secrets;
 - verify local integrity;
 - never silently replace a static reference whose remote checksum unexpectedly changed.
@@ -884,8 +888,8 @@ Also demonstrate at least one corroboration/conflict/multiple/no-support case fr
 Tool 3 is acceptable only when all of the following are true:
 
 1. finalized build-plan behavior is implemented through reusable Python services;
-2. no Baserow mutation exists in Tool 3;
-3. Tool 3 reuses Tool 2/shared Baserow access instead of duplicating credentials/API behavior;
+2. no Baserow access or mutation exists in Tool 3;
+3. schedule bootstrap/verification calls Tool 2's read-only service without passing credentials/provider behavior into Tool 3;
 4. the complete `travel_schedule` table can be bootstrapped once into a verified immutable local reference;
 5. normal per-file review uses the verified reference without network access;
 6. schedule reference integrity is protected by deterministic checksum/provenance;
@@ -930,7 +934,7 @@ Recommended implementation sequence:
 
 1. read this plan, Tool 3 status, architecture/protocol, static-schedule policy, accepted Tool 1/2 code/tests;
 2. define typed Travel Schedule reference/result models and static-reference integrity contract;
-3. expose/reuse a complete schedule fetch through the Tool 2/shared provider boundary;
+3. expose/reuse a complete schedule bootstrap operation through Tool 2's read-only application-service boundary;
 4. implement local reference bootstrap/load/verify/checksum behavior;
 5. implement deterministic date/range/location normalization and indexes;
 6. implement candidate retrieval + decision engine for Sections 15–23;

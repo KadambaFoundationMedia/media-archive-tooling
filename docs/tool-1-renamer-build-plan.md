@@ -4,6 +4,10 @@ Status: **finalized requirements / ready for implementation**
 
 Tracking issue: #1
 
+Post-acceptance architecture amendment: `docs/baserow-access-boundary-amendment.md`
+
+The amendment supersedes every requirement below that assigns Baserow access or a Baserow provider to Tool 1. Tool 1 retains its accepted parsing, evidence, naming, and commit behavior. It asks Tool 2 for the live Media check and Tool 3 for schedule/date evidence, commits the final filename for that processing stage, and then calls Tool 4 once to synchronize Baserow.
+
 ## 1. Purpose
 
 Tool 1 is a fast, repeatable metadata interpretation and filename normalization tool for the media archive. It should rename files whenever the available evidence supports an improvement, without waiting for slower audio/content processing.
@@ -664,11 +668,11 @@ Store at least:
 
 Baserow remains the shared collaboration surface; the local registry is operational state only.
 
-## 28. Baserow integration architecture
+## 28. Baserow integration boundary
 
-Use a dedicated adapter, e.g. `BaserowReferenceProvider`, rather than spreading API calls throughout parsing code.
+Tool 1 must not construct a Baserow adapter or receive Baserow credentials. It requests live Media/reference evidence through Tool 2's read-only application service and requests mutations only by calling Tool 4 after the final filename for the current processing stage is committed.
 
-It should provide high-level operations such as:
+The Baserow-agnostic Tool 2 interface used by Tool 1 may provide high-level operations such as:
 
 ```text
 get_category_titles()
@@ -676,10 +680,9 @@ get_known_locations()
 get_country_values()
 find_place(...)
 find_country(...)
-create_missing_reference_value(...)
 ```
 
-Batch-load/cache reference data where possible. The parser should not care which transport is used underneath.
+Tool 1's parser must not care which transport Tool 2 uses underneath. Mutable Media state must follow the live-current policy; committed static parser aids may be cached only as non-authoritative parsing references.
 
 ## 29. Logging and evaluation
 
@@ -697,7 +700,7 @@ Include at minimum:
 - alternatives
 - folder grammar used
 - fuzzy match details
-- Baserow lookups/writes
+- Tool 2 lookup and Tool 4 synchronization outcomes
 - online lookups
 - Vedabase validation
 - conflicts
@@ -805,14 +808,14 @@ Tool 1 v1 is ready only when it demonstrates that:
 3. repeated runs are idempotent
 4. folder/sibling grammar is used safely
 5. specific WHAT information is preserved
-6. known locations resolve through Baserow
+6. known locations can resolve through structured Tool 2 read-only evidence without Tool 1 accessing Baserow
 7. filename countries use lowercase ISO alpha-2
 8. multilingual dates work
 9. ambiguous dates retain alternatives
 10. `_edited` behavior follows this specification
 11. ambiguous files do not halt the batch
 12. existing files are never silently overwritten
-13. Baserow duplicate creation is guarded against
+13. Tool 4 guards against duplicate Baserow creation through a fresh Tool 2 check
 14. later evidence enriches filenames without changing processing identity
 15. finalization applies the agreed collision scheme
 16. diagnostics are detailed enough to diagnose sample failures without guessing

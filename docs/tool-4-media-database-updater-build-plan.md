@@ -8,6 +8,7 @@ This document is the authoritative implementation specification for Tool 4. The 
 
 Project-wide architecture: `docs/project-implementation-architecture.md`  
 Project-wide Baserow authority policy: `docs/baserow-live-data-policy.md`  
+Baserow access-boundary amendment: `docs/baserow-access-boundary-amendment.md`
 Tool 1 build plan/status: `docs/tool-1-renamer-build-plan.md`, `status/tool-1-renamer.md`  
 Tool 2 build plan/status: `docs/tool-2-media-database-reviewer-build-plan.md`, `status/tool-2-media-database-reviewer.md`  
 Tool 3 build plan/status: `docs/tool-3-travel-schedule-reviewer-build-plan.md`, `status/tool-3-travel-schedule-reviewer.md`
@@ -16,7 +17,7 @@ Tool 3 build plan/status: `docs/tool-3-travel-schedule-reviewer-build-plan.md`, 
 
 ## 1. Purpose
 
-Tool 4 is the project's **Media Database Updater** and the **only application tool allowed to mutate Baserow Media-database state**.
+Tool 4 is the project's **Media Database Updater**, the only application tool with read-and-write Baserow access, and the only tool allowed to mutate Baserow rows, select options, or schema. Tool 2 separately has strictly read-only access for Media lookup/reconciliation and static-reference bootstrap/verification.
 
 The Baserow `media` table is the searchable record of logical recordings that exist in the archive and/or are available through online formats such as YouTube, transcript pages, online audio, SoundCloud, archive.org, and other represented sources.
 
@@ -39,15 +40,15 @@ Tool 4 is not a duplicate detector based on media bytes and does not merge/delet
 The initial metadata sequence is conceptually:
 
 ```text
-Tool 1 Renamer — initial/committed filename state
-→ Tool 2 Media Database Reviewer — live reconciliation
-→ Tool 3 Travel Schedule Reviewer — contextual evidence
-→ Tool 4 Media Database Updater — create/update Baserow
-→ Tool 1 Renamer — later enrich/update passes
-→ Tool 4 again whenever a later committed rename adds trustworthy metadata
+Tool 1 Renamer — find/interpret file and initial rename when evidence permits
+→ Tool 2 Media Database Reviewer — live read-only Baserow lookup/reconciliation
+→ Tool 3 Travel Schedule Reviewer — date/schedule corroboration
+→ Tool 1 Renamer — combine evidence and commit final filename
+→ Tool 4 Media Database Updater — fresh Tool 2 gate, live revalidation, Baserow synchronization
+→ repeat the collaboration when later evidence produces another final committed filename
 ```
 
-Tool 4 is reusable. Tool 1 and later tools may call its programmatic service whenever a committed archive-file state needs to be synchronized with Baserow.
+Tool 4 is reusable. In the initial flow, Tool 1 calls it once after Tool 1 has worked with Tools 2 and 3 and committed the final filename. If later processing discovers stronger WHAT/WHERE/WHEN evidence and Tool 1 commits another final renamed state, Tool 1 calls Tool 4 again.
 
 A mere dry-run or uncommitted proposal must never mutate Baserow.
 
@@ -55,15 +56,17 @@ A mere dry-run or uncommitted proposal must never mutate Baserow.
 
 ## 3. Authority boundary
 
-Tool 4 owns Baserow writes. Other tools do not.
+Tool 4 owns every Baserow mutation and the direct reads needed to validate those mutations. Tool 2 owns strictly read-only lookup/reconciliation. Tools 1 and 3 perform no Baserow access.
 
 - Tool 1 owns filename interpretation, canonical rendering, filesystem rename/commit behavior, and tracking identity.
-- Tool 2 owns live Media lookup/reconciliation and current candidate decisions.
-- Tool 3 supplies contextual schedule evidence but does not prove recording identity.
+- Tool 2 owns live read-only Media lookup/reconciliation and current candidate decisions.
+- Tool 3 supplies contextual schedule evidence from a complete verified local reference produced through Tool 2's read-only boundary; it owns no Baserow provider.
 - Tool 4 decides and executes safe create/update mutations from those structured results.
-- Review-portal routes/templates/JavaScript must call Tool 4 application services; they must not issue Baserow mutations directly.
+- Tool 4 owns its read/write credentials, write/schema mapping, exact-row precondition reads, uncertain-outcome reconciliation, and mutations.
+- Tool 2 may own separately scoped read-only credentials/provider behavior; Tool 1 and Tool 3 must not receive Baserow clients/providers.
+- Review-portal routes/templates/JavaScript must call application services; they must not issue Baserow operations directly.
 
-Tool 4 may introduce a dedicated Baserow write adapter or extend/refactor the shared adapter boundary, but Tool 2 itself remains read-only.
+Tool 4 may introduce a dedicated Baserow write adapter or extend/refactor the shared adapter boundary. Tool 2 must remain technically incapable of mutations. Tool 4 must use Tool 2's service for Media existence/candidate reconciliation rather than duplicating its matching rules.
 
 ---
 
@@ -87,11 +90,11 @@ A collaborator changing an unrelated field such as YouTube while Tool 4 is updat
 
 Immediately before create:
 
-1. perform a fresh current Tool 2 existence/candidate review;
-2. use complete current candidate retrieval required by Tool 2 for a new-item conclusion;
+1. invoke Tool 2 for a fresh, complete current existence/candidate review;
+2. validate the returned Tool 2 decision, completeness, database state, timestamp, and provenance;
 3. if a collaborator has created a plausible row since the prior review, do not create another row;
 4. reclassify to update/review as appropriate;
-5. create only when a current live decision still establishes `NEW_MEDIA_CANDIDATE` with sufficient evidence.
+5. create only when the current complete Tool 2 decision still establishes `NEW_MEDIA_CANDIDATE` with sufficient evidence.
 
 Database/network/schema failure is a blocked database state, never proof that no row exists.
 
@@ -100,6 +103,8 @@ Database/network/schema failure is a blocked database state, never proof that no
 ## 5. Tool 2 is the create-vs-update gate
 
 Tool 4 must not reimplement Media matching from scratch.
+
+Tool 2 owns candidate I/O and reconciliation. Every accepted Tool 2 decision must identify the exact live read/provenance used to compute it. Tool 4 validates that contract and owns the subsequent exact-row/schema/write-precondition reads.
 
 Conceptual routing:
 
@@ -112,7 +117,7 @@ Tool 2 explicit human-confirmed existing association
     → prepare update if still valid
 
 Tool 2 NEW_MEDIA_CANDIDATE
-    → fresh pre-create Tool 2 check
+    → fresh pre-create Tool 2 live review
     → create only if still NEW_MEDIA_CANDIDATE
 
 PROBABLE_EXISTING_MEDIA
@@ -492,7 +497,7 @@ Rules:
 
 ## 14. Tool 1 automatic synchronization hook
 
-User policy: when Tool 1 commits a rename/current file state, it should call Tool 4 so Baserow follows the committed archive metadata.
+User policy: Tool 4 is called after Tool 1 has worked with Tools 2 and 3 and committed the final filename for the current processing stage. Tool 4 is not called for the initial/intermediate rename. When later processing produces another final Tool 1 rename, that later final committed state calls Tool 4 again.
 
 Integration must occur through the application-service layer after the local Tool 1 commit succeeds.
 
@@ -513,7 +518,7 @@ Tool 1 dry-run never writes Baserow.
 
 Later Tool 1 ENRICH/final passes use the same hook when their committed metadata/path changes require database synchronization.
 
-Other tools must call the same Tool 4 programmatic service rather than implementing their own Baserow writers.
+Other tools must not implement Baserow writers. Tool 2 remains the reusable read-only query/reconciliation service used by Tool 1 and Tool 4.
 
 ---
 
@@ -542,7 +547,7 @@ Requirements:
 - record the Tool 4 request durably before/while attempting synchronization;
 - expose pending/failed database sync visibly in status/portal;
 - retries are safe and idempotent;
-- a later retry starts from fresh Tool 2/live Baserow state;
+- a later retry starts from a fresh current Tool 2 review plus Tool 4's direct pre-write revalidation;
 - no successful local rename is silently considered fully synchronized while Tool 4 remains pending.
 
 ---
@@ -555,7 +560,7 @@ Use stable request identity/fingerprints tied to Tool 1 tracking identity/curren
 
 If a create/update HTTP request times out after Baserow may have processed it, the retry must **not blindly repeat the mutation**. Re-read/reconcile first:
 
-- for create: run Tool 2 existence/candidate check again and locate the possibly created row;
+- for create: run Tool 2's live existence/candidate check again and locate the possibly created row;
 - for update: fetch the target row and determine whether the intended minimal changes are already present.
 
 Only then decide whether another mutation is needed.
@@ -716,14 +721,19 @@ The implementation must include focused regression/integration coverage for at l
 38. `media_archive_path` stores full current path;
 39. same tracked file rename safely updates Filename/path from old to new;
 40. different unproven archive representation does not overwrite existing path;
-41. Tool 1 successful commit records/initiates Tool 4 synchronization;
-42. Tool 1 mere approval/dry-run does not write Baserow;
+41. Tool 1's final successful commit after Tool 2/Tool 3 collaboration records/initiates Tool 4 synchronization;
+42. Tool 1's initial/intermediate rename, mere approval, and dry-run do not write Baserow;
 43. Tool 4 failure after rename leaves a durable pending sync rather than reverting the file;
-44. retry of pending sync uses fresh current Tool 2/Baserow state;
+44. retry of pending sync uses a fresh current Tool 2 review plus Tool 4 pre-write revalidation;
 45. portal mutating action calls service layer and revalidates live state;
 46. CLI dry-run performs zero mutations;
 47. CLI explicit commit invokes the same service used by Tool 1/portal;
 48. audit record contains before/after/provenance without credentials.
+49. Tool 1 and Tool 3 production composition constructs no Baserow client/provider and receives no Baserow credentials;
+50. Tool 2's provider is demonstrably read-only and cannot issue row/select-option/schema mutations;
+51. Tool 3 runs offline from a verified schedule artifact produced through Tool 2's read-only boundary;
+52. Tool 1 calls Tool 4 only after the final filename for the current stage is committed;
+53. Tool 4 uses Tool 2's fresh current review as the create-vs-update gate and directly revalidates write preconditions.
 
 The Builder may add more tests as implementation details warrant.
 
@@ -731,7 +741,7 @@ The Builder may add more tests as implementation details warrant.
 
 ## 23. Representative evaluation before acceptance
 
-Before Tool 4 is accepted, run a safe representative evaluation from current Tool 1/Tool 2/Tool 3 state over the project's 260-file sample set **without bulk-writing production Baserow**.
+Before Tool 4 is accepted, run a safe representative evaluation of the integrated Tool 1–4 flow over the project's 260-file sample set **without bulk-writing production Baserow**. Tool 2 performs the live read-only Media checks; Tool 3 consumes its verified static schedule reference; Tool 4 only previews the resulting create/update work.
 
 The evaluation should report at least:
 
@@ -759,13 +769,16 @@ If a non-production Baserow write fixture/table is available, exercise actual cr
 
 Tool 4 is implementation-complete only when:
 
-- application service, Baserow write adapter, CLI, portal integration, and local durable sync state are implemented;
-- Tool 2 is the live create-vs-update gate;
+- application service, Baserow write gateway, CLI, portal integration, and local durable sync state are implemented;
+- Tool 4 is the sole writer/schema mutator and owns direct pre-write validation reads;
+- Tool 2 remains strictly read-only and is the live create-vs-update/existing-item gate;
+- Tool 1 and Tool 3 contain no operational Baserow access and receive no Baserow credentials/providers;
+- Tool 3 consumes a complete verified schedule reference produced through Tool 2's read-only boundary;
 - pre-update and pre-create race checks satisfy project policy;
 - new-row defaults and partial-date Notes behavior match this plan;
 - existing rows are minimally patched without clearing unrelated formats/sources;
 - country/location option creation is safe and all other taxonomy remains bounded to existing options;
-- Tool 1 committed renames automatically create durable Tool 4 sync work;
+- Tool 1's final committed rename for each processing stage automatically creates durable Tool 4 sync work;
 - failures are retryable/idempotent without rolling back successful filesystem commits;
 - required tests pass under Python 3.12;
 - representative 260-file write-preview evaluation is documented;
@@ -784,8 +797,9 @@ The Builder may choose ordinary implementation details such as class names, HTTP
 
 The Builder must **not** silently change:
 
-- Tool 4 as the sole Baserow write boundary;
-- Tool 2 live reconciliation as the create/update gate;
+- Tool 4 as the sole Baserow write/schema-mutation boundary;
+- Tool 2 live read-only reconciliation as the create/update gate;
+- Tool 3 schedule consumption through a verified artifact produced via Tool 2's read-only boundary;
 - live pre-write race protection;
 - the no-silent-overwrite conflict rule;
 - full-date-only Baserow `Date` semantics;
@@ -794,7 +808,7 @@ The Builder must **not** silently change:
 - `media_archive_path` full-path behavior;
 - preservation of unrelated format/source fields;
 - select-option policy, especially country/location-only automatic additions;
-- automatic Tool 1 post-commit synchronization;
+- automatic Tool 1 post-final-commit synchronization after Tool 2/Tool 3 collaboration;
 - no production bulk-write during Builder evaluation;
 - idempotency and durable pending-sync behavior.
 
