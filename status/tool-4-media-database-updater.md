@@ -17,7 +17,7 @@ Builder implementation commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
 Evaluated clean commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
 Evaluation evidence commit: `5fc0c465a39bfbdf6fdb98a0c8b9195a947702f2`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: Pending final handoff commit verification
+PR #27 CI status: PASS (Run 35244629789: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35244629789)
 Last planning/review update: 2026-09-17
 
 ## Third independent review checkpoint
@@ -436,3 +436,7 @@ Required correction:
   - Review-required conflicts: 221 (including 99 multiple candidates, 32 insufficient evidence)
   - Database unavailable: 0
   - Clean worktree confirmed: true
+- **GitHub Actions CI**:
+  - Run ID: `35244629789`
+  - URL: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35244629789
+  - Result: SUCCESS
