@@ -356,11 +356,12 @@ def run_evaluation():
 
         # Representative identities (R-038)
         init_p = initial_proposals_by_id[tid]
+        before_fn = Path(init_p.original_path).name
         if res.operation == SyncOperation.UPDATE and not any(i["category"] == "matched_update" for i in representative_identities):
             representative_identities.append({
                 "category": "matched_update",
                 "tracking_id": tid,
-                "before_filename": init_p.original_filename,
+                "before_filename": before_fn,
                 "initial_proposed_filename": init_p.proposed_filename,
                 "final_proposed_filename": p.proposed_filename,
                 "committed_filename_on_disk": Path(req.current_path).name,
@@ -374,7 +375,7 @@ def run_evaluation():
             representative_identities.append({
                 "category": "candidate_create",
                 "tracking_id": tid,
-                "before_filename": init_p.original_filename,
+                "before_filename": before_fn,
                 "initial_proposed_filename": init_p.proposed_filename,
                 "final_proposed_filename": p.proposed_filename,
                 "committed_filename_on_disk": Path(req.current_path).name,
@@ -388,7 +389,7 @@ def run_evaluation():
             representative_identities.append({
                 "category": "partial_date_notes",
                 "tracking_id": tid,
-                "before_filename": init_p.original_filename,
+                "before_filename": before_fn,
                 "initial_proposed_filename": init_p.proposed_filename,
                 "final_proposed_filename": p.proposed_filename,
                 "committed_filename_on_disk": Path(req.current_path).name,
@@ -402,7 +403,7 @@ def run_evaluation():
             representative_identities.append({
                 "category": "conflict_blocked",
                 "tracking_id": tid,
-                "before_filename": init_p.original_filename,
+                "before_filename": before_fn,
                 "initial_proposed_filename": init_p.proposed_filename,
                 "final_proposed_filename": p.proposed_filename,
                 "committed_filename_on_disk": Path(req.current_path).name,
@@ -412,11 +413,11 @@ def run_evaluation():
                 "tool4_status": res.status.value,
                 "tool2_decision": t2_dec,
             })
-        elif init_p.original_filename == p.proposed_filename and not any(i["category"] == "unchanged_already_canonical" for i in representative_identities):
+        elif before_fn == p.proposed_filename and not any(i["category"] == "unchanged_already_canonical" for i in representative_identities):
             representative_identities.append({
                 "category": "unchanged_already_canonical",
                 "tracking_id": tid,
-                "before_filename": init_p.original_filename,
+                "before_filename": before_fn,
                 "initial_proposed_filename": init_p.proposed_filename,
                 "final_proposed_filename": p.proposed_filename,
                 "committed_filename_on_disk": Path(req.current_path).name,
