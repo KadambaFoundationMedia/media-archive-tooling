@@ -39,6 +39,21 @@ def test_where_from_folder_context():
     assert res.state == ResolutionState.STRONG
 
 
+def test_czech_month_folder_context_sets_country_without_inventing_location():
+    resolver = WhereResolver()
+    res, remaining = resolver.resolve(
+        "02 KKS. SB. 3.1.20.mp3",
+        parent_folder="KKS DUBEN 2008 MP3",
+    )
+
+    assert res.place_location is None
+    assert res.country == "Czech Republic"
+    assert res.country_iso2 == "cz"
+    assert res.state == ResolutionState.STRONG
+    assert res.evidence[0].source == "czech_language_context"
+    assert remaining == "02 KKS. SB. 3.1.20.mp3"
+
+
 def test_bounded_fuzzy_where():
     resolver = WhereResolver()
     # Typo "PRUHONICCE" fuzzy matches "Pruhonice"

@@ -130,7 +130,25 @@ class WhereResolver:
                     evidence=[Evidence(source="filename_country_match", raw_value=raw_token, details=f"matched country '{canon_place}-{iso2}'")]
                 ), filename_text.strip()
 
-        # 3. Bounded Fuzzy Matching across known places
+        # 3. Archive language context that is itself strong country evidence.
+        # "duben" is the Czech word for April. It can establish the country
+        # without inventing a city, which remains available for later audio
+        # discovery or human review.
+        czech_month = re.search(r"(?:^|[\s_.-])(duben)(?=[_.\s-]|$)", combined_context, re.IGNORECASE)
+        if czech_month:
+            return WhereResult(
+                place_location=None,
+                country="Czech Republic",
+                country_iso2="cz",
+                state=ResolutionState.STRONG,
+                evidence=[Evidence(
+                    source="czech_language_context",
+                    raw_value=czech_month.group(1),
+                    details="Czech month name establishes country only; location remains unresolved",
+                )],
+            ), filename_text.strip()
+
+        # 4. Bounded Fuzzy Matching across known places
         tokens = [t.strip() for t in re.split(r"[\s_\-.]+", filename_text) if len(t.strip()) >= 4]
         fuzzy_matches = []
 
@@ -195,7 +213,7 @@ class WhereResolver:
                 )
                 return res, filename_text.strip()
 
-        # 4. Online location lookup fallback
+        # 5. Online location lookup fallback
         NON_LOCATION_WORDS = {
             "kks", "sb", "bg", "cc", "part", "track", "audio", "video", "clean", "livestream",
             "duben", "rijen", "recording", "class", "lecture", "program", "festival", "seminar",

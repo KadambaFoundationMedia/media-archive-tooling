@@ -192,4 +192,19 @@ def test_golden_case_duben_2008_folder_grammar(parser_and_planner):
     assert res08.file_metadata.source_sequence_id == "08"
     assert res08.when.selected_value == "2008-04-DD"
     assert res08.what.selected_value == "SB-3-1-26"
-    assert prop08.proposed_filename.startswith("2008-04-DD_KKS_SB-3-1-26")
+    assert res08.where.place_location is None
+    assert res08.where.country_iso2 == "cz"
+    assert prop08.proposed_filename.startswith("2008-04-DD_KKS_SB-3-1-26_cz")
+
+    # File 02: dotted SB syntax plus Czech month context establishes country,
+    # while location correctly remains open for later processing.
+    filename02 = "02 KKS. SB. 3.1.20.mp3"
+    res02 = parser.parse_file(dir_path / filename02, collection_grammar=grammar)
+    prop02 = RenamePlanner(mode=RenameMode.FINALIZE).plan_rename(res02)
+    assert res02.file_metadata.source_sequence_id == "02"
+    assert res02.when.selected_value == "2008-04-DD"
+    assert res02.what.selected_value == "SB-3-1-20"
+    assert res02.where.place_location is None
+    assert res02.where.country == "Czech Republic"
+    assert res02.where.country_iso2 == "cz"
+    assert prop02.proposed_filename == "2008-04-DD_KKS_SB-3-1-20_cz.mp3"
