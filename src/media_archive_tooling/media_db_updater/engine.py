@@ -668,7 +668,8 @@ class MediaDatabaseUpdateEngine:
         if lang_fld:
             matched_lang, _ = self._match_select_option(lang_fld.get("select_options", []), "English")
             if matched_lang:
-                diffs.append(FieldDiff(field_name="Language", old_value=None, new_value=matched_lang, action=FieldAction.SET))
+                language_value = [matched_lang] if lang_fld.get("type") == "multiple_select" else matched_lang
+                diffs.append(FieldDiff(field_name="Language", old_value=None, new_value=language_value, action=FieldAction.SET))
             else:
                 conflicts.append("Required Language option 'English' not found in live schema")
 

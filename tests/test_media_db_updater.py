@@ -854,6 +854,27 @@ def test_25_language_defaults_to_existing_english_option(tmp_path):
     assert fake_db.rows[res.media_row_id]["Language"] == "English"
 
 
+def test_25_b_language_defaults_support_live_multiple_select_schema(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0025b")
+    fake_db = FakeBaserowWriteAdapter()
+    for field in fake_db.fields:
+        if field["name"] == "Language":
+            field["type"] = "multiple_select"
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(tracking_id="trk0025b"),
+    )
+    req = service.build_sync_request("trk0025b")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0025b", commit=True, request=req)
+
+    assert res.status == SyncStatus.SYNCED
+    assert fake_db.rows[res.media_row_id]["Language"] == ["English"]
+
+
 # ---------------------------------------------------------------------------
 # Test 26: Status Media, Status thumb, Status Transcript default to existing Not-started option
 # ---------------------------------------------------------------------------
