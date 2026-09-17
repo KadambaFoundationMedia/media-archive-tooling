@@ -11,8 +11,8 @@ Implementation protocol: `docs/implementation-protocol.md`
 Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-4-implementation`  
-Implementation PR: Open PR pending from `tool-4-implementation` to `main` (creation URL: `https://github.com/KadambaFoundationMedia/media-archive-tooling/compare/main...tool-4-implementation?expand=1`)  
-Builder handoff branch tip: `70c0c35467e41e3a63ec505ea98b7dc3f8fcb972` (plus status update commit)  
+Implementation PR: #27 — `https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/27`  
+Builder handoff branch tip: `68ece17a9bcad373ec31d279cf43fcb421a1ca48` (plus status update commit)  
 Implementation commit reviewed: `70c0c35467e41e3a63ec505ea98b7dc3f8fcb972`  
 Base commit (`main` at implementation start): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`  
 Last planning/review update: 2026-09-17
@@ -20,12 +20,15 @@ Last planning/review update: 2026-09-17
 ## Review checkpoint
 
 Last planning/review commit: `84cc147d34190c6cb34407b1d42898cfd1d283ee`  
-Current implementation HEAD: `70c0c35467e41e3a63ec505ea98b7dc3f8fcb972`  
+Current implementation HEAD: `68ece17a9bcad373ec31d279cf43fcb421a1ca48`  
 Fundamental-change review pending: no  
 Relevant commits since last review:
 - `70c0c35` — fix(media-db-updater): resolve independent review findings R-001 through R-011
+- `caad457` — docs(tool-4): mark READY_FOR_REVIEW after resolving R-001 through R-012
+- `68ece17` — docs(tool-4): update walkthrough with verification evidence
 
 All review findings from the independent review (R-001 through R-012) are fully resolved in the implementation branch.
+GitHub Actions CI check `Python 3.12 tests` passed on PR #27.
 Full test suite passed (**276 passed, 2 warnings in 2.27s**).
 Tool 4 dedicated test suite passed (**55 passed, 2 warnings in 0.95s**).
 Helper shell script syntax validation and offline package build (`uv build --offline`) passed.
@@ -87,6 +90,8 @@ Representative 260-file acceptance evaluation re-run in preview mode with live B
 
 ### R-012 — Two-step commit protocol and status update
 - Step 1: Implementation, tests, and evaluation evidence committed in `70c0c35467e41e3a63ec505ea98b7dc3f8fcb972` and pushed to `origin/tool-4-implementation`.
+- Created GitHub PR #27 (`https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/27`).
+- Verified that GitHub Actions CI check `Python 3.12 tests` passed on PR #27.
 - Step 2: Status update committed and pushed to `origin/tool-4-implementation`.
 
 ## Test & Verification Evidence
