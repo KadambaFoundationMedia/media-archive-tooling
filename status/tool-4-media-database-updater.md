@@ -10,14 +10,14 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-4-implementation`
-Builder implementation commit: `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`
-Evaluated clean commit: `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`
-Evaluation evidence commit: `b57511a7a0bdfa3577d637cba570f90c4bf46261`
+Builder implementation commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
+Evaluated clean commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
+Evaluation evidence commit: `b2cfd4304c5a932b7042a3cfc623910c2fc08f90`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: PASS (Run 35252351493: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252351493)
+PR #27 CI status: PASS (Run 35252570279: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252570279)
 Last planning/review update: 2026-09-17
 
 Latest independently reviewed PR head: `fd55ea6080e4d9f2bd579dcb8e9afceb3bd7b949`
@@ -607,3 +607,35 @@ Required correction:
 - mark the affected file blocked/review-required and prevent filesystem final commit and Tool 4 enqueue for that attempt;
 - retain the accepted Tool 3 semantics for valid non-error outcomes such as no schedule support, insufficient evidence, multiple candidates, or an ordinary contextual conflict;
 - add focused regressions proving `REFERENCE_UNAVAILABLE` and `PROCESSING_ERROR` block, while one valid non-support result is allowed to continue.
+
+## Sixth review resolution checkpoint (R-040)
+
+All findings from the sixth independent review have been addressed and verified:
+
+### R-040 Resolution — Tool 3 decision validation and fail-closed finalization gate
+- Implemented `validate_tool3_review_result()` in `src/media_archive_tooling/travel_reviewer/service.py` and exported it in `travel_reviewer/__init__.py`. Strictly validates that Tool 3 returns a typed, valid `TravelReviewResult` contract with matching `tracking_id` and recognized `TravelReviewDecision`.
+- Updated `cli.py` Step 3 finalization path:
+  - Invokes `validate_tool3_review_result(t3_raw, p.tracking_id)`.
+  - If contract validation fails, result is missing (`None`), or decision is `REFERENCE_UNAVAILABLE` or `PROCESSING_ERROR`, the file is marked `needs_review=True` and `status="blocked"`.
+  - In Step 4, blocked proposals are recorded in the registry with their failure reasons and excluded from re-planning.
+  - In Step 5, `commit_proposals()` skips blocked proposals, preventing filesystem rename on disk and preventing Tool 4 enqueue/execution.
+  - Retains accepted Tool 3 semantics for valid non-error outcomes (`NO_SCHEDULE_SUPPORT`, `CORROBORATED`, `PROVISIONAL_ENRICHMENT`, `INSUFFICIENT_EVIDENCE`, `MULTIPLE_SCHEDULE_CANDIDATES`, `SCHEDULE_CONFLICT`), allowing them to continue to final proposal generation and commit.
+- Updated `scripts/run_tool_4_evaluation.py` to validate every Tool 3 review result using `validate_tool3_review_result()`.
+- Added targeted regressions in `tests/test_media_db_updater.py`:
+  - `test_73_d_cli_run_renamer_fails_closed_when_tool3_reference_unavailable`: asserts file not renamed on disk, zero Tool 4 calls, proposal marked blocked/needs_review with `REFERENCE_UNAVAILABLE`.
+  - `test_73_e_cli_run_renamer_fails_closed_when_tool3_processing_error`: asserts file not renamed on disk, zero Tool 4 calls, proposal marked blocked/needs_review with `PROCESSING_ERROR`.
+  - `test_73_f_cli_run_renamer_fails_closed_when_tool3_contract_invalid_or_none`: asserts fail closed on None or invalid contract.
+  - `test_73_g_cli_run_renamer_allows_valid_no_schedule_support_to_continue`: asserts valid `NO_SCHEDULE_SUPPORT` outcome proceeds to rename on disk and triggers Tool 4 sync.
+  - `test_81_r040_validate_tool3_review_result_contract`: unit tests for `validate_tool3_review_result` contract validation.
+- Executed strict multi-step commit protocol:
+  - Implementation committed and pushed at clean commit `b858e40fb430bbad2d62fc7fc966dd70a940f774`.
+  - Evaluated on that clean commit with live Baserow access in isolated workspace.
+  - Committed evidence to `docs/eval_summary_tool4.json` as commit `b2cfd4304c5a932b7042a3cfc623910c2fc08f90`.
+
+Verification:
+- Full test suite: **348 passed, 2 warnings** in 3.27s.
+- Focused Tool 4 suite: **116 passed, 2 warnings** in 1.92s.
+- Portal suite: **13 passed, 2 warnings** in 0.61s.
+- Package build: `uv build --offline` PASS.
+- Shell scripts: `sh -n` PASS.
+- `git diff --check origin/main` PASS.
