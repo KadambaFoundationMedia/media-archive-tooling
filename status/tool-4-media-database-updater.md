@@ -695,3 +695,14 @@ The corrected end-to-end test completed for tracking ID `902b923a`:
 - Tool 4 created Baserow Media row `3232` and live readback verified Title `SB 3.1.20`, Category `Srimad-bhagavatam`, Tag `3.1.20`, Language `English`, Country `Czech-republic`, blank Date, blank location, and final filename/path.
 - Notes contain `Added from archive`, original filename/path, and `Incomplete recording date: 2008-04-DD`.
 - No partial row was created during either earlier safely blocked attempt.
+
+### Contextual evidence enrichment for row 3232
+
+Following human review of the sibling collection and travel schedule, Tool 4 appended the following evidence to row `3232` Notes and verified it by live readback:
+
+- probable recording window `2008-04-09` through `2008-04-21`, explicitly marked inferred with the exact day unknown;
+- South Africa schedule ending 2008-04-07 and the next schedule entry beginning 2008-04-22;
+- the SB progression across tracks 02/04/06/08;
+- Prague temple as an explicitly unconfirmed location hypothesis, supported by the morning-temple class pattern.
+
+The structured Date and Place/location fields remain blank. The local review audit for tracking ID `902b923a` records the human-directed Notes enrichment.
