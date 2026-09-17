@@ -3,6 +3,7 @@
 Runs safe write-preview synchronization over sample-files across Tool 1 -> Tool 2 -> Tool 3 -> Tool 4
 without bulk-writing production Baserow.
 """
+import hashlib
 import json
 import logging
 from pathlib import Path
