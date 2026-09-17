@@ -10,17 +10,14 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-4-implementation`
-Builder implementation commit: `fb9cb72eebeb1e23c2dd7888d240a32638740088`
-Builder runner fix: `b2e97478f7ea81fb462864d774f2abc03c62f93e`
-Planner hermetic-test correction: `ce01d852856de7b8d98388b14a9a326d66cc94f1`
-Planner workflow maintenance: `e42c9ac7f1ae75cf5ea4c8eb591a27e7f6f1c4e1`
-Evaluated commit: `faea43627671f373b750adc3c77bdc3c066814e1`
-Evaluation evidence commit: `8450141dc7b929524a03499b6356be9a00b23898`
+Builder implementation commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
+Evaluated clean commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
+Evaluation evidence commit: `5fc0c465a39bfbdf6fdb98a0c8b9195a947702f2`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: PASS (Run 35233454978: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35233454978)
+PR #27 CI status: Pending final handoff commit verification
 Last planning/review update: 2026-09-17
 
 ## Third independent review checkpoint
@@ -392,3 +389,50 @@ Required correction:
 - commit implementation first, run the corrected evaluation from that real clean commit, commit evidence next, and update status in a final handoff commit;
 - wait for and record the Actions check attached to that exact final handoff SHA;
 - return to `READY_FOR_REVIEW` only after the branch, status, evaluation SHA, test counts, and exact-head CI all agree.
+
+## Fifth review handoff (Resolutions for R-031 through R-035)
+
+### Resolutions implemented
+
+- **R-031 — Fresh Tool 2 write gate on updates and retries**:
+  - `build_sync_request(tracking_id, force_refresh=False)` accepts `force_refresh=True` to bypass cached review.
+  - `synchronize(tracking_id, commit=True)` invokes `build_sync_request(tracking_id, force_refresh=True)` before mutation.
+  - `_commit_update()` executes a mandatory fresh Tool 2 review gate (`force_refresh=True`) and strictly validates the returned typed result via `validate_tool2_review_result()`.
+  - Blocks with `TOOL2_DECISION_CHANGED` if decision changed from `EXISTING_MEDIA_MATCH` (without valid association approval).
+  - Blocks with `TOOL2_SELECTED_ROW_CHANGED` if fresh selected row ID differs from target row ID.
+  - `retry_pending()` invokes `build_sync_request(tid, force_refresh=True)` to query live state instead of relying on stale registry cache.
+  - Regressions in `test_media_db_updater.py`: `test_70_stored_match_changes_to_blocking_decisions_or_different_row_id`, `test_71_retry_pending_uses_fresh_tool2_gate`.
+- **R-032 — Full production orchestration sequence and commit mode stage gate**:
+  - `run_renamer()` in `cli.py` composes the full 5-step sequence: Step 1 (Tool 1 initial scan), Step 2 (Tool 2 review & auto-enrichment), Step 3 (Tool 3 travel schedule corroboration), Step 4 (Tool 1 final proposal re-planning with `mode=RenameMode.FINALIZE`), Step 5 (commit & Tool 4 sync if commit enabled).
+  - `RenameCommitService` enforces `if self.mode == RenameMode.INITIAL: return` in `_trigger_media_db_sync()`, guaranteeing Tool 4 is never called during initial or intermediate rename stages.
+  - Review portal `configure_review_context()` and `get_commit_service()` explicitly set `mode=RenameMode.FINALIZE`.
+  - BatchExecutor and RenameCommitService tests updated: initial mode never touches Tool 4, finalize mode triggers Tool 4 and records durable sync.
+  - Regressions in `test_media_db_updater.py`: `test_72_rename_commit_service_never_calls_tool4_on_initial_mode`, `test_73_cli_run_renamer_production_pipeline_orchestration`.
+- **R-033 — Typed Tool 2 model contract and live row association revalidation**:
+  - `validate_tool2_review_result(rev, tracking_id)` validates the object against typed `MediaDatabaseReviewResult`, enforcing tracking ID match, complete flags (`live_read_complete`, `snapshot_complete`, `baserow_check_complete`), `database_state in ("LIVE_CURRENT", "LIVE_COMPLETE")`, non-empty live read timestamp, and non-unavailable decision.
+  - `_commit_create()` and `_commit_update()` both call `validate_tool2_review_result()` and reject arbitrary mocks, incomplete flags, or missing timestamps.
+  - Association approvals require `reviewed_precondition_filename` and both `plan_and_revalidate()` and `_commit_update()` verify that `assoc_approval.reviewed_precondition_filename` matches the live row's `Filename`.
+  - Regressions in `test_media_db_updater.py`: `test_74_tool2_contract_validation_rejects_non_models_and_missing_timestamps`, `test_75_association_approval_precondition_filename_validation`.
+- **R-034 — Valid evaluation provenance and full integrated flow**:
+  - `scripts/run_tool_4_evaluation.py` enforces clean worktree verification and records exact commit SHA (`74d1c75688da92a71c95cc7d8010c246b84a9ab4`), which is reachable and exists in PR #27 history.
+  - Evaluates the full production pipeline: Tool 1 initial scan -> Tool 2 review & auto-enrichment -> Tool 3 schedule review & auto-enrichment -> Tool 1 final proposal re-planning (`RenameMode.FINALIZE`) -> Tool 4 safe write-preview (`commit=False`).
+  - Derives `tool2_live_database_state` and `tool2_read_timestamp` from the validated batch of `MediaDatabaseReviewResult` models, confirming 100% live consistency.
+  - Generated evidence in `docs/eval_summary_tool4.json` sanitizes local machine paths via `make_portable()`, ensuring fully portable repository-relative paths.
+- **R-035 — Zero whitespace defects and exact-head handoff**:
+  - Removed EOF blank lines from `src/media_archive_tooling/media_db_updater/engine.py`, `src/media_archive_tooling/renamer/commit_service.py`, and `tests/test_media_db_updater.py`.
+  - `git diff --check origin/main` passes with zero errors.
+
+### Verification metrics
+
+- **Full test suite**: **333 passed, 2 warnings** in 4.91s (`uv run pytest`)
+- **Tool 4 test suite**: **104 passed, 2 warnings** (`uv run pytest tests/test_media_db_updater.py`)
+- **Access boundary suite**: **8 passed** (`uv run pytest tests/test_baserow_access_boundary.py`)
+- **Helper syntax**: `sh -n scripts/builder-start.sh scripts/review-tool-1.sh` PASS
+- **Package build**: `uv build --offline` PASS
+- **Representative 260-file evaluation**:
+  - Total files: 260
+  - Would update existing rows: 1
+  - Would create new rows: 39
+  - Review-required conflicts: 221 (including 99 multiple candidates, 32 insufficient evidence)
+  - Database unavailable: 0
+  - Clean worktree confirmed: true
