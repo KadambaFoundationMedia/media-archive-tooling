@@ -15,6 +15,8 @@ Status: `CHANGES_REQUESTED`
 Implementation branch: `tool-4-implementation`
 Builder implementation commit reviewed: `9e2db4a02325c247d14d82f13af6cd60b2b980e5`
 Builder handoff tip reviewed: `d32a04e61ee8bfd1ea5e688abee9f2f180fe4247`
+Builder correction attempt inspected: `fb9cb72eebeb1e23c2dd7888d240a32638740088`
+Current failing branch tip inspected: `b2e97478f7ea81fb462864d774f2abc03c62f93e`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
 Second independent review commit: `c829b983796beaa2c109d6bb9386e93f52db3df1`
 Last planning/review update: 2026-09-17
@@ -187,6 +189,25 @@ Required correction:
 
 The controlling specification is `docs/baserow-access-boundary-amendment.md`. Where older finalized plans, statuses, README text, or implementation structure conflict with it, the amendment wins.
 
+### R-030 — New architecture regression test depends on an uncommitted local artifact
+
+GitHub Actions failed on correction commit `fb9cb72` and again on branch tip `b2e9747`:
+
+- failed job: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35230231323/job/105232094665
+- local reproduction at `b2e9747`: **1 failed, 326 passed, 2 warnings**;
+- failing test: `tests/test_baserow_access_boundary.py::test_rule_5_tool3_operates_offline_from_verified_artifact`;
+- failure: `TravelReferenceStore(provider=None).load_reference()` returned `None` because the clean checkout has no default `.renamer/reference/travel_schedule.json` artifact.
+
+The test currently passes only in an environment that already has the developer's local verified schedule file. GitHub Actions starts from a clean checkout, so this is a non-hermetic test. The Node.js 20 deprecation annotation is a warning and is not the cause of the failed run.
+
+Required correction:
+
+- create a deterministic complete verified schedule fixture under the test's `tmp_path`, including the manifest/checksum required by `TravelReferenceStore`;
+- pass that explicit fixture path to `TravelReferenceStore(provider=None)` and prove it loads offline without any Baserow provider or credentials;
+- do not skip the test when the artifact is missing and do not rely on `.renamer/` state from a developer machine;
+- run the exact full clean-checkout suite before pushing and require **zero failures**;
+- push the corrected implementation checkpoint only after local full-suite success, then wait for GitHub CI on that exact head before writing the final status handoff.
+
 ## Resolved requirement clarification
 
 ### Q-001 — `Media Archive link` source and current policy
@@ -197,4 +218,4 @@ The relevant field is `media_archive_link`, which contains a URL. Tools 1, 2, 3,
 
 ## Next milestone
 
-Antigravity Builder addresses R-023 through R-029 on `tool-4-implementation`, pushes the corrections to PR #27, waits for CI on the exact final head, updates this status to `READY_FOR_REVIEW`, and returns the branch for a fourth independent review. The planner/orchestrator will not merge PR #27 until that review passes.
+Antigravity Builder addresses R-023 through R-030 on `tool-4-implementation`, pushes the corrections to PR #27, waits for CI on the exact final head, updates this status to `READY_FOR_REVIEW`, and returns the branch for a fourth independent review. The planner/orchestrator will not merge PR #27 until that review passes.
