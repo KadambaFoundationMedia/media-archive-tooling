@@ -33,3 +33,15 @@ None.
 ## Next milestone
 
 Merge PR #26 into protected `main`, close issue #22 as completed, and proceed to Tool 4 implementation when requested.
+
+## Post-acceptance practical evidence rule (2026-09-17)
+
+The `KKS DUBEN 2008 MP3` collection demonstrated useful bounded-date evidence that must not be discarded when an exact day cannot be proven:
+
+- a schedule entry places the speaker in South Africa through 2008-04-07;
+- the next schedule entry begins 2008-04-22 and states Rest with no place or country;
+- therefore an April recording known to be in the Czech Republic can be bounded to 2008-04-09 through 2008-04-21 under the user's stated “after the 8th, before the 22nd” conclusion;
+- sibling tracks 02/04/06/08 progress through SB 3.1.20, 3.1.21, 3.1.25, and 3.1.26, supporting a shared stay/location;
+- the morning-temple class pattern and other April Prague archive material make Prague temple a useful hypothesis, but not a confirmed structured location.
+
+For future processing, Tool 3 should emit such lower/upper date bounds and location hypotheses as contextual evidence for Tool 4 Notes. It must leave the exact Date and Place/location fields blank until stronger evidence confirms them.
