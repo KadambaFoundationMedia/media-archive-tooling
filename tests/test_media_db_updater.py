@@ -1028,6 +1028,30 @@ def test_34_new_row_timestamps_default_dates_populated(tmp_path):
     assert row["imported_on"] == today
 
 
+def test_34_b_new_row_skips_live_read_only_audit_timestamps(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0034b")
+    fake_db = FakeBaserowWriteAdapter()
+    for field in fake_db.fields:
+        if field["name"] in {"Last modified by", "Last modified"}:
+            field["read_only"] = True
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(tracking_id="trk0034b"),
+    )
+    req = service.build_sync_request("trk0034b")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0034b", commit=True, request=req)
+
+    assert res.status == SyncStatus.SYNCED
+    row = fake_db.rows[res.media_row_id]
+    assert "Last modified by" not in row
+    assert "Last modified" not in row
+    assert row["imported_on"] == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
 # ---------------------------------------------------------------------------
 # Test 35: Existing Created_on/imported_on are not reset on ordinary rename updates
 # ---------------------------------------------------------------------------

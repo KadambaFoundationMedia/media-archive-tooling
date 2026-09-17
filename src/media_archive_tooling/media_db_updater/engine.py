@@ -726,7 +726,8 @@ class MediaDatabaseUpdateEngine:
 
         # 9. Dates/Timestamps
         for d_fld in ("Created_on", "Last modified by", "Last modified", "imported_on"):
-            if d_fld.lower() in fields_by_name:
+            field_definition = fields_by_name.get(d_fld.lower())
+            if field_definition and not field_definition.get("read_only"):
                 diffs.append(FieldDiff(field_name=d_fld, old_value=None, new_value=today, action=FieldAction.SET))
 
         # 10. Country & Place, location
@@ -1189,9 +1190,9 @@ class MediaDatabaseUpdateEngine:
         # Modifications check: if any fields modified, update Last modified and Last modified by
         modified_diffs = [d for d in diffs if d.action == FieldAction.SET]
         if modified_diffs:
-            if "last modified by" in fields_by_name:
+            if fields_by_name.get("last modified by") and not fields_by_name["last modified by"].get("read_only"):
                 diffs.append(FieldDiff(field_name="Last modified by", old_value=_get_text("Last modified by"), new_value=today, action=FieldAction.SET))
-            if "last modified" in fields_by_name:
+            if fields_by_name.get("last modified") and not fields_by_name["last modified"].get("read_only"):
                 diffs.append(FieldDiff(field_name="Last modified", old_value=_get_text("Last modified"), new_value=today, action=FieldAction.SET))
 
         # Always preserve unrelated online fields, statuses, language, import date
