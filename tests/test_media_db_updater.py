@@ -968,6 +968,28 @@ def test_30_equivalent_country_location_option_reused_rather_than_duplicated(tmp
     assert len(fake_db.fields[-1]["select_options"]) == initial_opt_count
 
 
+def test_30_b_create_uses_actual_live_location_alias_name(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0030b")
+    fake_db = FakeBaserowWriteAdapter()
+    location_field = [field for field in fake_db.fields if field["name"] == "Place, location"][0]
+    location_field["name"] = "place_location"
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(tracking_id="trk0030b"),
+    )
+    req = service.build_sync_request("trk0030b")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+    req.where_place = "Leipzig"
+
+    res = service.synchronize("trk0030b", commit=True, request=req)
+
+    assert res.status == SyncStatus.SYNCED
+    assert fake_db.rows[res.media_row_id]["place_location"] == "Leipzig"
+    assert "Place, location" not in fake_db.rows[res.media_row_id]
+
+
 # ---------------------------------------------------------------------------
 # Test 31: Ambiguous similar location options route to review
 # ---------------------------------------------------------------------------

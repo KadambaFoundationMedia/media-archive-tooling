@@ -774,7 +774,7 @@ class MediaDatabaseUpdateEngine:
         if target_place:
             place_fld = fields_by_name.get("place, location") or fields_by_name.get("place_location") or fields_by_name.get("location")
             if place_fld:
-                diffs.append(FieldDiff(field_name="Place, location", old_value=None, new_value=target_place, action=FieldAction.SET))
+                diffs.append(FieldDiff(field_name=place_fld["name"], old_value=None, new_value=target_place, action=FieldAction.SET))
             else:
                 return MediaDbSyncResult(
                     tracking_id=request.tracking_id,
