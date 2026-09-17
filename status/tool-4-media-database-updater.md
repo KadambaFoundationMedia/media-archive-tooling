@@ -17,6 +17,7 @@ Builder implementation commit reviewed: `9e2db4a02325c247d14d82f13af6cd60b2b980e
 Builder handoff tip reviewed: `d32a04e61ee8bfd1ea5e688abee9f2f180fe4247`
 Builder correction attempt inspected: `fb9cb72eebeb1e23c2dd7888d240a32638740088`
 Current failing branch tip inspected: `b2e97478f7ea81fb462864d774f2abc03c62f93e`
+Planner hermetic-test correction: `ce01d852856de7b8d98388b14a9a326d66cc94f1`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
 Second independent review commit: `c829b983796beaa2c109d6bb9386e93f52db3df1`
 Last planning/review update: 2026-09-17
@@ -189,7 +190,7 @@ Required correction:
 
 The controlling specification is `docs/baserow-access-boundary-amendment.md`. Where older finalized plans, statuses, README text, or implementation structure conflict with it, the amendment wins.
 
-### R-030 — New architecture regression test depends on an uncommitted local artifact
+### R-030 — New architecture regression test depended on an uncommitted local artifact — resolved
 
 GitHub Actions failed on correction commit `fb9cb72` and again on branch tip `b2e9747`:
 
@@ -200,13 +201,17 @@ GitHub Actions failed on correction commit `fb9cb72` and again on branch tip `b2
 
 The test currently passes only in an environment that already has the developer's local verified schedule file. GitHub Actions starts from a clean checkout, so this is a non-hermetic test. The Node.js 20 deprecation annotation is a warning and is not the cause of the failed run.
 
-Required correction:
+Resolution:
 
-- create a deterministic complete verified schedule fixture under the test's `tmp_path`, including the manifest/checksum required by `TravelReferenceStore`;
-- pass that explicit fixture path to `TravelReferenceStore(provider=None)` and prove it loads offline without any Baserow provider or credentials;
-- do not skip the test when the artifact is missing and do not rely on `.renamer/` state from a developer machine;
-- run the exact full clean-checkout suite before pushing and require **zero failures**;
-- push the corrected implementation checkpoint only after local full-suite success, then wait for GitHub CI on that exact head before writing the final status handoff.
+- the planner made the authorized small correction only in `tests/test_baserow_access_boundary.py` at commit `ce01d85` and informed the Builder through this status record;
+- the test now creates a deterministic complete manifest/checksum under `tmp_path`, passes the explicit path to `TravelReferenceStore(provider=None)`, and proves offline loading without credentials or provider access;
+- targeted regression: **1 passed**;
+- full local suite: **327 passed, 2 warnings**;
+- helper syntax: PASS;
+- offline package build: PASS;
+- GitHub Actions `Python 3.12 tests`: PASS on exact fix commit `ce01d85` — https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35231148945/job/105235270006.
+
+The Builder must preserve this hermetic fixture behavior and must not restore reliance on ignored developer-local `.renamer/` state.
 
 ## Resolved requirement clarification
 
@@ -218,4 +223,4 @@ The relevant field is `media_archive_link`, which contains a URL. Tools 1, 2, 3,
 
 ## Next milestone
 
-Antigravity Builder addresses R-023 through R-030 on `tool-4-implementation`, pushes the corrections to PR #27, waits for CI on the exact final head, updates this status to `READY_FOR_REVIEW`, and returns the branch for a fourth independent review. The planner/orchestrator will not merge PR #27 until that review passes.
+Antigravity Builder completes the remaining R-023 through R-029 work while preserving the resolved R-030 test, generates the required clean-commit evaluation evidence, pushes the final corrections to PR #27, waits for CI on the exact final head, updates this status to `READY_FOR_REVIEW`, and returns the branch for a fourth independent review. The planner/orchestrator will not merge PR #27 until that review passes.
