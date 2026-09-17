@@ -17,7 +17,7 @@ Builder implementation commit: `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`
 Evaluated clean commit: `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`
 Evaluation evidence commit: `b57511a7a0bdfa3577d637cba570f90c4bf46261`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: PASS (Run 35252240038: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252240038)
+PR #27 CI status: PASS (Run 35252351493: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252351493)
 Last planning/review update: 2026-09-17
 
 ## Third independent review checkpoint
@@ -561,4 +561,3 @@ Verification:
 - Package build: `uv build --offline` PASS.
 - Shell scripts: `sh -n` PASS.
 - `git diff --check origin/main` PASS.
-
