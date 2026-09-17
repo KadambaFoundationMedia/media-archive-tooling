@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 
 def run_evaluation():
+    import subprocess
+    dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+    if dirty:
+        raise RuntimeError(
+            "Evaluation refused: working tree is dirty. R-027 requires evaluation to run from a clean tree at an exact committed implementation head.\n"
+            f"{dirty}"
+        )
+    commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
     config = load_config()
     sample_dir = Path("sample-files").resolve()
     eval_reg_path = Path(".renamer/eval_tool4_registry.db")
@@ -72,8 +81,12 @@ def run_evaluation():
     for dec, c in sorted(t2_counts.items()):
         print(f"  {dec}: {c}")
 
+    t2_db_state = getattr(t2_provider, "state", "LIVE_CURRENT")
+    t2_read_timestamp = t2_results[0].baserow_read_at if t2_results and getattr(t2_results[0], "baserow_read_at", None) else ""
+
     print("\n=== Step 3: Tool 3 Travel Schedule Review Context ===")
-    ref_store = TravelReferenceStore(Path(".renamer/reference/travel_schedule.json"), provider=t2_provider)
+    # Tool 3 receives only local verified schedule artifact without Baserow provider (amendment section 1 & 5)
+    ref_store = TravelReferenceStore(Path(".renamer/reference/travel_schedule.json"))
     manifest = ref_store.load_reference()
     if manifest:
         print(f"Using verified travel schedule reference ({manifest.row_count} rows)")
@@ -264,14 +277,21 @@ def run_evaluation():
 
     import subprocess
     from datetime import datetime, timezone
-    try:
-        commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception:
-        commit_sha = "unknown"
+    ref_checksums = {}
+    if manifest:
+        ref_checksums["travel_schedule_sha256"] = manifest.canonical_sha256
+        ref_checksums["travel_schedule_row_count"] = manifest.row_count
+    if config.baserow_snapshot_path and Path(config.baserow_snapshot_path).exists():
+        snap_content = Path(config.baserow_snapshot_path).read_bytes()
+        ref_checksums["snapshot_sha256"] = hashlib.sha256(snap_content).hexdigest()
 
     eval_summary = {
         "evaluated_commit": commit_sha,
+        "clean_worktree_confirmed": True,
         "run_timestamp": datetime.now(timezone.utc).isoformat(),
+        "tool2_live_database_state": t2_db_state,
+        "tool2_read_timestamp": t2_read_timestamp,
+        "reference_checksums": ref_checksums,
         "live_reference_info": {
             "media_table_id": config.baserow_media_table_id,
             "category_table_id": config.baserow_category_table_id,

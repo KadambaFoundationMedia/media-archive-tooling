@@ -408,7 +408,14 @@ def test_07_collaborator_relevant_field_change_blocks_stale_write(tmp_path):
     req = service.build_sync_request("trk0007")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 106
-    req.field_approvals = {"Title": {"approved_value": "New Approved Title", "reviewed_precondition_value": "Initial Title"}}
+    req.field_approvals = {
+        "Title": {
+            "action": "apply_correction",
+            "has_reviewed_precondition": True,
+            "approved_value": "New Approved Title",
+            "reviewed_precondition_value": "Initial Title",
+        }
+    }
 
     # Plan based on snapshot where Title is "Initial Title"
     plan = service.preview("trk0007", request=req)
@@ -581,9 +588,9 @@ def test_14_timeout_uncertain_create_outcome_is_reconciled(tmp_path):
     fake_db.simulate_timeout_on_create = True
 
     mock_t2 = MagicMock()
-    rev_cand1 = MagicMock(decision="NEW_MEDIA_CANDIDATE", selected_media_row_id=None, review_reasons=[])
-    rev_cand2 = MagicMock(decision="NEW_MEDIA_CANDIDATE", selected_media_row_id=None, review_reasons=[])
-    rev_after = MagicMock(decision="EXISTING_MEDIA_MATCH", selected_media_row_id=1001, review_reasons=[])
+    rev_cand1 = MagicMock(decision="NEW_MEDIA_CANDIDATE", selected_media_row_id=None, review_reasons=[], live_read_complete=True, snapshot_complete=True, baserow_check_complete=True, database_state="LIVE_CURRENT")
+    rev_cand2 = MagicMock(decision="NEW_MEDIA_CANDIDATE", selected_media_row_id=None, review_reasons=[], live_read_complete=True, snapshot_complete=True, baserow_check_complete=True, database_state="LIVE_CURRENT")
+    rev_after = MagicMock(decision="EXISTING_MEDIA_MATCH", selected_media_row_id=1001, review_reasons=[], live_read_complete=True, snapshot_complete=True, baserow_check_complete=True, database_state="LIVE_CURRENT")
     mock_t2.review_file.side_effect = [rev_cand1, rev_cand2, rev_after]
 
     service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
@@ -1257,12 +1264,7 @@ def test_47_cli_commit_invokes_service(tmp_path, capsys):
         json = False
 
     fake_adapter = FakeBaserowWriteAdapter()
-    mock_t2_service = MagicMock()
-    mock_res = MagicMock()
-    mock_res.decision = "NEW_MEDIA_CANDIDATE"
-    mock_res.selected_media_row_id = None
-    mock_res.review_reasons = []
-    mock_t2_service.review_file.return_value = mock_res
+    mock_t2_service = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE")
 
     with patch("media_archive_tooling.cli.BaserowWriteAdapter", return_value=fake_adapter), \
          patch("media_archive_tooling.cli.MediaDatabaseReviewService", return_value=mock_t2_service):
@@ -1791,3 +1793,429 @@ def test_64_complete_iso_mapping_and_invalid_codes():
     assert is_valid_country_display_name("IS") is False
     assert is_valid_country_display_name("UnknownCountry") is False
 
+
+# ---------------------------------------------------------------------------
+# Test 65 (R-023): Pre-create completeness verification fails closed
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("kw,expected_note", [
+    ({"live_read_complete": None}, "live_read_complete is not True"),
+    ({"live_read_complete": False}, "live_read_complete is not True"),
+    ({"snapshot_complete": None}, "snapshot_complete is not True"),
+    ({"snapshot_complete": False}, "snapshot_complete is not True"),
+    ({"baserow_check_complete": None}, "baserow_check_complete is not True"),
+    ({"baserow_check_complete": False}, "baserow_check_complete is not True"),
+    ({"database_state": None}, "database_state 'None' not in ('LIVE_CURRENT', 'LIVE_COMPLETE')"),
+    ({"database_state": "LIVE_HEALTHY"}, "database_state 'LIVE_HEALTHY' not in ('LIVE_CURRENT', 'LIVE_COMPLETE')"),
+    ({"database_state": "DATABASE_UNAVAILABLE"}, "database_state 'DATABASE_UNAVAILABLE' not in ('LIVE_CURRENT', 'LIVE_COMPLETE')"),
+    ({"database_state": "OFFLINE"}, "database_state 'OFFLINE' not in ('LIVE_CURRENT', 'LIVE_COMPLETE')"),
+    ({"database_state": "BOGUS"}, "database_state 'BOGUS' not in ('LIVE_CURRENT', 'LIVE_COMPLETE')"),
+])
+def test_65_r023_precreate_completeness_verification_hardened(tmp_path, kw, expected_note):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0065")
+    fake_db = FakeBaserowWriteAdapter()
+
+    # Base valid args
+    rev_args = {
+        "decision": "NEW_MEDIA_CANDIDATE",
+        "live_read_complete": True,
+        "snapshot_complete": True,
+        "baserow_check_complete": True,
+        "database_state": "LIVE_CURRENT",
+    }
+    rev_args.update(kw)
+    mock_t2 = make_mock_tool2(**rev_args)
+
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+    res = service.synchronize("trk0065", commit=True)
+
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED
+    assert res.review_required is True
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+    assert any(expected_note in note for note in res.diagnostic_notes)
+
+
+def test_65_r023_valid_complete_contract_creates_row(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0065_ok")
+    fake_db = FakeBaserowWriteAdapter()
+
+    mock_t2 = make_mock_tool2(
+        decision="NEW_MEDIA_CANDIDATE",
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        database_state="LIVE_CURRENT",
+    )
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+    res = service.synchronize("trk0065_ok", commit=True)
+    assert res.status == SyncStatus.SYNCED
+    assert any(c["action"] == "create_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 66 (R-024): Tool 2 decision update gate default-deny and association authority
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("decision", [
+    "BOGUS",
+    None,
+    "",
+    "PROBABLE_EXISTING_MEDIA",
+    "MULTIPLE_CANDIDATES",
+    "CONFLICT_WITH_EXISTING",
+    "INSUFFICIENT_EVIDENCE",
+])
+def test_66_r024_non_match_decisions_cannot_update(tmp_path, decision):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0066")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 7, "Filename": "old.mp3"}])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    req = service.build_sync_request("trk0066")
+    req.tool2_decision = decision
+    req.selected_media_row_id = 7
+
+    res = service.synchronize("trk0066", commit=True, request=req)
+    assert res.status == SyncStatus.REVIEW_REQUIRED
+    assert res.operation == SyncOperation.BLOCKED
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+def test_66_r024_arbitrary_field_approval_rejected_as_association(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0066_arb")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 7, "Filename": "old.mp3"}])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    req = service.build_sync_request("trk0066_arb")
+    req.tool2_decision = "BOGUS"
+    req.selected_media_row_id = 7
+    # Arbitrary field approval on Title with choose_association must NOT grant association authority
+    req.field_approvals = {
+        "Title": {
+            "action": "choose_association",
+            "has_reviewed_precondition": True,
+            "reviewed_precondition_value": "old.mp3",
+        }
+    }
+
+    res = service.synchronize("trk0066_arb", commit=True, request=req)
+    assert res.status == SyncStatus.REVIEW_REQUIRED
+    assert res.operation == SyncOperation.BLOCKED
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+def test_66_r024_stale_association_approval_rejected(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0066_stale")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 7, "Filename": "old.mp3"}])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    req = service.build_sync_request("trk0066_stale")
+    req.tool2_decision = "MULTIPLE_CANDIDATES"
+    req.selected_media_row_id = 7
+    req.association_approval = {
+        "selected_media_row_id": 7,
+        "reviewed_candidate_row_id": 99,  # Mismatched candidate ID
+        "has_reviewed_precondition": True,
+        "action": "choose_association",
+        "reviewer": "human_reviewer",
+    }
+
+    res = service.synchronize("trk0066_stale", commit=True, request=req)
+    assert res.status == SyncStatus.REVIEW_REQUIRED
+    assert res.operation == SyncOperation.BLOCKED
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+def test_66_r024_valid_association_approval_succeeds(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0066_assoc")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 7, "Filename": "old.mp3"}])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    req = service.build_sync_request("trk0066_assoc")
+    req.tool2_decision = "MULTIPLE_CANDIDATES"
+    req.selected_media_row_id = 7
+    req.association_approval = {
+        "selected_media_row_id": 7,
+        "reviewed_candidate_row_id": 7,
+        "has_reviewed_precondition": True,
+        "action": "choose_association",
+        "reviewer": "human_reviewer",
+    }
+
+    res = service.synchronize("trk0066_assoc", commit=True, request=req)
+    assert res.status == SyncStatus.SYNCED
+    assert res.operation == SyncOperation.UPDATE
+    assert any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 67 (R-025): Field approval parsing fails closed and portal route tests
+# ---------------------------------------------------------------------------
+def test_67_r025_get_approval_fails_closed():
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncRequest
+
+    # Explicit has_reviewed_precondition=False is honored even with value key present
+    req = MediaDbSyncRequest(
+        tracking_id="trk0067",
+        current_filename="test.mp3",
+        current_path="/test.mp3",
+        field_approvals={
+            "Title": {
+                "action": "apply_correction",
+                "approved_value": "New Title",
+                "has_reviewed_precondition": False,
+                "reviewed_precondition_value": "Old Title",
+            },
+            "Date": {
+                "action": "INVALID_ACTION",
+                "approved_value": "2015-09-09",
+            },
+            "Category": {
+                "approved_value": "Srimad Bhagavatam",
+            }
+        }
+    )
+
+    appr_title = req.get_approval("Title")
+    assert appr_title is not None
+    assert appr_title.has_reviewed_precondition is False
+    assert appr_title.reviewed_precondition_value is None
+
+    # Invalid action string returns None (rejected)
+    assert req.get_approval("Date") is None
+    # Missing action returns None (rejected)
+    assert req.get_approval("Category") is None
+
+
+def test_67_r025_portal_post_routes(tmp_path):
+    from fastapi.testclient import TestClient
+    from media_archive_tooling.review_portal.app import app, configure_review_context
+
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0067_p")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 10, "Filename": "old.mp3", "Tag": ["SB 03.06.06"]}])
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    try:
+        configure_review_context(registry_path=tmp_path / "test.db", media_db_updater_service=service)
+        client = TestClient(app)
+
+        # 1. Post keep_database
+        res = client.post(
+            "/file/trk0067_p/media-db-field-approval",
+            data={
+                "field_name": "Date",
+                "action": "keep_database",
+                "reviewed_precondition_value": "2015-08-27",
+                "has_reviewed_precondition": "true",
+            },
+            follow_redirects=False,
+        )
+        assert res.status_code == 303
+
+        # 2. Post apply_correction
+        res = client.post(
+            "/file/trk0067_p/media-db-field-approval",
+            data={
+                "field_name": "Title",
+                "action": "apply_correction",
+                "approved_value": "New Title",
+                "reviewed_precondition_value": "Old Title",
+                "has_reviewed_precondition": "true",
+            },
+            follow_redirects=False,
+        )
+        assert res.status_code == 303
+
+        # 3. Post defer
+        res = client.post(
+            "/file/trk0067_p/media-db-field-approval",
+            data={
+                "field_name": "Category",
+                "action": "defer",
+                "has_reviewed_precondition": "true",
+            },
+            follow_redirects=False,
+        )
+        assert res.status_code == 303
+
+        # 4. Post with structured Tag JSON precondition
+        res = client.post(
+            "/file/trk0067_p/media-db-field-approval",
+            data={
+                "field_name": "Tag",
+                "action": "apply_correction",
+                "approved_value": "SB 01.02.03",
+                "reviewed_precondition_json": json.dumps(["SB 03.06.06"]),
+                "has_reviewed_precondition": "true",
+            },
+            follow_redirects=False,
+        )
+        assert res.status_code == 303
+
+        # Verify stored Tag approval preserved list type
+        stored_sync = registry.get_media_db_sync("trk0067_p")
+        tag_appr = stored_sync["request"]["field_approvals"]["Tag"]
+        assert tag_appr["reviewed_precondition_value"] == ["SB 03.06.06"]
+
+        # 5. Missing action -> 400
+        res = client.post(
+            "/file/trk0067_p/media-db-field-approval",
+            data={"field_name": "Date"},
+            follow_redirects=False,
+        )
+        assert res.status_code == 400
+
+        # 6. Invalid action -> 400
+        res = client.post(
+            "/file/trk0067_p/media-db-field-approval",
+            data={"field_name": "Date", "action": "bogus_action"},
+            follow_redirects=False,
+        )
+        assert res.status_code == 400
+
+        # 7. Post media-db-association route
+        res = client.post(
+            "/file/trk0067_p/media-db-association",
+            data={
+                "selected_media_row_id": 10,
+                "reviewed_candidate_row_id": 10,
+                "reviewed_precondition_filename": "old.mp3",
+            },
+            follow_redirects=False,
+        )
+        assert res.status_code == 303
+        stored_sync = registry.get_media_db_sync("trk0067_p")
+        assoc_stored = stored_sync["request"]["association_approval"]
+        assert assoc_stored["selected_media_row_id"] == 10
+        assert assoc_stored["reviewed_candidate_row_id"] == 10
+
+    finally:
+        configure_review_context()
+
+
+# ---------------------------------------------------------------------------
+# Test 68 (R-026): Key-based secret redaction and audit timestamp integrity
+# ---------------------------------------------------------------------------
+def test_68_r026_key_based_secret_redaction(tmp_path):
+    from media_archive_tooling.media_db_updater.write_adapter import redact_secrets
+
+    # Plain key-named sensitive fields in dictionary
+    payload = {
+        "api_token": "VERYSECRET",
+        "password": "HUSH",
+        "nested": {
+            "auth_token": "TOK123",
+            "normal_field": "public_data",
+            "client_secret": "SHH",
+        },
+        "items": [
+            {"access_token": "TOK456", "name": "safe"},
+        ]
+    }
+    redacted = redact_secrets(payload)
+    assert redacted["api_token"] == "[REDACTED]"
+    assert redacted["password"] == "[REDACTED]"
+    assert redacted["nested"]["auth_token"] == "[REDACTED]"
+    assert redacted["nested"]["normal_field"] == "public_data"
+    assert redacted["nested"]["client_secret"] == "[REDACTED]"
+    assert redacted["items"][0]["access_token"] == "[REDACTED]"
+    assert redacted["items"][0]["name"] == "safe"
+
+    # Serialized JSON string with sensitive keys
+    json_str = json.dumps({"api_token": "VERYSECRET", "password": "HUSH", "safe": 123})
+    redacted_str = redact_secrets(json_str)
+    parsed = json.loads(redacted_str)
+    assert parsed["api_token"] == "[REDACTED]"
+    assert parsed["password"] == "[REDACTED]"
+    assert parsed["safe"] == 123
+
+    # SQLite registry round-trip
+    registry = LocalRegistry(tmp_path / "test.db")
+    registry.save_media_db_sync(
+        tracking_id="trk0068",
+        sync_status="PENDING_SYNC",
+        request_json=json_str,
+    )
+    persisted = registry.get_media_db_sync("trk0068")
+    assert "VERYSECRET" not in persisted["request_json"]
+    assert "HUSH" not in persisted["request_json"]
+    assert "[REDACTED]" in persisted["request_json"]
+
+
+def test_68_r026_live_read_timestamp_not_fabricated(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0068_ts")
+    fake_db = FakeBaserowWriteAdapter()
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    req = service.build_sync_request("trk0068_ts")
+    req.live_query_timestamp = None
+    req.tool2_timestamp = "2026-09-17T10:00:00Z"
+    req.tool2_database_state = "LIVE_CURRENT"
+
+    res = service.preview("trk0068_ts", request=req)
+    prov = res.audit_provenance
+    assert prov["live_read_timestamp"] == "UNAVAILABLE"
+    assert prov["tool2_snapshot_timestamp"] == "2026-09-17T10:00:00Z"
+    assert prov["tool2_database_state"] == "LIVE_CURRENT"
+
+
+# ---------------------------------------------------------------------------
+# Test 69 (Q-001): Media Archive link policy on create and update
+# ---------------------------------------------------------------------------
+def test_69_q001_media_archive_link_policy(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0069_c")
+    save_test_file(registry, tracking_id="trk0069_u")
+
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 50,
+        "Filename": "test.mp3",
+        "Media Archive link": "https://archive.org/details/kks-2015-08-27",
+    }])
+    mock_t2_create = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_create)
+
+    # 1. On create, Media Archive link is omitted
+    res_c = service.preview("trk0069_c")
+    assert not any(d.field_name == "Media Archive link" for d in res_c.field_diffs)
+
+    # 2. If request attempts to populate Media Archive link on create -> CONFLICT
+    req_c = service.build_sync_request("trk0069_c")
+    req_c.field_approvals = {
+        "Media Archive link": {
+            "action": "apply_correction",
+            "approved_value": "https://archive.org/details/bogus",
+            "has_reviewed_precondition": True,
+        }
+    }
+    res_c_blocked = service.preview("trk0069_c", request=req_c)
+    assert any("Media Archive link cannot be populated on creation" in c for c in res_c_blocked.conflicts)
+
+    # 3. On update, existing Media Archive link is PRESERVED
+    req_u = service.build_sync_request("trk0069_u")
+    req_u.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_u.selected_media_row_id = 50
+
+    res_u = service.preview("trk0069_u", request=req_u)
+    mal_diff = next(d for d in res_u.field_diffs if d.field_name == "Media Archive link")
+    assert mal_diff.action == FieldAction.PRESERVED
+    assert mal_diff.old_value == "https://archive.org/details/kks-2015-08-27"
+    assert mal_diff.new_value == "https://archive.org/details/kks-2015-08-27"
+
+    # 4. If request attempts to modify Media Archive link on update -> CONFLICT
+    req_u.field_approvals = {
+        "Media Archive link": {
+            "action": "apply_correction",
+            "approved_value": "https://new-url.org",
+            "has_reviewed_precondition": True,
+            "reviewed_precondition_value": "https://archive.org/details/kks-2015-08-27",
+        }
+    }
+    res_u_mod = service.preview("trk0069_u", request=req_u)
+    assert any("Media Archive link modification is unsupported" in c for c in res_u_mod.conflicts)

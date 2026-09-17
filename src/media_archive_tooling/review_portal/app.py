@@ -1,4 +1,5 @@
 """Localhost FastAPI review portal application."""
+import json
 import re
 from pathlib import Path
 from typing import Any, List, Optional
@@ -222,18 +223,46 @@ def media_db_sync(
 def media_db_field_approval(
     tracking_id: str,
     field_name: str = Form(...),
-    action: str = Form(...),
+    action: Optional[str] = Form(None),
     approved_value: Optional[str] = Form(None),
     reviewed_precondition_value: Optional[str] = Form(None),
+    reviewed_precondition_json: Optional[str] = Form(None),
+    has_reviewed_precondition: Optional[bool] = Form(None),
     notes: Optional[str] = Form(None),
     commit: bool = Form(False),
 ):
     from ..media_db_updater.models import FieldApprovalAction
     updater = get_media_db_updater_service()
+    if not action or not str(action).strip():
+        raise HTTPException(status_code=400, detail="Missing required field approval action")
     try:
-        approval_action = FieldApprovalAction(action)
+        approval_action = FieldApprovalAction.from_value(action)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid field approval action: {action}")
+
+    # Determine precondition value and flag
+    pre_val = None
+    has_pre = False
+
+    if has_reviewed_precondition is not None:
+        has_pre = bool(has_reviewed_precondition)
+    else:
+        has_pre = bool(reviewed_precondition_json is not None or reviewed_precondition_value is not None)
+
+    if reviewed_precondition_json is not None:
+        try:
+            pre_val = json.loads(reviewed_precondition_json)
+        except Exception:
+            pre_val = reviewed_precondition_json
+    elif reviewed_precondition_value is not None:
+        raw_val = reviewed_precondition_value.strip()
+        if (raw_val.startswith("[") and raw_val.endswith("]")) or (raw_val.startswith("{") and raw_val.endswith("}")) or raw_val == "null":
+            try:
+                pre_val = json.loads(raw_val)
+            except Exception:
+                pre_val = reviewed_precondition_value
+        else:
+            pre_val = reviewed_precondition_value
 
     try:
         updater.apply_field_approval(
@@ -241,7 +270,34 @@ def media_db_field_approval(
             field_name=field_name,
             action=approval_action,
             approved_value=approved_value,
-            reviewed_precondition_value=reviewed_precondition_value,
+            reviewed_precondition_value=pre_val,
+            has_reviewed_precondition=has_pre,
+            notes=notes,
+            commit=commit,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+
+
+@app.post("/file/{tracking_id}/media-db-association")
+def media_db_association(
+    tracking_id: str,
+    selected_media_row_id: int = Form(...),
+    reviewed_candidate_row_id: int = Form(...),
+    reviewed_precondition_filename: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    commit: bool = Form(False),
+):
+    updater = get_media_db_updater_service()
+    try:
+        updater.apply_association_approval(
+            tracking_id=tracking_id,
+            selected_media_row_id=selected_media_row_id,
+            reviewed_candidate_row_id=reviewed_candidate_row_id,
+            reviewed_precondition_filename=reviewed_precondition_filename,
+            reviewer="review_portal",
             notes=notes,
             commit=commit,
         )

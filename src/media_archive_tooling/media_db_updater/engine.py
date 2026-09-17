@@ -259,6 +259,11 @@ class MediaDatabaseUpdateEngine:
                     "notes": redact_secrets(appr.notes) if appr.notes else None,
                 }
 
+        # Never substitute result time for an unknown live-read time (R-026)
+        live_ts = request.live_query_timestamp or "UNAVAILABLE"
+        tool2_ts = request.tool2_timestamp or "UNAVAILABLE"
+        tool2_db_state = request.tool2_database_state or "UNAVAILABLE"
+
         result.audit_provenance = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tracking_id": request.tracking_id,
@@ -267,7 +272,9 @@ class MediaDatabaseUpdateEngine:
             "operation_type": result.operation.value,
             "table_id": request.table_id,
             "media_row_id": result.media_row_id,
-            "live_read_timestamp": request.live_query_timestamp or datetime.now(timezone.utc).isoformat(),
+            "live_read_timestamp": live_ts,
+            "tool2_snapshot_timestamp": tool2_ts,
+            "tool2_database_state": tool2_db_state,
             "tool2_decision": request.tool2_decision,
             "when_state": request.when_state,
             "what_state": request.what_state,
@@ -322,25 +329,6 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=["Tool 2 reported DATABASE_UNAVAILABLE; mutation blocked"],
             ), request)
 
-        if t2_decision in (
-            "PROBABLE_EXISTING_MEDIA",
-            "MULTIPLE_CANDIDATES",
-            "CONFLICT_WITH_EXISTING",
-            "INSUFFICIENT_EVIDENCE",
-        ):
-            has_assoc_approval = any(
-                appr and appr.action == FieldApprovalAction.CHOOSE_ASSOCIATION
-                for appr in [request.get_approval(k) for k in request.field_approvals]
-            )
-            if not has_assoc_approval:
-                return self._enrich_result(MediaDbSyncResult(
-                    tracking_id=request.tracking_id,
-                    status=SyncStatus.REVIEW_REQUIRED,
-                    operation=SyncOperation.BLOCKED,
-                    review_required=True,
-                    diagnostic_notes=[f"Tool 2 decision {t2_decision} requires review; automatic mutation disallowed"],
-                ), request)
-
         # Map field schema rejecting normalized duplicate column names (R-017)
         try:
             fields_by_name = index_fields_by_name(live_fields)
@@ -359,18 +347,15 @@ class MediaDatabaseUpdateEngine:
             res = self._plan_create(request, fields_by_name)
             return self._enrich_result(res, request)
 
-        # Handle UPDATE
+        # Handle UPDATE (R-024)
         # Note: request.is_human_approved NEVER authorizes semantic writes or bypasses association checks (R-016)
-        if t2_decision == "EXISTING_MEDIA_MATCH" or (
-            request.selected_media_row_id and (
-                any(
-                    getattr(a, "action", None) == FieldApprovalAction.CHOOSE_ASSOCIATION
-                    for a in [request.get_approval(f) for f in request.field_approvals]
-                )
-                or t2_decision != "NEW_MEDIA_CANDIDATE"
-            )
-        ):
-            target_id = request.selected_media_row_id
+        # Default-deny every decision other than current EXISTING_MEDIA_MATCH or a separately validated explicit association decision
+        assoc_approval = request.get_association_approval()
+        is_match = (t2_decision == "EXISTING_MEDIA_MATCH")
+        is_valid_assoc = (assoc_approval is not None)
+
+        if is_match or is_valid_assoc:
+            target_id = assoc_approval.selected_media_row_id if is_valid_assoc else request.selected_media_row_id
             if not target_id:
                 return self._enrich_result(MediaDbSyncResult(
                     tracking_id=request.tracking_id,
@@ -386,16 +371,46 @@ class MediaDatabaseUpdateEngine:
                     media_row_id=target_id,
                     diagnostic_notes=[f"Target Media row {target_id} not found in database"],
                 ), request)
+
+            # Precondition revalidation for association approval
+            if is_valid_assoc and assoc_approval:
+                if assoc_approval.reviewed_candidate_row_id != live_row.get("id"):
+                    return self._enrich_result(MediaDbSyncResult(
+                        tracking_id=request.tracking_id,
+                        status=SyncStatus.REVIEW_REQUIRED,
+                        operation=SyncOperation.CONFLICT,
+                        review_required=True,
+                        conflicts=["ASSOCIATION_PRECONDITION_FAILED"],
+                        diagnostic_notes=[
+                            f"Reviewed candidate row ID {assoc_approval.reviewed_candidate_row_id} does not match live row ID {live_row.get('id')}"
+                        ],
+                    ), request)
+
             res = self._plan_update(request, fields_by_name, live_row)
             return self._enrich_result(res, request)
 
-        # Any unrecognized state
+        # Non-match Tool 2 decisions requiring human review
+        if t2_decision in (
+            "PROBABLE_EXISTING_MEDIA",
+            "MULTIPLE_CANDIDATES",
+            "CONFLICT_WITH_EXISTING",
+            "INSUFFICIENT_EVIDENCE",
+        ):
+            return self._enrich_result(MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.REVIEW_REQUIRED,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                diagnostic_notes=[f"Tool 2 decision {t2_decision} requires human association review; automatic mutation disallowed"],
+            ), request)
+
+        # Any unrecognized, missing, or bogus state
         return self._enrich_result(MediaDbSyncResult(
             tracking_id=request.tracking_id,
             status=SyncStatus.REVIEW_REQUIRED,
             operation=SyncOperation.BLOCKED,
             review_required=True,
-            diagnostic_notes=[f"Unrecognized Tool 2 decision '{request.tool2_decision}'"],
+            diagnostic_notes=[f"Unrecognized or unassociated Tool 2 decision '{request.tool2_decision}'"],
         ), request)
 
 
@@ -610,6 +625,18 @@ class MediaDatabaseUpdateEngine:
         if "notes" in fields_by_name:
             diffs.append(FieldDiff(field_name="Notes", old_value=None, new_value=notes_val, action=FieldAction.SET))
 
+        # Q-001: Media Archive link must remain empty on new rows; incoming proposals are blocked
+        appr_mal = request.get_approval("Media Archive link") or request.get_approval("media_archive_link")
+        if appr_mal and appr_mal.approved_value:
+            conflicts.append("Media Archive link cannot be populated on creation; value must remain empty")
+            diffs.append(FieldDiff(
+                field_name="Media Archive link",
+                old_value=None,
+                new_value=appr_mal.approved_value,
+                action=FieldAction.CONFLICT,
+                details="Media Archive link cannot be populated on creation",
+            ))
+
         # 9. Dates/Timestamps
         for d_fld in ("Created_on", "Last modified by", "Last modified", "imported_on"):
             if d_fld.lower() in fields_by_name:
@@ -751,6 +778,26 @@ class MediaDatabaseUpdateEngine:
             diffs.append(FieldDiff(field_name="media_archive_path", old_value=curr_path, new_value=request.current_path, action=FieldAction.SET))
         if fn_needs_update and "filename" in fields_by_name:
             diffs.append(FieldDiff(field_name="Filename", old_value=curr_fn, new_value=request.current_filename, action=FieldAction.SET))
+
+        # Q-001: Media Archive link must be preserved on existing rows; cannot be modified by archive tooling
+        curr_link = _get_text("Media Archive link") or _get_text("media_archive_link")
+        appr_link = request.get_approval("Media Archive link") or request.get_approval("media_archive_link")
+        if appr_link and appr_link.approved_value and appr_link.approved_value != curr_link:
+            conflicts.append("Media Archive link modification is unsupported; existing database value must be preserved")
+            diffs.append(FieldDiff(
+                field_name="Media Archive link",
+                old_value=curr_link,
+                new_value=appr_link.approved_value,
+                action=FieldAction.CONFLICT,
+                details="Media Archive link cannot be modified by archive tooling",
+            ))
+        elif curr_link is not None or "media archive link" in fields_by_name or "media_archive_link" in fields_by_name:
+            diffs.append(FieldDiff(
+                field_name="Media Archive link",
+                old_value=curr_link,
+                new_value=curr_link,
+                action=FieldAction.PRESERVED,
+            ))
 
         # 2. Semantic Fields: Date, Title, Category, Place, Country
         # Date
@@ -1207,25 +1254,41 @@ class MediaDatabaseUpdateEngine:
                 ],
             )
 
-        # R-013: Strict Tool 2 verification of live and complete candidate check
-        live_read_complete = getattr(fresh_rev, "live_read_complete", None)
-        snapshot_complete = getattr(fresh_rev, "snapshot_complete", None)
-        baserow_check_complete = getattr(fresh_rev, "baserow_check_complete", None)
-        database_state = getattr(fresh_rev, "database_state", "LIVE_HEALTHY")
+        # R-013 / R-023: Strict Tool 2 verification of live and complete candidate check
+        if getattr(fresh_rev, "live_read_complete", None) is not True:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                diagnostic_notes=["Pre-create race guard: Tool 2 live_read_complete is not True"],
+            )
+        if getattr(fresh_rev, "snapshot_complete", None) is not True:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                diagnostic_notes=["Pre-create race guard: Tool 2 snapshot_complete is not True"],
+            )
+        if getattr(fresh_rev, "baserow_check_complete", None) is not True:
+            return MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                review_required=True,
+                diagnostic_notes=["Pre-create race guard: Tool 2 baserow_check_complete is not True"],
+            )
 
-        if (
-            live_read_complete is False
-            or snapshot_complete is False
-            or baserow_check_complete is False
-            or database_state in ("LIVE_PARTIAL_OR_FAILED", "OFFLINE", "UNAVAILABLE", "PARTIAL", "STALE_OR_INCOMPLETE")
-        ):
+        database_state = getattr(fresh_rev, "database_state", None)
+        if database_state not in ("LIVE_CURRENT", "LIVE_COMPLETE"):
             return MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.DATABASE_UNAVAILABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 diagnostic_notes=[
-                    f"Pre-create race guard: Tool 2 check incomplete or non-live (live_read={live_read_complete}, snapshot={snapshot_complete}, baserow_check={baserow_check_complete}, state={database_state})"
+                    f"Pre-create race guard: Tool 2 check incomplete or non-live (database_state '{database_state}' not in ('LIVE_CURRENT', 'LIVE_COMPLETE'))"
                 ],
             )
 

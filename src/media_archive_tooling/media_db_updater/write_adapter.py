@@ -8,6 +8,7 @@ Enforces:
 - Hermetic test fake: FakeBaserowWriteAdapter for offline testing and verification.
 """
 from datetime import datetime, timezone
+import json
 import logging
 from typing import Any, Dict, List, Optional
 import re
@@ -57,9 +58,11 @@ SECRET_PATTERNS = [
     re.compile(r"([?&](?:key|api_key|token|access_token|password|secret)=)[^&\s\"']+", re.IGNORECASE),
 ]
 
+SECRET_KEY_PATTERN = re.compile(r"(?:authorization|token|key|password|secret)", re.IGNORECASE)
+
 
 def redact_secrets(val: Any) -> Any:
-    """Redact API tokens, bearer tokens, or secrets from strings, JSON, or recursive structures."""
+    """Redact API tokens, bearer tokens, or secrets from strings, keys, JSON, or recursive structures."""
     if isinstance(val, str):
         # Check if the string is serialized JSON
         clean_s = val.strip()
@@ -75,7 +78,13 @@ def redact_secrets(val: Any) -> Any:
             res = pat.sub(r"\1[REDACTED]", res)
         return res
     elif isinstance(val, dict):
-        return {k: redact_secrets(v) for k, v in val.items()}
+        redacted_dict = {}
+        for k, v in val.items():
+            if isinstance(k, str) and SECRET_KEY_PATTERN.search(k):
+                redacted_dict[k] = "[REDACTED]"
+            else:
+                redacted_dict[k] = redact_secrets(v)
+        return redacted_dict
     elif isinstance(val, list):
         return [redact_secrets(x) for x in val]
     return val

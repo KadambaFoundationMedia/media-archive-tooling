@@ -61,12 +61,8 @@ def run_renamer(args):
 
     registry = LocalRegistry(reg_path)
     logger = RenamerLogger(log_path)
-    provider = BaserowReferenceProvider(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-        category_table_id=config.baserow_category_table_id,
-    )
+    # Tool 1 receives no Baserow credentials/access (amendment section 1 & 5)
+    provider = BaserowReferenceProvider()
 
     updater_service = create_media_db_updater_service(
         registry=registry,
@@ -255,14 +251,8 @@ def run_travel_review(args):
     registry = LocalRegistry(reg_path)
     ref_path = Path(args.reference_path) if getattr(args, "reference_path", None) else None
 
-    provider = BaserowSnapshotProvider(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-        category_table_id=config.baserow_category_table_id,
-        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
-    )
-    store = TravelReferenceStore(reference_path=ref_path, provider=provider)
+    # Tool 3 operates offline from local verified reference without Baserow access (amendment section 1 & 5)
+    store = TravelReferenceStore(reference_path=ref_path)
     service = TravelScheduleReviewService(registry=registry, reference_store=store)
 
     auto_enrich = getattr(args, "auto_enrich", True)

@@ -42,16 +42,53 @@ class FieldApprovalAction(str, Enum):
     DEFER = "defer"
     CONFIRM_NEW = "confirm_new"
 
+    @classmethod
+    def from_value(cls, val: Any) -> "FieldApprovalAction":
+        """Parse string or enum into canonical FieldApprovalAction; raises ValueError on unknown/missing."""
+        if isinstance(val, cls):
+            return val
+        if not val or not isinstance(val, str):
+            raise ValueError(f"Invalid field approval action: {val!r}")
+        clean = val.strip().lower()
+        for member in cls:
+            if member.value == clean or member.name.lower() == clean:
+                return member
+        raise ValueError(f"Invalid field approval action: {val}")
+
 
 class FieldApproval(BaseModel):
     """Explicit human approval for a single field with reviewed precondition and action provenance."""
     field_name: str
-    action: FieldApprovalAction = FieldApprovalAction.APPLY_CORRECTION
+    action: FieldApprovalAction
     approved_value: Optional[Any] = None
     # Must be explicitly true when the reviewer inspected the live database value
     has_reviewed_precondition: bool = False
     # Exact reviewed database value (can be None or "" for an explicitly reviewed blank precondition)
     reviewed_precondition_value: Optional[Any] = None
+    reviewer: Optional[str] = "human_reviewer"
+    reviewed_at: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FieldApprovalInput(BaseModel):
+    """Strict validated input model for field approvals at the service boundary."""
+    field_name: str
+    action: FieldApprovalAction
+    approved_value: Optional[Any] = None
+    has_reviewed_precondition: bool = False
+    reviewed_precondition_value: Optional[Any] = None
+    reviewer: Optional[str] = "human_reviewer"
+    reviewed_at: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AssociationApproval(BaseModel):
+    """Explicit human approval to associate a file with an existing Baserow Media row."""
+    selected_media_row_id: int
+    action: FieldApprovalAction = FieldApprovalAction.CHOOSE_ASSOCIATION
+    has_reviewed_precondition: bool = True
+    reviewed_candidate_row_id: int
+    reviewed_precondition_filename: Optional[str] = None
     reviewer: Optional[str] = "human_reviewer"
     reviewed_at: Optional[str] = None
     notes: Optional[str] = None
@@ -103,7 +140,9 @@ class MediaDbSyncRequest(BaseModel):
     parent_folder_context: Optional[str] = None
     tool2_decision: Optional[str] = None
     tool2_timestamp: Optional[str] = None
+    tool2_database_state: Optional[str] = None
     selected_media_row_id: Optional[int] = None
+    association_approval: Optional[Union[AssociationApproval, Dict[str, Any]]] = None
     tool3_decision: Optional[str] = None
     tool3_evidence: Optional[Dict[str, Any]] = None
     live_query_timestamp: Optional[str] = None
@@ -115,7 +154,7 @@ class MediaDbSyncRequest(BaseModel):
     reviewer_notes: Optional[str] = None
 
     def get_approval(self, field_name: str) -> Optional[FieldApproval]:
-        """Extract and validate field approval for a specific field name."""
+        """Extract and strictly validate field approval for a specific field name."""
         raw = self.field_approvals.get(field_name)
         if raw is None:
             # Check case-insensitively
@@ -130,13 +169,19 @@ class MediaDbSyncRequest(BaseModel):
         if not isinstance(raw, dict):
             return None
 
-        has_pre = bool(raw.get("has_reviewed_precondition", False)) or ("reviewed_precondition_value" in raw)
-        action_val = raw.get("action", FieldApprovalAction.APPLY_CORRECTION)
-        if isinstance(action_val, str):
-            try:
-                action_val = FieldApprovalAction(action_val.lower())
-            except ValueError:
-                action_val = FieldApprovalAction.APPLY_CORRECTION
+        has_pre = raw.get("has_reviewed_precondition")
+        if has_pre is None:
+            has_pre = False
+        else:
+            has_pre = bool(has_pre)
+
+        action_raw = raw.get("action")
+        if not action_raw:
+            return None
+        try:
+            action_val = FieldApprovalAction.from_value(action_raw)
+        except ValueError:
+            return None
 
         return FieldApproval(
             field_name=field_name,
@@ -144,6 +189,50 @@ class MediaDbSyncRequest(BaseModel):
             approved_value=raw.get("approved_value"),
             has_reviewed_precondition=has_pre,
             reviewed_precondition_value=raw.get("reviewed_precondition_value") if has_pre else None,
+            reviewer=raw.get("reviewer", "human_reviewer"),
+            reviewed_at=raw.get("reviewed_at"),
+            notes=raw.get("notes"),
+        )
+
+    def get_association_approval(self) -> Optional[AssociationApproval]:
+        """Extract and validate explicit association approval."""
+        raw = self.association_approval
+        if raw is None:
+            raw_field = self.field_approvals.get("association")
+            if isinstance(raw_field, dict):
+                act_str = raw_field.get("action")
+                if act_str and str(act_str).strip().lower() in ("choose_association", "choose_association"):
+                    raw = raw_field
+        if raw is None:
+            return None
+        if isinstance(raw, AssociationApproval):
+            return raw
+        if not isinstance(raw, dict):
+            return None
+
+        has_pre = raw.get("has_reviewed_precondition")
+        if has_pre is not True:
+            return None
+
+        sel_id = raw.get("selected_media_row_id") or self.selected_media_row_id
+        cand_id = raw.get("reviewed_candidate_row_id")
+        if not sel_id or not cand_id or int(sel_id) != int(cand_id):
+            return None
+
+        action_raw = raw.get("action", FieldApprovalAction.CHOOSE_ASSOCIATION)
+        try:
+            act = FieldApprovalAction.from_value(action_raw)
+        except ValueError:
+            return None
+        if act != FieldApprovalAction.CHOOSE_ASSOCIATION:
+            return None
+
+        return AssociationApproval(
+            selected_media_row_id=int(sel_id),
+            action=act,
+            has_reviewed_precondition=True,
+            reviewed_candidate_row_id=int(cand_id),
+            reviewed_precondition_filename=raw.get("reviewed_precondition_filename"),
             reviewer=raw.get("reviewer", "human_reviewer"),
             reviewed_at=raw.get("reviewed_at"),
             notes=raw.get("notes"),

@@ -11,12 +11,15 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ..renamer.registry.registry import LocalRegistry
 from .country_mapper import get_country_name_for_iso, normalize_country_name, is_valid_country_display_name
 from .engine import MediaDatabaseUpdateEngine
 from .models import (
+    AssociationApproval,
+    FieldApproval,
+    FieldApprovalAction,
     MediaDbSyncRequest,
     MediaDbSyncResult,
     SyncOperation,
@@ -94,8 +97,22 @@ class MediaDatabaseUpdaterService:
         # Parent folder context
         parent_ctx = context_data.get("parent_folder") or Path(file_rec["current_path"]).parent.name
 
-        t2_decision = t2_rec.get("decision") if t2_rec else None
-        selected_row_id = t2_rec.get("selected_media_row_id") if t2_rec else None
+        t2_decision = None
+        selected_row_id = None
+        t2_timestamp = None
+        live_query_timestamp = None
+        t2_db_state = None
+
+        if t2_rec:
+            t2_decision = t2_rec.get("decision")
+            selected_row_id = t2_rec.get("selected_media_row_id")
+            t2_db_state = t2_rec.get("database_state")
+            t2_timestamp = t2_rec.get("snapshot_timestamp")
+            t2_res_data = t2_rec.get("result") or {}
+            if isinstance(t2_res_data, dict):
+                t2_timestamp = t2_timestamp or t2_res_data.get("database_snapshot_at")
+                live_query_timestamp = t2_res_data.get("baserow_read_at") or t2_timestamp
+                t2_db_state = t2_db_state or t2_res_data.get("database_state")
 
         current_path = file_rec.get("current_path") or ""
         current_fn = file_rec.get("current_filename") or ""
@@ -116,14 +133,16 @@ class MediaDatabaseUpdaterService:
         what_prov = what_data.get("evidence") or what_data.get("provenance")
         where_prov = where_data.get("evidence") or where_data.get("provenance")
 
-        # Retain prior field approvals and review notes if present
+        # Retain prior field approvals, association approvals, and review notes if present
         prior_sync = self.registry.get_media_db_sync(tracking_id)
         prior_req = prior_sync.get("request") if prior_sync else None
         field_approvals = {}
+        association_approval = None
         reviewer_notes = None
         is_human_approved = False
         if prior_req:
             field_approvals = prior_req.get("field_approvals") or {}
+            association_approval = prior_req.get("association_approval")
             reviewer_notes = prior_req.get("reviewer_notes")
             is_human_approved = bool(prior_req.get("is_human_approved", False))
 
@@ -153,9 +172,13 @@ class MediaDatabaseUpdaterService:
             where_provenance=where_prov,
             parent_folder_context=parent_ctx,
             tool2_decision=t2_decision,
+            tool2_timestamp=t2_timestamp,
+            tool2_database_state=t2_db_state,
             selected_media_row_id=selected_row_id,
+            association_approval=association_approval,
             tool3_decision=t3_rec.get("decision") if t3_rec else None,
             tool3_evidence=t3_rec.get("result") if t3_rec else None,
+            live_query_timestamp=live_query_timestamp,
             is_human_approved=is_human_approved,
             field_approvals=field_approvals,
             reviewer_notes=reviewer_notes,
@@ -165,15 +188,15 @@ class MediaDatabaseUpdaterService:
         self,
         tracking_id: str,
         field_name: str,
-        action: str = "apply_correction",
+        action: Union[str, FieldApprovalAction] = FieldApprovalAction.APPLY_CORRECTION,
         approved_value: Optional[Any] = None,
         reviewed_precondition_value: Optional[Any] = None,
-        has_reviewed_precondition: Optional[bool] = None,
+        has_reviewed_precondition: bool = False,
         reviewer: str = "human_reviewer",
         notes: Optional[str] = None,
         commit: bool = False,
     ) -> MediaDbSyncResult:
-        """Apply an explicit field-level review action with reviewed precondition (R-016, Section 18)."""
+        """Apply an explicit field-level review action with reviewed precondition (R-016, R-025, Section 18)."""
         req = self.build_sync_request(tracking_id)
         if not req:
             return MediaDbSyncResult(
@@ -183,16 +206,55 @@ class MediaDatabaseUpdaterService:
                 error_message=f"File {tracking_id} not found in registry",
             )
 
-        has_pre = has_reviewed_precondition if has_reviewed_precondition is not None else True
-        req.field_approvals[field_name] = {
-            "action": action,
-            "approved_value": approved_value,
-            "has_reviewed_precondition": has_pre,
-            "reviewed_precondition_value": reviewed_precondition_value,
-            "reviewer": reviewer,
-            "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            "notes": notes,
-        }
+        if isinstance(action, str):
+            action = FieldApprovalAction.from_value(action)
+
+        approval = FieldApproval(
+            field_name=field_name,
+            action=action,
+            approved_value=approved_value,
+            has_reviewed_precondition=bool(has_reviewed_precondition),
+            reviewed_precondition_value=reviewed_precondition_value if has_reviewed_precondition else None,
+            reviewer=reviewer,
+            reviewed_at=datetime.now(timezone.utc).isoformat(),
+            notes=notes,
+        )
+        req.field_approvals[field_name] = approval
+
+        return self.synchronize(tracking_id, commit=commit, request=req)
+
+    def apply_association_approval(
+        self,
+        tracking_id: str,
+        selected_media_row_id: int,
+        reviewed_candidate_row_id: int,
+        reviewed_precondition_filename: Optional[str] = None,
+        reviewer: str = "human_reviewer",
+        notes: Optional[str] = None,
+        commit: bool = False,
+    ) -> MediaDbSyncResult:
+        """Apply an explicit human association approval to connect a file to an existing Baserow Media row (R-024)."""
+        req = self.build_sync_request(tracking_id)
+        if not req:
+            return MediaDbSyncResult(
+                tracking_id=tracking_id,
+                status=SyncStatus.FAILED_BLOCKED,
+                operation=SyncOperation.BLOCKED,
+                error_message=f"File {tracking_id} not found in registry",
+            )
+
+        assoc = AssociationApproval(
+            selected_media_row_id=selected_media_row_id,
+            action=FieldApprovalAction.CHOOSE_ASSOCIATION,
+            has_reviewed_precondition=True,
+            reviewed_candidate_row_id=reviewed_candidate_row_id,
+            reviewed_precondition_filename=reviewed_precondition_filename,
+            reviewer=reviewer,
+            reviewed_at=datetime.now(timezone.utc).isoformat(),
+            notes=notes,
+        )
+        req.association_approval = assoc
+        req.selected_media_row_id = selected_media_row_id
 
         return self.synchronize(tracking_id, commit=commit, request=req)
 

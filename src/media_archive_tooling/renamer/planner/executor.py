@@ -144,17 +144,19 @@ class BatchExecutor:
                 prop.current_filename = target_path.name
                 # Record in local registry audit trail
                 self.registry.record_commit(prop, target_path)
-                try:
-                    self.registry.save_media_db_sync(
-                        tracking_id=prop.tracking_id,
-                        sync_status="PENDING_SYNC",
-                        attempt_count=0,
-                    )
-                    if self.media_db_updater_service is not None:
-                        self.media_db_updater_service.synchronize(prop.tracking_id, commit=True)
-                except Exception:
-                    # Filesystem commit must never be rolled back if Baserow sync fails
-                    pass
+                # Tool 4 is called after final filename is committed, not after initial/intermediate rename (amendment section 2)
+                if self.mode != RenameMode.INITIAL:
+                    try:
+                        self.registry.save_media_db_sync(
+                            tracking_id=prop.tracking_id,
+                            sync_status="PENDING_SYNC",
+                            attempt_count=0,
+                        )
+                        if self.media_db_updater_service is not None:
+                            self.media_db_updater_service.synchronize(prop.tracking_id, commit=True)
+                    except Exception:
+                        # Filesystem commit must never be rolled back if Baserow sync fails
+                        pass
             except Exception as e:
                 prop.status = "failed"
                 prop.error = f"Filesystem error during rename: {str(e)}"
