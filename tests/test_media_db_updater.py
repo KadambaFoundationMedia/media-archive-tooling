@@ -324,16 +324,23 @@ def test_04_equivalent_semantic_field_is_a_noop(tmp_path):
         "media_archive_path": "/archive/test.mp3",
         "Notes": "Added from archive",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=103),
+    )
     req = service.build_sync_request("trk0004")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 103
 
     res = service.synchronize("trk0004", commit=True, request=req)
     assert res.status == SyncStatus.SYNCED
-    assert res.operation == SyncOperation.NOOP
-    assert len(fake_db.calls) == 2  # fetch_fields, fetch_row_raw, 0 patches!
-    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+    assert res.operation == SyncOperation.UPDATE
+    assert fake_db.rows[103]["Notes"] == (
+        "Added from archive\n"
+        "Original filename: test.mp3\n"
+        "Original path: /archive/test.mp3"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -757,12 +764,18 @@ def test_20_title_priority_resolution():
     )
     assert _resolve_title(req1) == "Seminar on Karma"
 
-    # 2. Parent folder context when what_val is scripture only
+    # 2. Scripture reference is the title; folder context must not replace it
     req2 = MediaDbSyncRequest(
         tracking_id="t2", current_filename="f.mp3", current_path="/p/f.mp3",
         what_val="SB 1.3.4", parent_folder_context="Sunday Feast Lectures",
     )
-    assert _resolve_title(req2) == "Sunday Feast Lectures"
+    assert _resolve_title(req2) == "SB 1.3.4"
+
+    req2_hyphenated = MediaDbSyncRequest(
+        tracking_id="t2b", current_filename="f.mp3", current_path="/p/f.mp3",
+        what_val="SB-1-19-31", parent_folder_context="From JVD (8.9.11)",
+    )
+    assert _resolve_title(req2_hyphenated) == "SB 1.19.31"
 
     # 3. Filename stem fallback when parent folder is generic (e.g. year)
     req3 = MediaDbSyncRequest(
@@ -785,6 +798,60 @@ def test_21_category_abbreviation_maps_to_valid_live_option(tmp_path):
 
     res = service.synchronize("trk0021", commit=True, request=req)
     assert fake_db.rows[res.media_row_id]["Category"] == "Bhagavad-gita"
+
+
+def test_21_sample_scripture_maps_to_live_schema_and_original_provenance(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    original_name = "KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA"
+    final_name = "2011-08-29_KKS_SB-1-19-31_Oslo-no.wma"
+    original_path = f"/archive/From JVD (8.9.11)/{original_name}"
+    final_path = f"/archive/From JVD (8.9.11)/{final_name}"
+    save_test_file(
+        registry,
+        tracking_id="trk0021_sample",
+        filename=final_name,
+        original_filename=original_name,
+        original_path=original_path,
+        current_path=final_path,
+        date_val="2011-08-29",
+        what_val="SB-1-19-31",
+        what_category="Srimad Bhagavatam",
+        what_verse=None,
+        place="Oslo",
+        country="Norway",
+        country_iso="no",
+        parent_folder="From JVD (8.9.11)",
+    )
+    live_fields = FakeBaserowWriteAdapter().fields
+    for field in live_fields:
+        if field["name"] == "Category":
+            field["select_options"][0]["value"] = "Srimad-bhagavatam"
+        elif field["name"] == "Tag":
+            field["type"] = "text"
+            field.pop("select_options", None)
+        elif field["name"] == "Language":
+            field["type"] = "multiple_select"
+
+    fake_db = FakeBaserowWriteAdapter(initial_fields=live_fields)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
+    request = service.build_sync_request("trk0021_sample")
+    request.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    result = service.synchronize("trk0021_sample", commit=True, request=request)
+
+    assert result.status == SyncStatus.SYNCED
+    row = fake_db.rows[result.media_row_id]
+    assert row["Title"] == "SB 1.19.31"
+    assert row["Category"] == "Srimad-bhagavatam"
+    assert row["Tag"] == "1.19.31"
+    assert row["Language"] == ["English"]
+    assert row["Filename"] == final_name
+    assert row["media_archive_path"] == final_path
+    assert row["Notes"] == (
+        "Added from archive\n"
+        f"Original filename: {original_name}\n"
+        f"Original path: {original_path}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +1096,25 @@ def test_33_notes_begins_with_added_from_archive_once_and_preserves_human_notes(
     merged2 = merge_notes(merged1)
     assert merged2 == "Added from archive\nSpeaker arrived late."
 
+    # Managed original-file provenance is present once and human text survives.
+    with_provenance = merge_notes(
+        merged2,
+        original_filename="KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA",
+        original_path="/archive/From JVD (8.9.11)/KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA",
+    )
+    assert with_provenance.startswith(
+        "Added from archive\n"
+        "Original filename: KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA\n"
+        "Original path: /archive/From JVD (8.9.11)/KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA"
+    )
+    assert with_provenance.count("Original filename:") == 1
+    assert "Speaker arrived late." in with_provenance
+    assert merge_notes(
+        with_provenance,
+        original_filename="KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA",
+        original_path="/archive/From JVD (8.9.11)/KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA",
+    ) == with_provenance
+
 
 # ---------------------------------------------------------------------------
 # Test 34: New-row timestamps/default dates are populated as specified
@@ -1178,6 +1264,78 @@ def test_39_tracked_file_rename_safely_updates_filename_and_path(tmp_path):
     assert res.status == SyncStatus.SYNCED
     assert fake_db.rows[114]["Filename"] == "new_name.mp3"
     assert fake_db.rows[114]["media_archive_path"] == "/archive/new_name.mp3"
+
+
+def test_39_repeat_rename_uses_immediately_previous_committed_path(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    original_name = "KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA"
+    bad_name = "KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11-02.wma"
+    final_name = "2011-08-29_KKS_SB-1-19-31_Oslo-no.wma"
+    original_path = f"/archive/{original_name}"
+    bad_path = f"/archive/{bad_name}"
+    final_path = f"/archive/{final_name}"
+    prop = save_test_file(
+        registry,
+        tracking_id="trk0039_repeat",
+        filename=final_name,
+        original_filename=original_name,
+        original_path=original_path,
+        current_path=final_path,
+        what_val="SB-1-19-31",
+        what_category="Srimad Bhagavatam",
+        what_verse="1.19.31",
+        place="Oslo",
+        country="Norway",
+        country_iso="no",
+    )
+    with registry._get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO rename_history
+                (tracking_id, from_path, to_path, from_filename, to_filename, mode, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                prop.tracking_id,
+                bad_path,
+                final_path,
+                bad_name,
+                final_name,
+                RenameMode.FINALIZE.value,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+    live_fields = FakeBaserowWriteAdapter().fields
+    for field in live_fields:
+        if field["name"] == "Category":
+            field["select_options"][0]["value"] = "Srimad-bhagavatam"
+        elif field["name"] == "Tag":
+            field["type"] = "text"
+            field.pop("select_options", None)
+        elif field["name"] == "Language":
+            field["type"] = "multiple_select"
+
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 114,
+        "Filename": bad_name,
+        "media_archive_path": bad_path,
+        "Language": ["English", "Norwegian"],
+    }], initial_fields=live_fields)
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=114),
+    )
+    request = service.build_sync_request(prop.tracking_id)
+    request.tool2_decision = "EXISTING_MEDIA_MATCH"
+    request.selected_media_row_id = 114
+
+    result = service.synchronize(prop.tracking_id, commit=True, request=request)
+
+    assert result.status == SyncStatus.SYNCED
+    assert fake_db.rows[114]["Filename"] == final_name
+    assert fake_db.rows[114]["media_archive_path"] == final_path
+    assert fake_db.rows[114]["Language"] == ["English", "Norwegian"]
 
 
 # ---------------------------------------------------------------------------

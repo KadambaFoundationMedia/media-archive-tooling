@@ -30,17 +30,18 @@ class RenamePlanner:
             result.what.selected_value is not None
             and result.what.state != ResolutionState.UNRESOLVED
         )
-        is_unsplit_combination = result.file_metadata.possible_combination
-
         edited_suffix = "_edited" if (result.file_metadata.edited and not result.file_metadata.baserow_check_complete) else ""
 
-        if not has_meaningful_what or is_unsplit_combination:
-            # Cannot yet form a safe canonical filename or unsplit combination
-            # Retain useful original wording (+ tracking ID unless finalize mode without collision)
+        if not has_meaningful_what:
+            # Cannot yet form a semantic canonical filename. Retain a safe,
+            # punctuation-free rendering of the useful original wording.
             orig_name = result.identity.original_filename
             stem = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
             clean_stem = re.sub(r"_ID-[0-9a-fA-F]{8}$", "", stem, flags=re.IGNORECASE)
             clean_stem = re.sub(r"_edited$", "", clean_stem, flags=re.IGNORECASE)
+            clean_stem = to_ascii_latin(clean_stem)
+            clean_stem = re.sub(r"[^A-Za-z0-9_-]+", "-", clean_stem)
+            clean_stem = re.sub(r"-+", "-", clean_stem).strip("-_") or "Unresolved"
             if self.mode == RenameMode.FINALIZE and not edited_suffix:
                 proposed_name = f"{clean_stem}{ext}"
             else:

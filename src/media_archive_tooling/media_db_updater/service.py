@@ -162,12 +162,15 @@ class MediaDatabaseUpdaterService:
         current_fn = file_rec.get("current_filename") or ""
         orig_path = file_rec.get("original_path") or ""
         orig_fn = file_rec.get("original_filename") or ""
+        latest_rename = self.registry.get_latest_rename(tracking_id)
+        previous_path = (latest_rename or {}).get("from_path") or ""
+        previous_fn = (latest_rename or {}).get("from_filename") or ""
         when_val = when_data.get("selected_value") or file_rec.get("when_val") or ""
         what_val = what_data.get("selected_value") or file_rec.get("what_val") or ""
         row_id_str = str(selected_row_id or "")
 
         # Section 16/19 fingerprinting: full committed archive state + association context (R-019)
-        fp_str = f"{tracking_id}|{current_path}|{current_fn}|{orig_path}|{orig_fn}|{row_id_str}|{when_val}|{what_val}|{country_name}|{where_data.get('place_location')}"
+        fp_str = f"{tracking_id}|{current_path}|{current_fn}|{orig_path}|{orig_fn}|{previous_path}|{previous_fn}|{row_id_str}|{when_val}|{what_val}|{country_name}|{where_data.get('place_location')}"
         req_fingerprint = hashlib.sha256(fp_str.encode("utf-8")).hexdigest()
         req_id = f"req_{tracking_id}_{int(datetime.now(timezone.utc).timestamp())}"
         table_id = str(getattr(self.write_adapter, "media_table_id", "") or "")
@@ -196,6 +199,8 @@ class MediaDatabaseUpdaterService:
             current_path=file_rec["current_path"],
             original_filename=file_rec.get("original_filename"),
             original_path=file_rec.get("original_path"),
+            previous_filename=previous_fn or None,
+            previous_path=previous_path or None,
             request_id=req_id,
             request_fingerprint=req_fingerprint,
             table_id=table_id,

@@ -13,6 +13,8 @@ Status: `ACCEPTED`
 
 Post-acceptance architecture note (2026-09-17): Tool 1's accepted naming/domain behavior remains approved. `docs/baserow-access-boundary-amendment.md` requires Tool 1 to ask Tool 2 for the live Media check and Tool 3 for schedule/date evidence, commit the final filename for that stage, and then call Tool 4 once to synchronize Baserow. Tool 1 itself has no Baserow access. This integration refinement is tracked with the Tool 4 correction round and does not reopen the accepted naming rules.
 
+Practical correction (2026-09-17): the user identified an accepted-parser gap. `S.B. 1.19.31` must resolve to `SB-1-19-31`; `with Radha Madhava` marks a combination for later Tools 5/6 without replacing the exact primary class name; and all proposed filenames must follow the strict punctuation-free archive grammar. The exact sample regression now expects `2011-08-29_KKS_SB-1-19-31_Oslo-no.wma`. These orchestrator-authored changes supersede the older raw-stem fallback for combinations and are recorded here for the Builder.
+
 Original accepted implementation branch / PR: `main`  
 Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`  
 Builder status handoff reviewed: `769c88709a1dd5f3b08daee1fad6b49cd769d0c1`  
@@ -215,3 +217,9 @@ Merge PR #5 after required CI, then re-run `./scripts/review-tool-1.sh` locally 
 - R-026 captured the requested dashboard improvements.
 - PR #5 implements both corrections without changing finalized naming semantics.
 - Required GitHub CI passed at reviewed head `54c69d2`: 70 tests, shell validation, and package build all successful.
+
+### 2026-09-17 — Orchestrator practical naming correction
+- Compared the accepted implementation with the strict grammar and scripture normalization in the separate `Media-renaming` naming subsystem.
+- Added dotted `S.B.` recognition, punctuation-safe fallback rendering, strict special-character validation, and exact primary-class naming for combination recordings.
+- Combination detection/routing remains intact for downstream Tools 5/6.
+- Added an exact regression for the Oslo sample and updated the older combination regression to the user-directed behavior.

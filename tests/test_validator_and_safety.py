@@ -74,6 +74,15 @@ def test_validator_canonical_filename():
     assert ok is False
     assert any("illegal" in e for e in errors)
 
+    # Archive convention forbids punctuation even when the host filesystem permits it.
+    ok, errors = validate_canonical_filename(
+        "2011-05-24_KKS_SB-1-1-1(with-JRM)_Praha-cz_ID-a1b2c3d4.mp3",
+        mode=RenameMode.INITIAL,
+        tracking_id="a1b2c3d4",
+    )
+    assert ok is False
+    assert any("illegal" in e and "(" in e for e in errors)
+
 
 def test_transliteration_cyrillic_and_devanagari():
     # Cyrillic

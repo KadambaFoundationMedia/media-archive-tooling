@@ -49,8 +49,26 @@ def test_golden_case_3(parser_and_planner):
     assert res.where.place_location == "Villa-Vrindavan"
     assert res.where.country_iso2 == "it"
     assert res.file_metadata.possible_combination is True
-    # R-013: Unsplit combination candidate must retain useful source stem plus tracking ID
-    assert prop.proposed_filename == f"JRM and class 24/5/11 villa vrindavan_ID-{res.identity.tracking_id}.mp3"
+    # A secondary combination marker must not discard valid primary-class evidence.
+    assert prop.proposed_filename == f"2011-05-24_KKS_Jaya-Radha-Madhava_Villa-Vrindavan-it_ID-{res.identity.tracking_id}.mp3"
+
+
+def test_dotted_sb_combination_uses_primary_class_for_canonical_filename():
+    source = Path(
+        "/archive/From JVD (8.9.11)/"
+        "KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA"
+    )
+    parser = RenamerParser()
+    result = parser.parse_file(source)
+    proposal = RenamePlanner(mode=RenameMode.FINALIZE).plan_rename(result)
+
+    assert result.when.selected_value == "2011-08-29"
+    assert result.what.selected_value == "SB-1-19-31"
+    assert result.what.category == "Srimad Bhagavatam"
+    assert result.where.place_location == "Oslo"
+    assert result.where.country_iso2 == "no"
+    assert result.file_metadata.possible_combination is True
+    assert proposal.proposed_filename == "2011-08-29_KKS_SB-1-19-31_Oslo-no.wma"
 
 
 def test_golden_case_4_recorder_unresolved(parser_and_planner):

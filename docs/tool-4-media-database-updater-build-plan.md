@@ -819,3 +819,14 @@ The Builder must **not** silently change:
 - idempotency and durable pending-sync behavior.
 
 Any actual contradiction discovered during implementation must be recorded as `Q-###` in `status/tool-4-media-database-updater.md` and unaffected work may continue. Do not edit this finalized plan to fit the implementation.
+
+## 26. User-directed practical metadata correction (2026-09-17)
+
+For the practical Tool 1–4 workflow:
+
+- a pure scripture reference is the Baserow title in readable form (for example `SB-1-19-31` becomes `SB 1.19.31`);
+- Category must use the exact equivalent option returned by the live schema (for example `Srimad-bhagavatam`);
+- a text-type Tag receives the scripture verse as text, while a multi-select Tag remains option-bound;
+- Language options are retrieved from the live schema; a new English recording uses the live `English` option and existing Language values are preserved on update;
+- Notes begins with `Added from archive` and records the immutable original filename and original full path exactly once;
+- a repeat rename of the same tracked file may update Filename and `media_archive_path` when the live row still contains the immediately previous committed filename/path.

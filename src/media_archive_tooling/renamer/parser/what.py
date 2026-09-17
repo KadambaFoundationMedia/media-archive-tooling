@@ -20,7 +20,7 @@ SPECIFIC_TITLES_PATH = ASSETS_DIR / "specific_titles.json"
 # The final range separator must therefore be a hyphen. A further dotted numeric
 # component is not silently reinterpreted as a range.
 SB_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:SB|Srimad[- ]?Bhagavatam)[- ]+(\d{1,2})[- .:]+(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s-]|$)",
+    r"(?:^|[\s_.-])(?:S\s*\.?\s*B\.?|Srimad[- ]?Bhagavatam)[- ]+(\d{1,2})[- .:]+(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s()\-]|$)",
     re.IGNORECASE
 )
 BG_REGEX = re.compile(

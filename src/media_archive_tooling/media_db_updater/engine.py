@@ -217,6 +217,30 @@ def _extract_scripture_verse(what_val: Optional[str], what_verse: Optional[str])
     return None
 
 
+def _pure_scripture_display_title(value: Optional[str]) -> Optional[str]:
+    """Return the human-facing title for a pure structured scripture reference."""
+    if not value:
+        return None
+    wv = value.strip()
+    for rx in (SB_REGEX, BG_REGEX, CC_REGEX):
+        match = rx.search(wv)
+        if not match or rx.sub("", wv).strip(" -_"):
+            continue
+        if rx is SB_REGEX:
+            canto, chapter, verse, verse_end = match.groups()
+            verse_text = f"{int(verse)}-{int(verse_end)}" if verse_end else str(int(verse))
+            return f"SB {int(canto)}.{int(chapter)}.{verse_text}"
+        if rx is BG_REGEX:
+            chapter, verse, verse_end = match.groups()
+            verse_text = f"{int(verse)}-{int(verse_end)}" if verse_end else str(int(verse))
+            return f"BG {int(chapter)}.{verse_text}"
+        division, chapter, verse, verse_end = match.groups()
+        verse_text = f"{int(verse)}-{int(verse_end)}" if verse_end else str(int(verse))
+        division_text = f" {division.title()}" if division else ""
+        return f"CC{division_text} {int(chapter)}.{verse_text}"
+    return None
+
+
 def _resolve_title(request: MediaDbSyncRequest, for_create: bool = True) -> Optional[str]:
     """Resolve Title based on Section 11 priority:
     1. Explicit usable title in committed filename / structured WHAT title evidence.
@@ -226,16 +250,10 @@ def _resolve_title(request: MediaDbSyncRequest, for_create: bool = True) -> Opti
     # 1. Structured WHAT / title evidence
     if request.what_val:
         wv = request.what_val.strip()
-        pure_scripture = False
-        for rx in (SB_REGEX, BG_REGEX, CC_REGEX):
-            m = rx.search(wv)
-            if m:
-                rem = rx.sub("", wv).strip(" -_")
-                if not rem or len(rem) < 3:
-                    pure_scripture = True
-                break
-        if not pure_scripture:
-            return wv
+        pure_scripture_title = _pure_scripture_display_title(wv)
+        if pure_scripture_title:
+            return pure_scripture_title
+        return wv
 
     # 2. Parent folder context
     p_ctx = request.parent_folder_context
@@ -261,6 +279,8 @@ def merge_notes(
     existing_notes: Optional[str],
     incomplete_date: Optional[str] = None,
     full_date_resolved: bool = False,
+    original_filename: Optional[str] = None,
+    original_path: Optional[str] = None,
 ) -> str:
     """Merge notes idempotently in accordance with Section 13:
     - 'Added from archive' begins Notes exactly once when archive linkage is established.
@@ -273,8 +293,12 @@ def merge_notes(
     if existing_notes:
         for l in existing_notes.splitlines():
             clean_l = l.strip()
-            # Remove any occurrences of "Added from archive" to ensure deduplication
-            if clean_l == "Added from archive":
+            # Remove managed lines before rebuilding them to ensure idempotency.
+            if (
+                clean_l == "Added from archive"
+                or clean_l.startswith("Original filename:")
+                or clean_l.startswith("Original path:")
+            ):
                 continue
             lines.append(l)
 
@@ -286,11 +310,16 @@ def merge_notes(
         lines = [l for l in lines if not l.strip().startswith(marker_prefix)]
         lines.append(marker_line)
 
-    # 2. Build final notes with 'Added from archive' prepended exactly once
+    # 2. Build managed provenance header, then preserve remaining human text.
+    managed_lines = ["Added from archive"]
+    if original_filename:
+        managed_lines.append(f"Original filename: {original_filename}")
+    if original_path:
+        managed_lines.append(f"Original path: {original_path}")
     remaining = "\n".join(lines).strip()
     if remaining:
-        return f"Added from archive\n{remaining}"
-    return "Added from archive"
+        managed_lines.append(remaining)
+    return "\n".join(managed_lines)
 
 
 
@@ -520,15 +549,14 @@ class MediaDatabaseUpdateEngine:
                 conflicts.append("Title review action is DEFER; manual resolution required")
             elif appr_title.approved_value:
                 title_val = appr_title.approved_value
-        elif request.what_val and title_val == request.what_val:
-            if not is_semantic_state_eligible(request.what_state):
-                title_val = _resolve_title(MediaDbSyncRequest(
-                    tracking_id=request.tracking_id,
-                    current_filename=request.current_filename,
-                    current_path=request.current_path,
-                    parent_folder_context=request.parent_folder_context,
-                ))
-                diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from authoritative Title; used fallback")
+        elif request.what_val and not is_semantic_state_eligible(request.what_state):
+            title_val = _resolve_title(MediaDbSyncRequest(
+                tracking_id=request.tracking_id,
+                current_filename=request.current_filename,
+                current_path=request.current_path,
+                parent_folder_context=request.parent_folder_context,
+            ))
+            diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from authoritative Title; used fallback")
 
         if "title" in fields_by_name:
             diffs.append(FieldDiff(field_name="Title", old_value=None, new_value=title_val, action=FieldAction.SET))
@@ -708,7 +736,13 @@ class MediaDatabaseUpdateEngine:
             )
 
         # 8. Notes
-        notes_val = merge_notes(existing_notes=None, incomplete_date=incomplete_marker, full_date_resolved=bool(date_written))
+        notes_val = merge_notes(
+            existing_notes=None,
+            incomplete_date=incomplete_marker,
+            full_date_resolved=bool(date_written),
+            original_filename=request.original_filename,
+            original_path=request.original_path,
+        )
         if "notes" in fields_by_name:
             diffs.append(FieldDiff(field_name="Notes", old_value=None, new_value=notes_val, action=FieldAction.SET))
 
@@ -841,7 +875,10 @@ class MediaDatabaseUpdateEngine:
             path_needs_update = True
         elif curr_path == request.current_path:
             diffs.append(FieldDiff(field_name="media_archive_path", old_value=curr_path, new_value=curr_path, action=FieldAction.PRESERVED))
-        elif curr_path == request.original_path or curr_fn == request.original_filename:
+        elif (
+            curr_path in {request.original_path, request.previous_path}
+            or curr_fn in {request.original_filename, request.previous_filename}
+        ):
             path_needs_update = True
         else:
             conflicts.append(f"media_archive_path collision: row has '{curr_path}', incoming file is '{request.current_path}'")
@@ -857,7 +894,10 @@ class MediaDatabaseUpdateEngine:
             fn_needs_update = True
         elif curr_fn == request.current_filename:
             diffs.append(FieldDiff(field_name="Filename", old_value=curr_fn, new_value=curr_fn, action=FieldAction.PRESERVED))
-        elif curr_fn == request.original_filename or curr_path == request.original_path:
+        elif (
+            curr_fn in {request.original_filename, request.previous_filename}
+            or curr_path in {request.original_path, request.previous_path}
+        ):
             fn_needs_update = True
         else:
             diffs.append(FieldDiff(field_name="Filename", old_value=curr_fn, new_value=request.current_filename, action=FieldAction.PRESERVED))
@@ -960,7 +1000,7 @@ class MediaDatabaseUpdateEngine:
                     diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=appr_title.approved_value, action=FieldAction.CONFLICT))
         else:
             title_val = _resolve_title(request, for_create=False)
-            if request.what_val and title_val == request.what_val and not is_semantic_state_eligible(request.what_state):
+            if request.what_val and title_val and not is_semantic_state_eligible(request.what_state):
                 title_val = None
                 diag_notes.append(f"WHAT state '{request.what_state}' not positively eligible ('exact'/'strong'); excluded from Title field")
 
@@ -969,6 +1009,11 @@ class MediaDatabaseUpdateEngine:
                     if "title" in fields_by_name:
                         diffs.append(FieldDiff(field_name="Title", old_value=None, new_value=title_val, action=FieldAction.SET))
                 elif _normalize_title_text(curr_title) == _normalize_title_text(title_val):
+                    diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
+                elif _pure_scripture_display_title(request.what_val):
+                    # Existing Baserow metadata is leading. A scripture-derived
+                    # title may fill an empty title but cannot replace one
+                    # without a field-specific human approval.
                     diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
                 else:
                     conflicts.append(f"Title conflict: DB has '{curr_title}', incoming resolved '{title_val}'")
@@ -1117,6 +1162,9 @@ class MediaDatabaseUpdateEngine:
                     curr_tags.append(t)
         elif isinstance(curr_tags_raw, str) and curr_tags_raw.strip():
             curr_tags.append(curr_tags_raw.strip())
+        tag_fld = fields_by_name.get("tag")
+        tag_is_multi = bool(tag_fld and tag_fld.get("type") == "multiple_select")
+        curr_tag_value: Any = curr_tags if tag_is_multi else (curr_tags_raw.strip() if isinstance(curr_tags_raw, str) else None)
 
         appr_tag = request.get_approval("Tag")
         if appr_tag:
@@ -1134,9 +1182,8 @@ class MediaDatabaseUpdateEngine:
                         diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.CONFLICT))
                     else:
                         t_val = appr_tag.approved_value or verse
-                        tag_fld = fields_by_name.get("tag")
                         if tag_fld:
-                            if tag_fld.get("type") == "multiple_select":
+                            if tag_is_multi:
                                 matched_verse_opt, _ = self._match_select_option(tag_fld.get("select_options", []), t_val)
                                 if matched_verse_opt:
                                     new_tags = list(curr_tags) + ([matched_verse_opt] if matched_verse_opt not in curr_tags else [])
@@ -1144,7 +1191,7 @@ class MediaDatabaseUpdateEngine:
                                 else:
                                     conflicts.append(f"Scripture Tag option '{t_val}' not found in live schema")
                             else:
-                                diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=[t_val], action=FieldAction.SET))
+                                diffs.append(FieldDiff(field_name="Tag", old_value=curr_tag_value, new_value=str(t_val), action=FieldAction.SET))
                 else:
                     conflicts.append(f"Tag approval precondition failed: DB has '{curr_tags}', expected '{expected_pre}'")
                     diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=appr_tag.approved_value, action=FieldAction.CONFLICT))
@@ -1154,7 +1201,7 @@ class MediaDatabaseUpdateEngine:
                 diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
         elif verse and "tag" in fields_by_name:
             tag_fld = fields_by_name["tag"]
-            if tag_fld.get("type") == "multiple_select":
+            if tag_is_multi:
                 matched_verse_opt, _ = self._match_select_option(tag_fld.get("select_options", []), verse)
                 if matched_verse_opt:
                     if matched_verse_opt not in curr_tags:
@@ -1166,8 +1213,10 @@ class MediaDatabaseUpdateEngine:
                     conflicts.append(f"Scripture Tag option '{verse}' not found in live schema")
             else:
                 if verse not in curr_tags:
-                    new_tags = list(curr_tags) + [verse]
-                    diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=new_tags, action=FieldAction.SET))
+                    new_tag_value = f"{curr_tag_value}, {verse}" if curr_tag_value else verse
+                    diffs.append(FieldDiff(field_name="Tag", old_value=curr_tag_value, new_value=new_tag_value, action=FieldAction.SET))
+                else:
+                    diffs.append(FieldDiff(field_name="Tag", old_value=curr_tag_value, new_value=curr_tag_value, action=FieldAction.PRESERVED))
         else:
             if curr_tags:
                 diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
@@ -1180,6 +1229,8 @@ class MediaDatabaseUpdateEngine:
             existing_notes=curr_notes,
             incomplete_date=inc_date_arg,
             full_date_resolved=bool(curr_date or date_needs_update),
+            original_filename=request.original_filename,
+            original_path=request.original_path,
         )
         if "notes" in fields_by_name:
             if curr_notes != merged_notes:

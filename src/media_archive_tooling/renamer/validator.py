@@ -116,7 +116,10 @@ def validate_canonical_filename(
     except UnicodeEncodeError:
         errors.append("Filename contains non-ASCII characters")
         
-    illegal_chars = re.findall(r"[/\\:*?\"<>|]", filename)
+    # The archive convention is intentionally stricter than filesystem rules:
+    # only ASCII letters/digits, underscore and hyphen are allowed before the
+    # single extension dot. Parentheses and all other punctuation are rejected.
+    illegal_chars = re.findall(r"[^A-Za-z0-9_.-]", filename)
     if illegal_chars:
         chars_joined = ", ".join(set(illegal_chars))
         errors.append(f"Filename contains illegal characters: {chars_joined}")

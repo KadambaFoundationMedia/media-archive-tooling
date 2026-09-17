@@ -159,6 +159,22 @@ class LocalRegistry:
             row = cursor.fetchone()
             return str(row["tracking_id"]) if row else None
 
+    def get_latest_rename(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        """Return the latest committed rename for safe repeat-rename reconciliation."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM rename_history
+                WHERE tracking_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (tracking_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
     def list_files(self, status: Optional[str] = None, needs_review: Optional[bool] = None) -> List[Dict[str, Any]]:
         query = "SELECT * FROM files WHERE 1=1"
         params = []
@@ -609,4 +625,3 @@ class LocalRegistry:
                 d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
                 results.append(d)
             return results
-
