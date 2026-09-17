@@ -258,22 +258,23 @@ def _compare_places(
     db_country: Optional[str],
 ) -> Tuple[FieldComparisonState, Optional[str]]:
     """Compare local place/country with Baserow place/country with country awareness."""
+    # Country evidence remains comparable even when one side has no city.
+    # Existing Baserow country metadata is leading, so a known contradiction
+    # must not be hidden by the missing-place branches below.
+    nc_local = _norm_country(local_country)
+    nc_db = _norm_country(db_country)
+    if nc_local and nc_db and nc_local != nc_db:
+        return (
+            FieldComparisonState.CONFLICT,
+            f"Country conflict: local '{local_country}' ({nc_local}) contradicts database '{db_country}' ({nc_db})",
+        )
+
     if not local_place and not db_place:
         return FieldComparisonState.NOT_COMPARABLE, "Both locations missing"
     if local_place and not db_place:
         return FieldComparisonState.DATABASE_MISSING, "Database location is blank"
     if not local_place and db_place:
         return FieldComparisonState.LOCAL_MISSING, "Local location is blank"
-
-    # Normalize and compare countries when both provided
-    nc_local = _norm_country(local_country)
-    nc_db = _norm_country(db_country)
-
-    if nc_local and nc_db and nc_local != nc_db:
-        return (
-            FieldComparisonState.CONFLICT,
-            f"Country conflict: local '{local_country}' ({nc_local}) contradicts database '{db_country}' ({nc_db})",
-        )
 
     norm_lp = _norm_token(local_place)
     norm_dp = _norm_token(db_place)
@@ -548,6 +549,21 @@ class MediaDatabaseReconciliationEngine:
 
                 # Place comparison
                 p_st, p_det = _compare_places(local_place, local_country, row["place"], row["country"])
+
+                # A partial-date hit in a contradictory country is not a
+                # plausible duplicate by itself. Keep direct-identity or WHAT
+                # matches as conflicts for review, but discard date-only noise.
+                country_only_date_noise = (
+                    p_st == FieldComparisonState.CONFLICT
+                    and bool(p_det and p_det.startswith("Country conflict:"))
+                    and date_match
+                    and not identity_evidence
+                    and not what_match
+                    and not loc_match
+                )
+                if country_only_date_noise:
+                    continue
+
                 f_comps["place"] = FieldComparison(
                     field_name="place", state=p_st, local_value=local_place, database_value=row["place"], details=p_det
                 )
