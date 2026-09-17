@@ -123,6 +123,12 @@ def run_evaluation():
 
     results_by_tid: Dict[str, Any] = {}
     detailed_results: List[Dict[str, Any]] = []
+    representative_diffs: Dict[str, List[Any]] = {
+        "matched_updates": [],
+        "candidate_creates": [],
+        "partial_date_notes": [],
+        "conflict_blocked": [],
+    }
 
     # Cache fields schema once for option check
     try:
@@ -195,6 +201,34 @@ def run_evaluation():
         if has_path_conflict:
             archive_path_conflicts += 1
 
+        # Representative diffs collection (R-011)
+        if res.operation == SyncOperation.UPDATE and len(representative_diffs["matched_updates"]) < 3:
+            representative_diffs["matched_updates"].append({
+                "tracking_id": tid,
+                "filename": p.current_filename,
+                "media_row_id": res.media_row_id,
+                "field_diffs": [d.model_dump() for d in res.field_diffs],
+            })
+        if res.operation == SyncOperation.CREATE and len(representative_diffs["candidate_creates"]) < 3:
+            representative_diffs["candidate_creates"].append({
+                "tracking_id": tid,
+                "filename": p.current_filename,
+                "field_diffs": [d.model_dump() for d in res.field_diffs],
+            })
+        if (has_partial_date or has_partial_date_note) and len(representative_diffs["partial_date_notes"]) < 3:
+            representative_diffs["partial_date_notes"].append({
+                "tracking_id": tid,
+                "filename": p.current_filename,
+                "field_diffs": [d.model_dump() for d in res.field_diffs],
+            })
+        if res.status == SyncStatus.REVIEW_REQUIRED and len(representative_diffs["conflict_blocked"]) < 3:
+            representative_diffs["conflict_blocked"].append({
+                "tracking_id": tid,
+                "filename": p.current_filename,
+                "conflicts": res.conflicts,
+                "field_diffs": [d.model_dump() for d in res.field_diffs],
+            })
+
         detailed_results.append({
             "tracking_id": tid,
             "filename": p.current_filename,
@@ -236,6 +270,7 @@ def run_evaluation():
         "country_location_option_additions_proposed": country_location_options_proposed,
         "archive_path_representation_conflicts": archive_path_conflicts,
         "tool2_counts": t2_counts,
+        "representative_diffs": representative_diffs,
         "sample_detailed_results": detailed_results[:20],
     }
 

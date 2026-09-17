@@ -27,7 +27,10 @@ from media_archive_tooling.media_db_updater.write_adapter import (
     BaserowUnavailableError,
     FakeBaserowWriteAdapter,
     TaxonomyForbiddenError,
+    redact_secrets,
+    validate_field_schema,
 )
+from media_archive_tooling.media_db_updater.country_mapper import are_countries_equivalent
 from media_archive_tooling.media_db_updater.engine import (
     MediaDatabaseUpdateEngine,
     merge_notes,
@@ -51,6 +54,16 @@ from media_archive_tooling.renamer.models import (
 )
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.review_portal.app import app, configure_review_context
+
+
+def make_mock_tool2(decision: str = "NEW_MEDIA_CANDIDATE", row_id: Optional[int] = None):
+    mock_t2 = MagicMock()
+    mock_res = MagicMock()
+    mock_res.decision = decision
+    mock_res.selected_media_row_id = row_id
+    mock_res.model_dump.return_value = {"decision": decision, "selected_media_row_id": row_id}
+    mock_t2.review_file.return_value = mock_res
+    return mock_t2
 
 
 def make_parser_result(
@@ -359,6 +372,7 @@ def test_07_collaborator_relevant_field_change_blocks_stale_write(tmp_path):
     req = service.build_sync_request("trk0007")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 106
+    req.field_approvals = {"Title": {"approved_value": "New Approved Title", "reviewed_precondition_value": "Initial Title"}}
 
     # Plan based on snapshot where Title is "Initial Title"
     plan = service.preview("trk0007", request=req)
@@ -408,7 +422,7 @@ def test_09_current_new_media_candidate_creates_one_row_with_required_defaults(t
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0009", filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0009")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -501,7 +515,7 @@ def test_13_repeated_create_update_is_idempotent(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0013", filename="test.mp3", date_val="2014-08-04")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
 
     # 1. First sync creates row
     req = service.build_sync_request("trk0013")
@@ -577,7 +591,7 @@ def test_16_full_trusted_recording_date_writes_date_yyyy_mm_dd(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0016", date_val="2014-08-04")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0016")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -592,7 +606,7 @@ def test_17_partial_date_leaves_date_empty_and_writes_notes_marker(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0017", date_val="2019-09-DD")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0017")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -633,7 +647,7 @@ def test_19_provisional_schedule_derived_date_location_not_written(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0019", date_val="2014-08-04", when_state="provisional", place="Berlin")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0019")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
     req.where_state = "PROVISIONAL"
@@ -677,7 +691,7 @@ def test_21_category_abbreviation_maps_to_valid_live_option(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0021", what_category="Bhagavad-gita")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0021")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -709,7 +723,7 @@ def test_23_scripture_verse_produces_expected_tag_behavior(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0023", what_val="SB-01-03-04", what_verse="1.3.4")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0023")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -744,7 +758,7 @@ def test_25_language_defaults_to_existing_english_option(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0025")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0025")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -759,7 +773,7 @@ def test_26_statuses_default_to_not_started_option(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0026")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0026")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -798,7 +812,7 @@ def test_28_new_legitimate_country_option_added_safely(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0028")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0028")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
     req.where_country = "France"
@@ -815,7 +829,7 @@ def test_29_new_legitimate_location_option_added_safely(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0029")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0029")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
     req.where_place = "Paris"
@@ -834,7 +848,7 @@ def test_30_equivalent_country_location_option_reused_rather_than_duplicated(tmp
     fake_db = FakeBaserowWriteAdapter()
     initial_opt_count = len(fake_db.fields[-1]["select_options"])
 
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0030")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
     req.where_place = "leipzig"  # lower case equivalent of existing "Leipzig"
@@ -892,7 +906,7 @@ def test_34_new_row_timestamps_default_dates_populated(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0034")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0034")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -979,7 +993,7 @@ def test_38_media_archive_path_stores_full_current_path(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0038")
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0038")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -1123,7 +1137,7 @@ def test_44_retry_pending_sync_uses_fresh_current_state(tmp_path):
     registry.save_media_db_sync(tracking_id="trk0044", sync_status="PENDING_SYNC", attempt_count=1)
 
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     # Give it a new media candidate decision
     req = service.build_sync_request("trk0044")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
@@ -1239,7 +1253,7 @@ def test_48_audit_record_contains_before_after_without_credentials(tmp_path):
     save_test_file(registry, tracking_id="trk0048")
     secret_token = "secret-token-xyz-987"
     fake_db = FakeBaserowWriteAdapter()
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
     req = service.build_sync_request("trk0048")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
 
@@ -1252,3 +1266,108 @@ def test_48_audit_record_contains_before_after_without_credentials(tmp_path):
     sync_db_rec = registry.get_media_db_sync("trk0048")
     assert sync_db_rec is not None
     assert secret_token not in str(sync_db_rec)
+
+
+# ---------------------------------------------------------------------------
+# Test 49: Pre-create revalidation is hard precondition; missing tool2_service blocks
+# ---------------------------------------------------------------------------
+def test_49_pre_create_missing_tool2_service_blocks_with_database_unavailable(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0049")
+    fake_db = FakeBaserowWriteAdapter()
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=None)
+    req = service.build_sync_request("trk0049")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0049", commit=True, request=req)
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED
+    assert res.review_required is True
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 50: Pre-create live check exception blocks safely without calling create_row
+# ---------------------------------------------------------------------------
+def test_50_pre_create_tool2_exception_blocks_safely(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0050")
+    fake_db = FakeBaserowWriteAdapter()
+    mock_t2 = MagicMock()
+    mock_t2.review_file.side_effect = RuntimeError("Baserow connection timeout")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+    req = service.build_sync_request("trk0050")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0050", commit=True, request=req)
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED
+    assert res.review_required is True
+    assert not any(c["action"] == "create_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 51: Schema validation rejects invalid calendar date
+# ---------------------------------------------------------------------------
+def test_51_schema_validation_rejects_invalid_calendar_date():
+    assert _is_complete_date("2024-02-29") is True
+    assert _is_complete_date("2024-02-31") is False  # Feb 31 does not exist
+    assert _is_complete_date("2023-02-29") is False  # 2023 is not leap year
+
+    date_field = {"name": "Date", "type": "date"}
+    with pytest.raises(BaserowSchemaError) as exc_info:
+        validate_field_schema("Date", "2024-02-31", date_field)
+    assert "invalid calendar date" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Test 52: Secret redaction removes tokens and bearer credentials
+# ---------------------------------------------------------------------------
+def test_52_secret_redaction_removes_tokens_and_bearer_credentials():
+    raw_msg = "Error: Token secret_token_12345 failed, also Bearer secret_jwt_xyz and password=supersecret"
+    clean_msg = redact_secrets(raw_msg)
+    assert "secret_token_12345" not in clean_msg
+    assert "secret_jwt_xyz" not in clean_msg
+    assert "supersecret" not in clean_msg
+    assert "[REDACTED]" in clean_msg
+
+
+# ---------------------------------------------------------------------------
+# Test 53: Request fingerprint is deterministic and stable
+# ---------------------------------------------------------------------------
+def test_53_request_fingerprint_deterministic_and_stable(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0053")
+    fake_db = FakeBaserowWriteAdapter()
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    req1 = service.build_sync_request("trk0053")
+    req2 = service.build_sync_request("trk0053")
+    assert req1.request_fingerprint is not None
+    assert req1.request_fingerprint == req2.request_fingerprint
+    assert len(req1.request_fingerprint) == 64
+
+
+# ---------------------------------------------------------------------------
+# Test 54: Country mapper authoritative resolution and semantic equivalence
+# ---------------------------------------------------------------------------
+def test_54_country_mapper_authoritative_resolution():
+    assert are_countries_equivalent("DE", "Germany") is True
+    assert are_countries_equivalent("de", "germany") is True
+    assert are_countries_equivalent("IN", "India") is True
+    assert are_countries_equivalent("USA", "United States") is True
+    assert are_countries_equivalent("Germany", "France") is False
+
+
+# ---------------------------------------------------------------------------
+# Test 55: Category normalization and equivalence
+# ---------------------------------------------------------------------------
+def test_55_category_normalization_and_equivalence():
+    from media_archive_tooling.media_db_updater.engine import _normalize_category_key
+    assert _normalize_category_key("BG") == "bhagavad gita"
+    assert _normalize_category_key("SB") == "srimad bhagavatam"
+    assert _normalize_category_key("CC") == "caitanyacaritamrta" or _normalize_category_key("CC") == "caitanya caritamrta"
+    assert _normalize_category_key("Bhagavad-gita") == _normalize_category_key("BG")
+    assert _normalize_category_key("Bhagavad Gita") == _normalize_category_key("BG")
+    assert _normalize_category_key("Srimad-Bhagavatam") == _normalize_category_key("SB")
+

@@ -37,7 +37,23 @@ def run_renamer(args):
         category_table_id=config.baserow_category_table_id,
     )
 
-    executor = BatchExecutor(registry=registry, logger=logger, provider=provider, mode=mode)
+    write_adapter = BaserowWriteAdapter(
+        api_url=config.baserow_api_url,
+        api_token=config.baserow_api_token,
+        media_table_id=config.baserow_media_table_id,
+    )
+    updater_service = MediaDatabaseUpdaterService(
+        registry=registry,
+        write_adapter=write_adapter,
+    )
+
+    executor = BatchExecutor(
+        registry=registry,
+        logger=logger,
+        provider=provider,
+        mode=mode,
+        media_db_updater_service=updater_service,
+    )
 
     print(f"=== Scanning Directory: {target_path} (Mode: {mode.value}) ===")
     proposals = executor.scan_directory(target_path)

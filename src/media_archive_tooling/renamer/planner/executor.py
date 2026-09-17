@@ -46,7 +46,8 @@ class BatchExecutor:
         provider: Optional[BaserowReferenceProvider] = None,
         vedabase_validator: Optional[VedabaseValidator] = None,
         location_provider: Optional[LocationLookupProvider] = None,
-        mode: RenameMode = RenameMode.INITIAL
+        mode: RenameMode = RenameMode.INITIAL,
+        media_db_updater_service: Optional[Any] = None,
     ):
         self.registry = registry
         self.logger = logger
@@ -54,6 +55,7 @@ class BatchExecutor:
         self.vedabase_validator = vedabase_validator or VedabaseValidator()
         self.location_provider = location_provider or LocationLookupProvider()
         self.mode = mode
+        self.media_db_updater_service = media_db_updater_service
 
         # Load references and initialize parser
         self.provider.load_all_references()
@@ -142,6 +144,17 @@ class BatchExecutor:
                 prop.current_filename = target_path.name
                 # Record in local registry audit trail
                 self.registry.record_commit(prop, target_path)
+                try:
+                    self.registry.save_media_db_sync(
+                        tracking_id=prop.tracking_id,
+                        sync_status="PENDING_SYNC",
+                        attempt_count=0,
+                    )
+                    if self.media_db_updater_service is not None:
+                        self.media_db_updater_service.synchronize(prop.tracking_id, commit=True)
+                except Exception:
+                    # Filesystem commit must never be rolled back if Baserow sync fails
+                    pass
             except Exception as e:
                 prop.status = "failed"
                 prop.error = f"Filesystem error during rename: {str(e)}"

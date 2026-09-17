@@ -10,6 +10,7 @@ Enforces:
 from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, List, Optional
+import re
 import httpx
 
 from ..common.ascii_latin import to_ascii_latin
@@ -49,10 +50,67 @@ ALLOWED_SELECT_CREATION_FIELDS = {
     "location",
 }
 
+SECRET_PATTERNS = [
+    re.compile(r"(Token\s+)[A-Za-z0-9_\-\.]+", re.IGNORECASE),
+    re.compile(r"(Bearer\s+)[A-Za-z0-9_\-\.]+", re.IGNORECASE),
+    re.compile(r"((?:password|api[_-]?token|api[_-]?key|secret)\s*[:=]\s*)[^\s&\"']+", re.IGNORECASE),
+]
+
+
+def redact_secrets(val: Any) -> Any:
+    """Redact API tokens, bearer tokens, or secrets from strings or recursive structures."""
+    if isinstance(val, str):
+        res = val
+        for pat in SECRET_PATTERNS:
+            res = pat.sub(r"\1[REDACTED]", res)
+        return res
+    elif isinstance(val, dict):
+        return {k: redact_secrets(v) for k, v in val.items()}
+    elif isinstance(val, list):
+        return [redact_secrets(x) for x in val]
+    return val
+
 
 def _normalize_option_text(text: str) -> str:
     """Normalize text conservatively for comparison: trim, lower, ascii-latin."""
     return to_ascii_latin(text).strip().lower()
+
+
+def validate_field_schema(field_name: str, value: Any, live_field: Dict[str, Any]) -> None:
+    """Validate that value is compatible with the live field definition in Baserow.
+    Raises BaserowSchemaError on incompatible types or unpermitted values.
+    """
+    if value is None:
+        return
+
+    f_type = live_field.get("type", "text")
+    if f_type in ("text", "long_text", "url"):
+        if not isinstance(value, str):
+            raise BaserowSchemaError(f"Field '{field_name}' expects string type, got {type(value).__name__}")
+    elif f_type == "date":
+        if not isinstance(value, str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            raise BaserowSchemaError(f"Field '{field_name}' expects YYYY-MM-DD date string, got {value!r}")
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as e:
+            raise BaserowSchemaError(f"Field '{field_name}' received invalid calendar date: {value}") from e
+    elif f_type == "single_select":
+        if not isinstance(value, str):
+            raise BaserowSchemaError(f"Field '{field_name}' expects single_select option string, got {type(value).__name__}")
+        valid_opts = {_normalize_option_text(opt.get("value", "")) for opt in live_field.get("select_options", [])}
+        if _normalize_option_text(value) not in valid_opts:
+            raise BaserowSchemaError(f"Field '{field_name}' value '{value}' is not among live select options")
+    elif f_type == "multiple_select":
+        if not isinstance(value, list):
+            raise BaserowSchemaError(f"Field '{field_name}' expects list for multiple_select, got {type(value).__name__}")
+        valid_opts = {_normalize_option_text(opt.get("value", "")) for opt in live_field.get("select_options", [])}
+        for item in value:
+            if not isinstance(item, str) or _normalize_option_text(item) not in valid_opts:
+                raise BaserowSchemaError(f"Field '{field_name}' contains option '{item}' not in live select options")
+    elif f_type == "file":
+        if not isinstance(value, list):
+            raise BaserowSchemaError(f"Field '{field_name}' is a file field and cannot be assigned a raw scalar")
+
 
 
 class BaserowWriteAdapter:
@@ -134,11 +192,11 @@ class BaserowWriteAdapter:
                 if resp.status_code in (200, 201):
                     return resp.json()
                 else:
-                    raise BaserowWriteError(f"Failed to create row: HTTP {resp.status_code} - {resp.text}")
+                    raise BaserowWriteError(redact_secrets(f"Failed to create row: HTTP {resp.status_code} - {resp.text}"))
         except BaserowWriteError:
             raise
         except Exception as e:
-            raise BaserowUnavailableError(f"Network error creating row: {e}") from e
+            raise BaserowUnavailableError(redact_secrets(f"Network error creating row: {e}")) from e
 
     def patch_row(self, row_id: int, fields: Dict[str, Any]) -> Dict[str, Any]:
         """PATCH minimal fields into an existing Media row."""
@@ -152,11 +210,11 @@ class BaserowWriteAdapter:
                 if resp.status_code == 200:
                     return resp.json()
                 else:
-                    raise BaserowWriteError(f"Failed to patch row {row_id}: HTTP {resp.status_code} - {resp.text}")
+                    raise BaserowWriteError(redact_secrets(f"Failed to patch row {row_id}: HTTP {resp.status_code} - {resp.text}"))
         except BaserowWriteError:
             raise
         except Exception as e:
-            raise BaserowUnavailableError(f"Network error patching row {row_id}: {e}") from e
+            raise BaserowUnavailableError(redact_secrets(f"Network error patching row {row_id}: {e}")) from e
 
     def ensure_select_option(self, field_name: str, option_name: str) -> str:
         """Ensure a select option exists, creating it if permitted.
@@ -209,7 +267,7 @@ class BaserowWriteAdapter:
                 resp = client.patch(url, headers=self._headers(), json={"select_options": new_select_options})
                 if resp.status_code != 200:
                     raise BaserowWriteError(
-                        f"Failed to add select option '{option_name}' to field {field_id}: HTTP {resp.status_code} - {resp.text}"
+                        redact_secrets(f"Failed to add select option '{option_name}' to field {field_id}: HTTP {resp.status_code} - {resp.text}")
                     )
                 updated_field = resp.json()
                 # Verify option exists in live response
@@ -220,7 +278,7 @@ class BaserowWriteAdapter:
         except BaserowWriteError:
             raise
         except Exception as e:
-            raise BaserowUnavailableError(f"Network error updating field options: {e}") from e
+            raise BaserowUnavailableError(redact_secrets(f"Network error updating field options: {e}")) from e
 
 
 DEFAULT_MEDIA_TABLE_FIELDS = [

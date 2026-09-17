@@ -49,8 +49,8 @@ def configure_review_context(
     _service = RenamerApplicationService(registry=registry)
     _media_db_service = media_db_service
     _media_db_provider = media_db_provider
-    _media_db_updater_service = media_db_updater_service
-    _commit_service = RenameCommitService(registry=registry, media_db_updater_service=media_db_updater_service)
+    _media_db_updater_service = media_db_updater_service or get_media_db_updater_service()
+    _commit_service = RenameCommitService(registry=registry, media_db_updater_service=_media_db_updater_service)
     _review_root = Path(review_root).expanduser().resolve() if review_root else None
 
 

@@ -581,7 +581,7 @@ class LocalRegistry:
             return results
 
     def list_pending_media_db_syncs(self) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM media_db_syncs WHERE sync_status IN ('PENDING_SYNC', 'FAILED_RETRYABLE') ORDER BY updated_at ASC"
+        query = "SELECT * FROM media_db_syncs WHERE sync_status IN ('PENDING_SYNC', 'FAILED_RETRYABLE', 'DATABASE_UNAVAILABLE') ORDER BY updated_at ASC"
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(query)

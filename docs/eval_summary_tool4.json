@@ -3,12 +3,12 @@
   "would_update_existing_rows": 1,
   "would_create_new_rows": 39,
   "noop_already_synchronized": 0,
-  "review_required_conflicts": 246,
+  "review_required_conflicts": 221,
   "duplicate_multiple_candidate_blocked": 99,
   "insufficient_evidence_blocked": 32,
   "database_unavailable": 0,
   "partial_date_notes_cases": 1,
-  "country_location_option_additions_proposed": 13,
+  "country_location_option_additions_proposed": 8,
   "archive_path_representation_conflicts": 1,
   "tool2_counts": {
     "INSUFFICIENT_EVIDENCE": 32,
@@ -18,9 +18,530 @@
     "PROBABLE_EXISTING_MEDIA": 20,
     "EXISTING_MEDIA_MATCH": 1
   },
+  "representative_diffs": {
+    "matched_updates": [
+      {
+        "tracking_id": "1fd84c1d",
+        "filename": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+        "media_row_id": 2335,
+        "field_diffs": [
+          {
+            "field_name": "media_archive_path",
+            "old_value": "/Users/maced/dev/Media-renaming/renamed-files/Srimad-bhagavatam/2015-08-27_KKS_SB-3-6-6_se.mp3",
+            "new_value": "/Users/maced/dev/media-archive-tooling/sample-files/HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+            "action": "CONFLICT",
+            "details": "Unproven archive representation conflict"
+          },
+          {
+            "field_name": "Filename",
+            "old_value": "2015-08-27_KKS_SB-3-6-6_se.mp3",
+            "new_value": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+            "action": "PRESERVED",
+            "details": null
+          },
+          {
+            "field_name": "Date",
+            "old_value": "2015-08-27",
+            "new_value": "2015-08-27",
+            "action": "PRESERVED",
+            "details": null
+          },
+          {
+            "field_name": "Title",
+            "old_value": "SB 3.6.6 class",
+            "new_value": "SB-3-6-6-class",
+            "action": "CONFLICT",
+            "details": null
+          },
+          {
+            "field_name": "Category",
+            "old_value": "Srimad-bhagavatam",
+            "new_value": "Srimad-bhagavatam",
+            "action": "PRESERVED",
+            "details": null
+          },
+          {
+            "field_name": "Country",
+            "old_value": "Sweden",
+            "new_value": "Sweden",
+            "action": "PRESERVED",
+            "details": null
+          },
+          {
+            "field_name": "Notes",
+            "old_value": "SB class in Sweden on 27 August 2015\n[Planned itinerary context; schedule source row 208] Original schedule: August 25 \u2013 28, 2015 \u2014 Sweden. No specific listed place is stated in the source. Excluded schedule date(s) linked to this media record: 2015-08-28. Compatible media anchor: 2015-08-27 (same country; within the approved \u00b11-day interval). Planning context only; this supports itinerary timing/location but does not independently prove every planned day or event.\nAdded from archive\nOriginal filename: HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+            "new_value": "Added from archive\nSB class in Sweden on 27 August 2015\n[Planned itinerary context; schedule source row 208] Original schedule: August 25 \u2013 28, 2015 \u2014 Sweden. No specific listed place is stated in the source. Excluded schedule date(s) linked to this media record: 2015-08-28. Compatible media anchor: 2015-08-27 (same country; within the approved \u00b11-day interval). Planning context only; this supports itinerary timing/location but does not independently prove every planned day or event.\nOriginal filename: HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified by",
+            "old_value": "{'id': 131463, 'name': 'Edwin Hamers'}",
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified",
+            "old_value": "2026-09-08",
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          }
+        ]
+      }
+    ],
+    "candidate_creates": [
+      {
+        "tracking_id": "664a357a",
+        "filename": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
+        "field_diffs": [
+          {
+            "field_name": "Title",
+            "old_value": null,
+            "new_value": "sample-files",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Date",
+            "old_value": null,
+            "new_value": "2011-08-20",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Category",
+            "old_value": null,
+            "new_value": "Srimad-bhagavatam",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Tag",
+            "old_value": null,
+            "new_value": "1.19.31",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Language",
+            "old_value": null,
+            "new_value": "English",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Media",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status thumb",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Transcript",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Filename",
+            "old_value": null,
+            "new_value": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "media_archive_path",
+            "old_value": null,
+            "new_value": "/Users/maced/dev/media-archive-tooling/sample-files/2011-08-20_KKS_SB-1-19-31_fi.mp3",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Notes",
+            "old_value": null,
+            "new_value": "Added from archive",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified by",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "imported_on",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          }
+        ]
+      },
+      {
+        "tracking_id": "9c25f517",
+        "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
+        "field_diffs": [
+          {
+            "field_name": "Title",
+            "old_value": null,
+            "new_value": "SB-1-2-19-Serbia-summer-camp",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Date",
+            "old_value": null,
+            "new_value": "2015-07-10",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Category",
+            "old_value": null,
+            "new_value": "Srimad-bhagavatam",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Tag",
+            "old_value": null,
+            "new_value": "1.2.19",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Language",
+            "old_value": null,
+            "new_value": "English",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Media",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status thumb",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Transcript",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Filename",
+            "old_value": null,
+            "new_value": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "media_archive_path",
+            "old_value": null,
+            "new_value": "/Users/maced/dev/media-archive-tooling/sample-files/KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Notes",
+            "old_value": null,
+            "new_value": "Added from archive",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified by",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "imported_on",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          }
+        ]
+      },
+      {
+        "tracking_id": "f78e6b04",
+        "filename": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
+        "field_diffs": [
+          {
+            "field_name": "Title",
+            "old_value": null,
+            "new_value": "SB-1-19-31-with-radha-madhava",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Date",
+            "old_value": null,
+            "new_value": "2011-08-20",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Category",
+            "old_value": null,
+            "new_value": "Srimad-bhagavatam",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Tag",
+            "old_value": null,
+            "new_value": "1.19.31",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Language",
+            "old_value": null,
+            "new_value": "English",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Media",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status thumb",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Transcript",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Filename",
+            "old_value": null,
+            "new_value": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "media_archive_path",
+            "old_value": null,
+            "new_value": "/Users/maced/dev/media-archive-tooling/sample-files/2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Notes",
+            "old_value": null,
+            "new_value": "Added from archive",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified by",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "imported_on",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Country",
+            "old_value": null,
+            "new_value": "Norway",
+            "action": "SET",
+            "details": null
+          }
+        ]
+      }
+    ],
+    "partial_date_notes": [
+      {
+        "tracking_id": "aea7c326",
+        "filename": "JRM.mp3",
+        "field_diffs": [
+          {
+            "field_name": "Title",
+            "old_value": null,
+            "new_value": "Jaya-Radha-Madhava",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Date",
+            "old_value": null,
+            "new_value": null,
+            "action": "PRESERVED",
+            "details": "Incomplete date stored in Notes: 2003-10-DD"
+          },
+          {
+            "field_name": "Category",
+            "old_value": null,
+            "new_value": "Kirtan",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Language",
+            "old_value": null,
+            "new_value": "English",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Media",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status thumb",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Status Transcript",
+            "old_value": null,
+            "new_value": "Not-started",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Filename",
+            "old_value": null,
+            "new_value": "JRM.mp3",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "media_archive_path",
+            "old_value": null,
+            "new_value": "/Users/maced/dev/media-archive-tooling/sample-files/Prague-Oct-2003/Kirtany/JRM.mp3",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Notes",
+            "old_value": null,
+            "new_value": "Added from archive\nIncomplete recording date: 2003-10-DD",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified by",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Last modified",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "imported_on",
+            "old_value": null,
+            "new_value": "2026-09-16",
+            "action": "SET",
+            "details": null
+          },
+          {
+            "field_name": "Country",
+            "old_value": null,
+            "new_value": "Czech Republic",
+            "action": "SET",
+            "details": null
+          }
+        ]
+      }
+    ],
+    "conflict_blocked": [
+      {
+        "tracking_id": "0ad03f34",
+        "filename": "Prague-Oct-2003-20260810T132808Z-1-001.zip",
+        "conflicts": [],
+        "field_diffs": []
+      },
+      {
+        "tracking_id": "5f89a83b",
+        "filename": "2020-03-30_KKS_Reading-from-Kirtaniyah-sada-harih_livestream.mp4",
+        "conflicts": [],
+        "field_diffs": []
+      },
+      {
+        "tracking_id": "70512124",
+        "filename": "Anti-test.zip",
+        "conflicts": [],
+        "field_diffs": []
+      }
+    ]
+  },
   "sample_detailed_results": [
     {
-      "tracking_id": "adb547c6",
+      "tracking_id": "0ad03f34",
       "filename": "Prague-Oct-2003-20260810T132808Z-1-001.zip",
       "tool2_decision": "INSUFFICIENT_EVIDENCE",
       "status": "REVIEW_REQUIRED",
@@ -33,7 +554,7 @@
       ]
     },
     {
-      "tracking_id": "5c76dea4",
+      "tracking_id": "5f89a83b",
       "filename": "2020-03-30_KKS_Reading-from-Kirtaniyah-sada-harih_livestream.mp4",
       "tool2_decision": "CONFLICT_WITH_EXISTING",
       "status": "REVIEW_REQUIRED",
@@ -46,7 +567,7 @@
       ]
     },
     {
-      "tracking_id": "985cc13a",
+      "tracking_id": "70512124",
       "filename": "Anti-test.zip",
       "tool2_decision": "INSUFFICIENT_EVIDENCE",
       "status": "REVIEW_REQUIRED",
@@ -59,15 +580,16 @@
       ]
     },
     {
-      "tracking_id": "15965cca",
+      "tracking_id": "664a357a",
       "filename": "2011-08-20_KKS_SB-1-19-31_fi.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -76,56 +598,26 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on"
       ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
-      "diagnostic_notes": []
-    },
-    {
-      "tracking_id": "4d9f0be4",
-      "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
-      "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
-      "operation": "CREATE",
-      "media_row_id": null,
-      "fields_modified": [
-        "Title",
-        "Date",
-        "Tag",
-        "Language",
-        "Status Media",
-        "Status thumb",
-        "Status Transcript",
-        "Filename",
-        "media_archive_path",
-        "Notes",
-        "Created_on",
-        "Last modified by",
-        "Last modified",
-        "imported_on"
-      ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": [
-        "Provisional WHERE location excluded from authoritative fields"
+        "WHERE state 'unresolved' excluded from authoritative location fields"
       ]
     },
     {
-      "tracking_id": "5e66a715",
-      "filename": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
+      "tracking_id": "9c25f517",
+      "filename": "KKS_SB-1-2-19_Serbia-summer-camp_6-10-jul-2015_sr-006.mp4",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -134,20 +626,44 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
+        "Last modified by",
+        "Last modified",
+        "imported_on"
+      ],
+      "conflicts": [],
+      "diagnostic_notes": [
+        "WHERE state 'provisional' excluded from authoritative location fields"
+      ]
+    },
+    {
+      "tracking_id": "f78e6b04",
+      "filename": "2011-08-20_KKS_SB-1-19-31-with-radha-madhava_oslo_fi.wma",
+      "tool2_decision": "NEW_MEDIA_CANDIDATE",
+      "status": "SYNCING",
+      "operation": "CREATE",
+      "media_row_id": null,
+      "fields_modified": [
+        "Title",
+        "Date",
+        "Category",
+        "Tag",
+        "Language",
+        "Status Media",
+        "Status thumb",
+        "Status Transcript",
+        "Filename",
+        "media_archive_path",
+        "Notes",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "31e2598b",
+      "tracking_id": "b8e7b4f2",
       "filename": "KKS-BhajansProgram Clean - 2015.01.25 10.12.54.avi",
       "tool2_decision": "INSUFFICIENT_EVIDENCE",
       "status": "REVIEW_REQUIRED",
@@ -160,7 +676,7 @@
       ]
     },
     {
-      "tracking_id": "05406c5b",
+      "tracking_id": "481256b5",
       "filename": "2011-08-20_KKS_Jaya-radha-madhava_oslo_fi.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
       "status": "SYNCING",
@@ -177,18 +693,16 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
       "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "4a5250dd",
+      "tracking_id": "47e55c98",
       "filename": "KKS-Home-program_feb-2015_amsterdam.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -201,34 +715,32 @@
       ]
     },
     {
-      "tracking_id": "71ae219a",
+      "tracking_id": "1fd84c1d",
       "filename": "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3",
       "tool2_decision": "EXISTING_MEDIA_MATCH",
       "status": "REVIEW_REQUIRED",
       "operation": "UPDATE",
       "media_row_id": 2335,
       "fields_modified": [
-        "Filename",
-        "Place, location",
         "Notes"
       ],
       "conflicts": [
         "media_archive_path collision: row has '/Users/maced/dev/Media-renaming/renamed-files/Srimad-bhagavatam/2015-08-27_KKS_SB-3-6-6_se.mp3', incoming file is '/Users/maced/dev/media-archive-tooling/sample-files/HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3'",
-        "Title conflict: DB has 'SB 3.6.6 class', incoming resolved 'SB-3-6-6-class'",
-        "Country conflict: DB has 'Sweden', incoming is 'se'"
+        "Title conflict: DB has 'SB 3.6.6 class', incoming resolved 'SB-3-6-6-class'"
       ],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "92797b1e",
+      "tracking_id": "c037334f",
       "filename": "A022 03-10-25 SB 4.9.11 Farma KD.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -237,28 +749,25 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "871e5c02",
+      "tracking_id": "f2c164d4",
       "filename": "A024 03-10-26 SB 9.23.32 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -267,28 +776,25 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "adf387d9",
+      "tracking_id": "2e0512c0",
       "filename": "A021 03-10-24 BG 4.38 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -297,28 +803,25 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Bhagavad Gita' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "c5467340",
+      "tracking_id": "58856d73",
       "filename": "A019 03-10-23 BG 3.12 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -327,20 +830,16 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Bhagavad Gita' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "9b6b453c",
+      "tracking_id": "78a94e49",
       "filename": "A025 03-10-26 Govardhana lekce Pruhon.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -353,15 +852,16 @@
       ]
     },
     {
-      "tracking_id": "58433c03",
+      "tracking_id": "ffdb0c23",
       "filename": "A020 03-10-24 SB 9.23.22 Praha.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -370,20 +870,16 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "9eba961f",
+      "tracking_id": "d749dc81",
       "filename": "A023 03-10-25 TKG_s Diary Praha.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -396,7 +892,7 @@
       ]
     },
     {
-      "tracking_id": "552cb9cd",
+      "tracking_id": "ef48aa21",
       "filename": "A026 03-10-26 Govardhana slideshow Pruhon.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",
@@ -409,15 +905,16 @@
       ]
     },
     {
-      "tracking_id": "4b932cf5",
+      "tracking_id": "a29cbc30",
       "filename": "A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3",
       "tool2_decision": "NEW_MEDIA_CANDIDATE",
-      "status": "REVIEW_REQUIRED",
+      "status": "SYNCING",
       "operation": "CREATE",
       "media_row_id": null,
       "fields_modified": [
         "Title",
         "Date",
+        "Category",
         "Tag",
         "Language",
         "Status Media",
@@ -426,20 +923,16 @@
         "Filename",
         "media_archive_path",
         "Notes",
-        "Created_on",
         "Last modified by",
         "Last modified",
         "imported_on",
-        "Country",
-        "Place, location"
+        "Country"
       ],
-      "conflicts": [
-        "Category option 'Srimad Bhagavatam' not found in live schema (creation disallowed)"
-      ],
+      "conflicts": [],
       "diagnostic_notes": []
     },
     {
-      "tracking_id": "24d47bde",
+      "tracking_id": "fc09ab83",
       "filename": "Hare Krsna.mp3",
       "tool2_decision": "MULTIPLE_CANDIDATES",
       "status": "REVIEW_REQUIRED",

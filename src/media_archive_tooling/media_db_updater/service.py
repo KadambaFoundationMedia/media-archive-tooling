@@ -7,12 +7,14 @@ Orchestrates:
 - Durable local outbox state in LocalRegistry.
 """
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..renamer.registry.registry import LocalRegistry
+from .country_mapper import get_country_name_for_iso, normalize_country_name
 from .engine import MediaDatabaseUpdateEngine
 from .models import (
     MediaDbSyncRequest,
@@ -74,28 +76,15 @@ class MediaDatabaseUpdaterService:
         where_data = parser_res.get("where") or {}
         context_data = parser_res.get("context") or {}
 
-        # Resolve country ISO vs Country Name
-        country_code = where_data.get("country_iso2") or file_rec.get("where_val")
-        # In Baserow, Country is typically full name e.g. Germany, India.
-        # If write adapter has country lookup or we map it:
+        # Resolve country ISO vs Country Name (R-005)
+        raw_country = where_data.get("country")
+        raw_iso = where_data.get("country_iso2") or file_rec.get("where_val")
         country_name = None
-        if country_code:
-            iso_map = {
-                "de": "Germany",
-                "in": "India",
-                "sk": "Slovakia",
-                "gb": "United Kingdom",
-                "uk": "United Kingdom",
-                "us": "United States",
-                "cz": "Czech Republic",
-                "ch": "Switzerland",
-                "at": "Austria",
-                "fr": "France",
-                "it": "Italy",
-                "be": "Belgium",
-                "nl": "Netherlands",
-            }
-            country_name = iso_map.get(str(country_code).lower(), str(country_code))
+        if raw_country:
+            country_name = str(raw_country).strip()
+        elif raw_iso:
+            iso_name = get_country_name_for_iso(str(raw_iso).strip())
+            country_name = iso_name if iso_name else str(raw_iso).strip()
 
         # Parent folder context
         parent_ctx = context_data.get("parent_folder") or Path(file_rec["current_path"]).parent.name
@@ -103,22 +92,38 @@ class MediaDatabaseUpdaterService:
         t2_decision = t2_rec.get("decision") if t2_rec else None
         selected_row_id = t2_rec.get("selected_media_row_id") if t2_rec else None
 
+        current_fn = file_rec.get("current_filename") or ""
+        when_val = when_data.get("selected_value") or file_rec.get("when_val") or ""
+        what_val = what_data.get("selected_value") or file_rec.get("what_val") or ""
+        fp_str = f"{tracking_id}|{current_fn}|{when_val}|{what_val}|{country_name}|{where_data.get('place_location')}"
+        req_fingerprint = hashlib.sha256(fp_str.encode("utf-8")).hexdigest()
+        req_id = f"req_{tracking_id}_{int(datetime.now(timezone.utc).timestamp())}"
+        table_id = str(getattr(self.write_adapter, "media_table_id", "") or "")
+
         return MediaDbSyncRequest(
             tracking_id=tracking_id,
             current_filename=file_rec["current_filename"],
             current_path=file_rec["current_path"],
             original_filename=file_rec.get("original_filename"),
             original_path=file_rec.get("original_path"),
+            request_id=req_id,
+            request_fingerprint=req_fingerprint,
+            table_id=table_id,
             when_val=when_data.get("selected_value") or file_rec.get("when_val"),
             when_state=when_data.get("state"),
+            when_provenance=when_data.get("provenance"),
             what_val=what_data.get("selected_value") or file_rec.get("what_val"),
             what_category=what_data.get("category"),
+            what_verse=what_data.get("verse"),
+            what_state=what_data.get("state"),
+            what_provenance=what_data.get("provenance"),
             who_val=parser_res.get("who") or file_rec.get("who_val"),
             where_val=file_rec.get("where_val"),
             where_place=where_data.get("place_location"),
             where_country=country_name,
             where_country_iso=where_data.get("country_iso2"),
             where_state=where_data.get("state"),
+            where_provenance=where_data.get("provenance"),
             parent_folder_context=parent_ctx,
             tool2_decision=t2_decision,
             selected_media_row_id=selected_row_id,
@@ -165,19 +170,22 @@ class MediaDatabaseUpdaterService:
         result.attempt_count = attempt_count
         result.last_attempt_at = datetime.now(timezone.utc).isoformat()
 
-        # Save durable final result in registry
-        if commit or prior_sync:
-            self.registry.save_media_db_sync(
-                tracking_id=tracking_id,
-                sync_status=result.status.value,
-                operation_type=result.operation.value,
-                media_row_id=result.media_row_id,
-                attempt_count=attempt_count,
-                last_attempt_at=result.last_attempt_at,
-                error_message=result.error_message,
-                request_json=req.model_dump_json(),
-                result_json=result.model_dump_json(),
-            )
+        # Save durable result in registry (R-008: persist previews so portal renders diff immediately)
+        sync_status_val = result.status.value
+        if not commit and sync_status_val == SyncStatus.SYNCING.value:
+            sync_status_val = SyncStatus.PREVIEW.value
+
+        self.registry.save_media_db_sync(
+            tracking_id=tracking_id,
+            sync_status=sync_status_val,
+            operation_type=result.operation.value,
+            media_row_id=result.media_row_id,
+            attempt_count=attempt_count if commit else (prior_sync.get("attempt_count") or 0 if prior_sync else 0),
+            last_attempt_at=result.last_attempt_at,
+            error_message=result.error_message,
+            request_json=req.model_dump_json(),
+            result_json=result.model_dump_json(),
+        )
 
         return result
 
