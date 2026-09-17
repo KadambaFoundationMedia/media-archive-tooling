@@ -1,14 +1,53 @@
 """Unified CLI entry point for media-archive-tooling."""
 import argparse
+import json
 import sys
+from typing import Optional, Any
 from pathlib import Path
 
 from .config import load_config
-from .renamer.models import RenameMode
+from .renamer.models import RenameMode, ParserResult
 from .renamer.registry.registry import LocalRegistry
 from .renamer.logging.logger import RenamerLogger
 from .renamer.planner.executor import BatchExecutor
+from .renamer.service import RenamerApplicationService
 from .adapters.baserow import BaserowReferenceProvider
+from .media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+from .media_db_reviewer.service import MediaDatabaseReviewService
+from .travel_reviewer.models import TravelReviewDecision
+from .travel_reviewer.reference_store import TravelReferenceStore
+from .travel_reviewer.service import TravelScheduleReviewService, validate_tool3_review_result
+from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
+
+
+def create_media_db_updater_service(
+    registry: LocalRegistry,
+    config: Optional[Any] = None,
+    write_adapter: Optional[BaserowWriteAdapter] = None,
+    tool2_service: Optional[MediaDatabaseReviewService] = None,
+) -> MediaDatabaseUpdaterService:
+    """Construct one correctly configured Tool 2 + Tool 4 service composition."""
+    if config is None:
+        config = load_config()
+    if write_adapter is None:
+        write_adapter = BaserowWriteAdapter(
+            api_url=config.baserow_api_url,
+            api_token=config.baserow_api_token,
+            media_table_id=config.baserow_media_table_id,
+        )
+    if tool2_service is None:
+        tool2_provider = BaserowSnapshotProvider(
+            api_url=config.baserow_api_url,
+            api_token=config.baserow_api_token,
+            media_table_id=config.baserow_media_table_id,
+            category_table_id=config.baserow_category_table_id,
+        )
+        tool2_service = MediaDatabaseReviewService(registry=registry, provider=tool2_provider)
+    return MediaDatabaseUpdaterService(
+        registry=registry,
+        write_adapter=write_adapter,
+        tool2_service=tool2_service,
+    )
 
 
 def run_renamer(args):
@@ -26,18 +65,164 @@ def run_renamer(args):
 
     registry = LocalRegistry(reg_path)
     logger = RenamerLogger(log_path)
-    provider = BaserowReferenceProvider(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-        category_table_id=config.baserow_category_table_id,
-    )
+    # Tool 1 receives no Baserow credentials/access (amendment section 1 & 5)
+    provider = BaserowReferenceProvider()
 
-    executor = BatchExecutor(registry=registry, logger=logger, provider=provider, mode=mode)
+    updater_service = getattr(args, "updater_service", None)
+    if updater_service is None:
+        updater_service = create_media_db_updater_service(
+            registry=registry,
+            config=config,
+        )
 
-    print(f"=== Scanning Directory: {target_path} (Mode: {mode.value}) ===")
-    proposals = executor.scan_directory(target_path)
-    print(f"Discovered and analyzed {len(proposals)} media files.")
+    if mode == RenameMode.FINALIZE:
+        # Full authoritative pipeline (amendment section 2):
+        # 1. Tool 1 Initial Scan
+        # 2. Tool 2 Live Read-Only Query / Candidate Check & Enrichment
+        # 3. Tool 3 Offline Travel Schedule Corroboration
+        # 4. Tool 1 Final Proposal Generation
+        # 5. Commit (if requested) -> Tool 4 Sync
+        print(f"=== Step 1: Initial Scan & Parse: {target_path} ===")
+        init_executor = BatchExecutor(
+            registry=registry,
+            logger=logger,
+            provider=provider,
+            mode=RenameMode.INITIAL,
+            media_db_updater_service=updater_service,
+        )
+        proposals = init_executor.scan_directory(target_path)
+        print(f"Discovered and analyzed {len(proposals)} media files.")
+
+        print("=== Step 2: Tool 2 Media Database Candidate Review & Enrichment ===")
+        t2_results = []
+        if updater_service.tool2_service is None:
+            err_msg = "Tool 2 media database review service is not configured; finalization blocked"
+            print(f"Error: {err_msg}", file=sys.stderr)
+            for p in proposals:
+                p.needs_review = True
+                p.status = "blocked"
+                p.review_reasons.append(err_msg)
+        else:
+            try:
+                t2_results = updater_service.tool2_service.review_batch(force_refresh=False, auto_enrich=True)
+                print(f"Reviewed {len(t2_results)} files through Tool 2.")
+            except Exception as e:
+                err_msg = f"Tool 2 media database review encountered error: {e}"
+                print(f"Error: {err_msg}", file=sys.stderr)
+                for p in proposals:
+                    p.needs_review = True
+                    p.status = "blocked"
+                    p.review_reasons.append(err_msg)
+
+        t2_by_id = {r.tracking_id: r for r in t2_results}
+        for p in proposals:
+            t2_r = t2_by_id.get(p.tracking_id)
+            if t2_r is None and not (p.needs_review and p.status == "blocked"):
+                p.needs_review = True
+                p.status = "blocked"
+                p.review_reasons.append("Tool 2 media database review missing for file")
+            elif t2_r is not None:
+                dec_val = t2_r.decision.value if hasattr(t2_r.decision, "value") else str(t2_r.decision)
+                if dec_val == "DATABASE_UNAVAILABLE":
+                    p.needs_review = True
+                    p.status = "blocked"
+                    p.review_reasons.append("Tool 2 reported DATABASE_UNAVAILABLE")
+
+        print("=== Step 3: Tool 3 Travel Schedule Corroboration ===")
+        ref_path = getattr(args, "travel_schedule_path", None)
+        if ref_path is None:
+            ref_path = Path(".renamer/reference/travel_schedule.json")
+        else:
+            ref_path = Path(ref_path)
+        ref_store = TravelReferenceStore(reference_path=ref_path, provider=None)
+        if not ref_store.reference_path.exists():
+            err_msg = "Tool 3 verified travel schedule reference does not exist; finalization blocked"
+            print(f"Error: {err_msg}", file=sys.stderr)
+            for p in proposals:
+                p.needs_review = True
+                p.status = "blocked"
+                if err_msg not in p.review_reasons:
+                    p.review_reasons.append(err_msg)
+        else:
+            t3_renamer = RenamerApplicationService(registry=registry)
+            t3_service = TravelScheduleReviewService(
+                registry=registry,
+                reference_store=ref_store,
+                renamer_service=t3_renamer,
+            )
+            for p in proposals:
+                if p.needs_review and p.status == "blocked":
+                    continue
+                t2_ctx = t2_by_id.get(p.tracking_id)
+                try:
+                    t3_raw = t3_service.review_file(p.tracking_id, tool2_context=t2_ctx, auto_enrich=True)
+                    t3_res, val_err = validate_tool3_review_result(t3_raw, p.tracking_id)
+                    if val_err or t3_res is None:
+                        p.needs_review = True
+                        p.status = "blocked"
+                        p.review_reasons.append(f"Tool 3 travel schedule review contract invalid: {val_err}")
+                    elif t3_res.decision in (
+                        TravelReviewDecision.REFERENCE_UNAVAILABLE,
+                        TravelReviewDecision.PROCESSING_ERROR,
+                    ):
+                        p.needs_review = True
+                        p.status = "blocked"
+                        p.review_reasons.append(f"Tool 3 travel schedule review failed: {t3_res.decision.value}")
+                except Exception as e:
+                    logger.warning(f"Tool 3 review failed for {p.tracking_id}: {e}")
+                    p.needs_review = True
+                    p.status = "blocked"
+                    p.review_reasons.append(f"Tool 3 travel schedule review failed: {e}")
+            print("Completed Tool 3 schedule corroboration.")
+
+        print("=== Step 4: Final Proposal Generation ===")
+        final_executor = BatchExecutor(
+            registry=registry,
+            logger=logger,
+            provider=provider,
+            mode=RenameMode.FINALIZE,
+            media_db_updater_service=updater_service,
+        )
+        final_proposals = []
+        for p in proposals:
+            if p.needs_review and p.status == "blocked":
+                rec = registry.get_file(p.tracking_id)
+                if rec:
+                    registry.update_file_review(
+                        tracking_id=p.tracking_id,
+                        status="blocked",
+                        needs_review=True,
+                        review_reasons=p.review_reasons,
+                        proposed_filename=p.proposed_filename,
+                        when_val=rec.get("when_val") or "",
+                        what_val=rec.get("what_val") or "",
+                        where_val=rec.get("where_val") or "",
+                        parser_result_json=rec.get("parser_result_json") or "",
+                    )
+                final_proposals.append(p)
+                continue
+
+            rec = registry.get_file(p.tracking_id)
+            if rec and rec.get("parser_result"):
+                pr = ParserResult.model_validate(rec["parser_result"])
+                prop = final_executor.planner.plan_rename(pr)
+                registry.save_proposal(prop)
+                final_proposals.append(prop)
+            else:
+                final_proposals.append(p)
+        proposals = final_proposals
+        executor = final_executor
+    else:
+        executor = BatchExecutor(
+            registry=registry,
+            logger=logger,
+            provider=provider,
+            mode=mode,
+            media_db_updater_service=updater_service,
+        )
+        print(f"=== Scanning Directory: {target_path} (Mode: {mode.value}) ===")
+        proposals = executor.scan_directory(target_path)
+        print(f"Discovered and analyzed {len(proposals)} media files.")
 
     review_needed = sum(1 for p in proposals if p.needs_review)
     collisions = sum(1 for p in proposals if p.is_collision)
@@ -61,9 +246,11 @@ def run_renamer(args):
         committed_proposals = executor.commit_proposals(proposals)
         success_count = sum(1 for p in committed_proposals if p.status == "committed")
         skipped_count = sum(1 for p in committed_proposals if p.status == "skipped_unchanged")
+        blocked_count = sum(1 for p in committed_proposals if p.status == "blocked" or p.needs_review)
         failed_count = sum(1 for p in committed_proposals if p.status == "failed")
         print(f"Successfully renamed: {success_count}")
         print(f"Unchanged/skipped: {skipped_count}")
+        print(f"Blocked/needs review: {blocked_count}")
         print(f"Failed: {failed_count}")
     else:
         print("\nDry-run complete. No files were modified on disk. Use --commit to apply renames.")
@@ -209,14 +396,8 @@ def run_travel_review(args):
     registry = LocalRegistry(reg_path)
     ref_path = Path(args.reference_path) if getattr(args, "reference_path", None) else None
 
-    provider = BaserowSnapshotProvider(
-        api_url=config.baserow_api_url,
-        api_token=config.baserow_api_token,
-        media_table_id=config.baserow_media_table_id,
-        category_table_id=config.baserow_category_table_id,
-        travel_schedule_table_id=config.baserow_travel_schedule_table_id,
-    )
-    store = TravelReferenceStore(reference_path=ref_path, provider=provider)
+    # Tool 3 operates offline from local verified reference without Baserow access (amendment section 1 & 5)
+    store = TravelReferenceStore(reference_path=ref_path)
     service = TravelScheduleReviewService(registry=registry, reference_store=store)
 
     auto_enrich = getattr(args, "auto_enrich", True)
@@ -362,9 +543,72 @@ def run_travel_reference(args):
             sys.exit(1)
 
 
+def run_media_db_update(args):
+    config = load_config()
+    reg_path = Path(args.registry_path) if getattr(args, "registry_path", None) else config.registry_path
+    registry = LocalRegistry(reg_path)
+
+    updater_service = create_media_db_updater_service(
+        registry=registry,
+        config=config,
+    )
+
+    commit = getattr(args, "commit", False)
+    is_json = getattr(args, "json", False)
+
+    if getattr(args, "retry_pending", False):
+        results = updater_service.retry_pending()
+        if is_json:
+            print(json.dumps([r.model_dump() for r in results], indent=2))
+        else:
+            print(f"Retried {len(results)} pending synchronization requests.")
+            for r in results:
+                print(f"  [{r.tracking_id}] Status: {r.status.value} | Operation: {r.operation.value} | Row ID: {r.media_row_id}")
+        return
+
+    tracking_ids = [args.tracking_id] if getattr(args, "tracking_id", None) else [f["tracking_id"] for f in registry.list_files()]
+    if not tracking_ids:
+        if is_json:
+            print("[]")
+        else:
+            print("No files found in registry to synchronize.")
+        return
+
+    results = []
+    for tid in tracking_ids:
+        res = updater_service.synchronize(tid, commit=commit)
+        results.append(res)
+
+    if is_json:
+        print(json.dumps([r.model_dump() for r in results], indent=2))
+    else:
+        mode_str = "COMMIT" if commit else "DRY-RUN / PREVIEW"
+        print(f"=== Media Database Update ({mode_str}) ===")
+        print(f"Processed {len(results)} file(s).")
+        for r in results:
+            print(f"  [{r.tracking_id}] Status: {r.status.value} | Op: {r.operation.value} | Row: {r.media_row_id}")
+            if r.field_diffs:
+                for d in r.field_diffs:
+                    if d.action.value == "SET":
+                        print(f"    - {d.field_name}: '{d.old_value}' -> '{d.new_value}' (SET)")
+            if r.conflicts:
+                print(f"    Conflicts: {', '.join(r.conflicts)}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Tool 4: Media Database Updater command
+    media_update_parser = subparsers.add_parser("media-db-update", help="Run Tool 4: Media Database Updater")
+    media_update_parser.add_argument("tracking_id", nargs="?", help="Optional tracking ID to synchronize")
+    media_update_parser.add_argument("--commit", dest="commit", action="store_true", default=False, help="Apply mutations to Baserow")
+    media_update_parser.add_argument("--dry-run", dest="commit", action="store_false", help="Perform dry-run preview without mutating database (default)")
+    media_update_parser.add_argument("--retry-pending", action="store_true", default=False, help="Retry all pending or retryable sync records")
+    media_update_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    media_update_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    media_update_parser.set_defaults(func=run_media_db_update)
+
 
     # Tool 3: Travel Schedule Reviewer commands
     travel_review_parser = subparsers.add_parser("travel-review", help="Run Tool 3: Travel Schedule Reviewer")

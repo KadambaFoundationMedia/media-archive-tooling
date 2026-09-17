@@ -1,6 +1,6 @@
 """Reusable application service for committing reviewed Tool 1 rename proposals."""
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .models import ParserResult, RenameMode, RenameProposal
 from .registry.registry import LocalRegistry
@@ -15,9 +15,15 @@ class RenameCommitService:
     human-review blockers have been resolved.
     """
 
-    def __init__(self, registry: LocalRegistry, mode: RenameMode = RenameMode.INITIAL):
+    def __init__(
+        self,
+        registry: LocalRegistry,
+        mode: RenameMode = RenameMode.INITIAL,
+        media_db_updater_service: Optional[Any] = None,
+    ):
         self.registry = registry
         self.mode = mode
+        self.media_db_updater_service = media_db_updater_service
 
     def commit_file(self, tracking_id: str, reviewer: str = "human") -> Dict[str, Any]:
         record = self.registry.get_file(tracking_id)
@@ -28,9 +34,9 @@ class RenameCommitService:
             raise ValueError(
                 f"File '{record.get('original_filename') or tracking_id}' still requires human review; approve it before committing"
             )
-        if record.get("status") == "deferred":
+        if record.get("status") in ("deferred", "blocked"):
             raise ValueError(
-                f"File '{record.get('original_filename') or tracking_id}' is deferred; approve or edit it before committing"
+                f"File '{record.get('original_filename') or tracking_id}' is {record.get('status')}; approve or edit it before committing"
             )
         if record.get("status") == "committed":
             return record
@@ -41,9 +47,18 @@ class RenameCommitService:
                 f"File '{record.get('original_filename') or tracking_id}' has no proposed filename to commit"
             )
 
+        # R-037: Derive actual rename stage/mode from the stored proposal if present
+        actual_mode = self.mode
+        stored_mode_val = record.get("proposal_mode")
+        if stored_mode_val:
+            try:
+                actual_mode = RenameMode(stored_mode_val)
+            except ValueError:
+                pass
+
         ok, errors = validate_canonical_filename(
             proposed_filename,
-            mode=self.mode,
+            mode=actual_mode,
             tracking_id=tracking_id,
         )
         if not ok:
@@ -78,6 +93,7 @@ class RenameCommitService:
                 changes={"filesystem_rename": False, "path": str(source_path)},
                 previous_values=previous_values,
             )
+            self._trigger_media_db_sync(tracking_id, mode=actual_mode)
             return self.registry.get_file(tracking_id)
 
         proposal = RenameProposal(
@@ -86,7 +102,7 @@ class RenameCommitService:
             current_filename=source_path.name,
             proposed_filename=proposed_filename,
             proposed_path=str(target_path),
-            mode=self.mode,
+            mode=actual_mode,
             is_collision=False,
             needs_review=False,
             review_reasons=[],
@@ -130,4 +146,32 @@ class RenameCommitService:
             },
             previous_values=previous_values,
         )
+        self._trigger_media_db_sync(tracking_id, mode=actual_mode)
         return self.registry.get_file(tracking_id)
+
+    def _trigger_media_db_sync(self, tracking_id: str, mode: Optional[RenameMode] = None):
+        """Record durable sync outbox state and trigger automatic synchronization if configured.
+
+        Tool 4 is called only after the final filename is committed for the current
+        processing stage, and only for a proposal proven to be the finalized output of the
+        required Tool 2/Tool 3 collaboration (mode == RenameMode.FINALIZE, amendment section 2 & R-037).
+        """
+        target_mode = mode or self.mode
+        if target_mode != RenameMode.FINALIZE:
+            return
+
+        file_rec = self.registry.get_file(tracking_id)
+        if file_rec and file_rec.get("proposal_mode") and file_rec.get("proposal_mode") != RenameMode.FINALIZE.value:
+            return
+
+        try:
+            self.registry.save_media_db_sync(
+                tracking_id=tracking_id,
+                sync_status="PENDING_SYNC",
+                attempt_count=0,
+            )
+            if self.media_db_updater_service is not None:
+                self.media_db_updater_service.synchronize(tracking_id, commit=True)
+        except Exception:
+            # Filesystem commit must never be rolled back if Baserow sync fails
+            pass

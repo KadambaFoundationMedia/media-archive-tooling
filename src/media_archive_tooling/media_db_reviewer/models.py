@@ -78,12 +78,12 @@ class RenamerEnrichment(BaseModel):
 class MediaDatabaseReviewResult(BaseModel):
     """Comprehensive, typed, serializable result of Tool 2 review for one media item."""
     tracking_id: str
-    database_state: str = "DATABASE_UNAVAILABLE"  # LIVE_CURRENT, LIVE_PARTIAL_OR_FAILED, DATABASE_UNAVAILABLE
-    database_snapshot_at: str = ""
-    baserow_read_at: str = ""
-    snapshot_complete: bool = False
-    live_read_complete: bool = False
-    baserow_check_complete: bool = False
+    database_state: Optional[str] = "DATABASE_UNAVAILABLE"  # LIVE_CURRENT, LIVE_PARTIAL_OR_FAILED, DATABASE_UNAVAILABLE
+    database_snapshot_at: Optional[str] = ""
+    baserow_read_at: Optional[str] = ""
+    snapshot_complete: Optional[bool] = False
+    live_read_complete: Optional[bool] = False
+    baserow_check_complete: Optional[bool] = False
 
     decision: ReviewDecision = ReviewDecision.DATABASE_UNAVAILABLE
     decision_state: str = ""

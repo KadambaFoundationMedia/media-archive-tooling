@@ -1,4 +1,5 @@
 """Localhost FastAPI review portal application."""
+import json
 import re
 from pathlib import Path
 from typing import Any, List, Optional
@@ -11,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..config import load_config
 from ..renamer.commit_service import RenameCommitService
+from ..renamer.models import RenameMode
 from ..renamer.registry.registry import LocalRegistry
 from ..renamer.service import RenamerApplicationService
 
@@ -31,6 +33,7 @@ _commit_service: Optional[RenameCommitService] = None
 _review_root: Optional[Path] = None
 _media_db_service: Optional[Any] = None
 _media_db_provider: Optional[Any] = None
+_media_db_updater_service: Optional[Any] = None
 
 
 def configure_review_context(
@@ -38,17 +41,25 @@ def configure_review_context(
     review_root: Optional[Path] = None,
     media_db_service: Optional[Any] = None,
     media_db_provider: Optional[Any] = None,
+    media_db_updater_service: Optional[Any] = None,
+    registry: Optional[LocalRegistry] = None,
 ) -> None:
     """Configure the portal to use the same local review registry/root as the scan."""
-    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider
+    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider, _media_db_updater_service
     config = load_config()
-    selected_registry = Path(registry_path) if registry_path else config.registry_path
-    registry = LocalRegistry(selected_registry)
+    if registry is None:
+        selected_registry = Path(registry_path) if registry_path else config.registry_path
+        registry = LocalRegistry(selected_registry)
     _service = RenamerApplicationService(registry=registry)
-    _commit_service = RenameCommitService(registry=registry)
-    _review_root = Path(review_root).expanduser().resolve() if review_root else None
     _media_db_service = media_db_service
     _media_db_provider = media_db_provider
+    _media_db_updater_service = media_db_updater_service or get_media_db_updater_service()
+    _commit_service = RenameCommitService(
+        registry=registry,
+        mode=RenameMode.INITIAL,
+        media_db_updater_service=_media_db_updater_service,
+    )
+    _review_root = Path(review_root).expanduser().resolve() if review_root else None
 
 
 def get_service() -> RenamerApplicationService:
@@ -62,7 +73,11 @@ def get_service() -> RenamerApplicationService:
 def get_commit_service() -> RenameCommitService:
     global _commit_service
     if _commit_service is None:
-        _commit_service = RenameCommitService(registry=get_service().registry)
+        _commit_service = RenameCommitService(
+            registry=get_service().registry,
+            mode=RenameMode.INITIAL,
+            media_db_updater_service=get_media_db_updater_service(),
+        )
     return _commit_service
 
 
@@ -92,6 +107,24 @@ def get_media_db_service() -> Any:
             snapshot_path=config.baserow_snapshot_path,
         )
     return MediaDatabaseReviewService(registry=registry, provider=provider)
+
+
+def get_media_db_updater_service() -> Any:
+    """Return configured MediaDatabaseUpdaterService with support for test dependency injection."""
+    global _media_db_updater_service
+    if _media_db_updater_service is not None:
+        return _media_db_updater_service
+
+    from ..cli import create_media_db_updater_service
+
+    config = load_config()
+    registry = get_registry()
+    tool2_svc = get_media_db_service()
+    return create_media_db_updater_service(
+        registry=registry,
+        config=config,
+        tool2_service=tool2_svc,
+    )
 
 
 def _dashboard_record(record: dict) -> dict:
@@ -142,10 +175,16 @@ def file_detail(request: Request, tracking_id: str):
         raise HTTPException(status_code=404, detail="File not found in registry")
     media_db_review = service.registry.get_media_db_review(tracking_id)
     travel_review = service.registry.get_travel_review(tracking_id)
+    media_db_sync = service.registry.get_media_db_sync(tracking_id)
     return templates.TemplateResponse(
         request=request,
         name="detail.html",
-        context={"file": file_record, "media_db_review": media_db_review, "travel_review": travel_review},
+        context={
+            "file": file_record,
+            "media_db_review": media_db_review,
+            "travel_review": travel_review,
+            "media_db_sync": media_db_sync,
+        },
     )
 
 
@@ -164,6 +203,109 @@ def media_db_action(
             media_row_id=media_row_id,
             notes=notes,
             reviewer="review_portal",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+
+
+@app.post("/file/{tracking_id}/media-db-sync")
+def media_db_sync(
+    tracking_id: str,
+    action: str = Form("preview"),
+):
+    updater = get_media_db_updater_service()
+    commit = (action in ("commit", "retry"))
+    try:
+        updater.synchronize(tracking_id, commit=commit)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+
+
+@app.post("/file/{tracking_id}/media-db-field-approval")
+def media_db_field_approval(
+    tracking_id: str,
+    field_name: str = Form(...),
+    action: Optional[str] = Form(None),
+    approved_value: Optional[str] = Form(None),
+    reviewed_precondition_value: Optional[str] = Form(None),
+    reviewed_precondition_json: Optional[str] = Form(None),
+    has_reviewed_precondition: Optional[bool] = Form(None),
+    notes: Optional[str] = Form(None),
+    commit: bool = Form(False),
+):
+    from ..media_db_updater.models import FieldApprovalAction
+    updater = get_media_db_updater_service()
+    if not action or not str(action).strip():
+        raise HTTPException(status_code=400, detail="Missing required field approval action")
+    try:
+        approval_action = FieldApprovalAction.from_value(action)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid field approval action: {action}")
+
+    # Determine precondition value and flag
+    pre_val = None
+    has_pre = False
+
+    if has_reviewed_precondition is not None:
+        has_pre = bool(has_reviewed_precondition)
+    else:
+        has_pre = bool(reviewed_precondition_json is not None or reviewed_precondition_value is not None)
+
+    if reviewed_precondition_json is not None:
+        try:
+            pre_val = json.loads(reviewed_precondition_json)
+        except Exception:
+            pre_val = reviewed_precondition_json
+    elif reviewed_precondition_value is not None:
+        raw_val = reviewed_precondition_value.strip()
+        if (raw_val.startswith("[") and raw_val.endswith("]")) or (raw_val.startswith("{") and raw_val.endswith("}")) or raw_val == "null":
+            try:
+                pre_val = json.loads(raw_val)
+            except Exception:
+                pre_val = reviewed_precondition_value
+        else:
+            pre_val = reviewed_precondition_value
+
+    try:
+        updater.apply_field_approval(
+            tracking_id=tracking_id,
+            field_name=field_name,
+            action=approval_action,
+            approved_value=approved_value,
+            reviewed_precondition_value=pre_val,
+            has_reviewed_precondition=has_pre,
+            notes=notes,
+            commit=commit,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+
+
+@app.post("/file/{tracking_id}/media-db-association")
+def media_db_association(
+    tracking_id: str,
+    selected_media_row_id: int = Form(...),
+    reviewed_candidate_row_id: int = Form(...),
+    reviewed_precondition_filename: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    commit: bool = Form(False),
+):
+    updater = get_media_db_updater_service()
+    try:
+        updater.apply_association_approval(
+            tracking_id=tracking_id,
+            selected_media_row_id=selected_media_row_id,
+            reviewed_candidate_row_id=reviewed_candidate_row_id,
+            reviewed_precondition_filename=reviewed_precondition_filename,
+            reviewer="review_portal",
+            notes=notes,
+            commit=commit,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

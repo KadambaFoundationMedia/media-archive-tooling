@@ -11,6 +11,8 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
+Post-acceptance architecture note (2026-09-17): Tool 1's accepted naming/domain behavior remains approved. `docs/baserow-access-boundary-amendment.md` requires Tool 1 to ask Tool 2 for the live Media check and Tool 3 for schedule/date evidence, commit the final filename for that stage, and then call Tool 4 once to synchronize Baserow. Tool 1 itself has no Baserow access. This integration refinement is tracked with the Tool 4 correction round and does not reopen the accepted naming rules.
+
 Original accepted implementation branch / PR: `main`  
 Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`  
 Builder status handoff reviewed: `769c88709a1dd5f3b08daee1fad6b49cd769d0c1`  

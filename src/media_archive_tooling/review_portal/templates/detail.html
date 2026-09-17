@@ -322,6 +322,129 @@
     </div>
     {% endif %}
 
+    <!-- Tool 4: Media Database Synchronization Card -->
+    <div class="card" id="media-db-sync-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h2 style="margin: 0;">Tool 4: Media Database Synchronization</h2>
+            {% if media_db_sync %}
+                {% set s_status = media_db_sync.sync_status %}
+                <span class="badge" style="
+                    {% if s_status == 'SYNCED' %}background: #16a34a;
+                    {% elif s_status == 'SYNCING' %}background: #2563eb;
+                    {% elif s_status == 'PREVIEW' %}background: #0284c7;
+                    {% elif s_status == 'PENDING_SYNC' %}background: #eab308; color: #713f12;
+                    {% elif s_status == 'REVIEW_REQUIRED' %}background: #f97316;
+                    {% elif s_status == 'DATABASE_UNAVAILABLE' %}background: #64748b;
+                    {% else %}background: #dc2626;
+                    {% endif %}
+                ">{{ s_status }}</span>
+            {% else %}
+                <span class="badge" style="background: #94a3b8;">NOT_SYNCED</span>
+            {% endif %}
+        </div>
+
+        {% if media_db_sync %}
+        <div style="font-size: 14px; margin-bottom: 12px; color: #475569;">
+            <strong>Operation:</strong> <code>{{ media_db_sync.operation_type or '—' }}</code> &middot;
+            <strong>Target Media Row:</strong> <code>{{ media_db_sync.media_row_id or '—' }}</code> &middot;
+            <strong>Attempts:</strong> {{ media_db_sync.attempt_count }} &middot;
+            <strong>Last Attempt:</strong> {{ media_db_sync.last_attempt_at or '—' }}
+        </div>
+
+        {% if media_db_sync.error_message %}
+        <div style="padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; font-size: 13px;">
+            <strong>Sync Error:</strong> {{ media_db_sync.error_message }}
+        </div>
+        {% endif %}
+
+        {% if media_db_sync.result and media_db_sync.result.conflicts %}
+        <div style="padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 13px;">
+            <strong>Conflicts Detected:</strong>
+            <ul style="margin: 4px 0 0 0; padding-left: 20px;">
+                {% for c in media_db_sync.result.conflicts %}
+                <li>{{ c }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if media_db_sync.result and media_db_sync.result.field_diffs %}
+        <h3>Field Diffs (Proposed / Executed)</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 13px;">
+            <thead>
+                <tr style="background: #f1f5f9; text-align: left;">
+                    <th style="padding: 6px 8px; border: 1px solid #e2e8f0;">Field</th>
+                    <th style="padding: 6px 8px; border: 1px solid #e2e8f0;">Action</th>
+                    <th style="padding: 6px 8px; border: 1px solid #e2e8f0;">Old Value (DB)</th>
+                    <th style="padding: 6px 8px; border: 1px solid #e2e8f0;">New Value (Archive)</th>
+                    <th style="padding: 6px 8px; border: 1px solid #e2e8f0;">Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for diff in media_db_sync.result.field_diffs %}
+                <tr>
+                    <td style="padding: 6px 8px; border: 1px solid #e2e8f0; font-weight: 600;">{{ diff.field_name }}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #e2e8f0;">
+                        <span class="badge" style="
+                            {% if diff.action == 'SET' %}background: #16a34a;
+                            {% elif diff.action == 'PRESERVED' %}background: #64748b;
+                            {% elif diff.action == 'CONFLICT' %}background: #dc2626;
+                            {% else %}background: #94a3b8;
+                            {% endif %}
+                        ">{{ diff.action }}</span>
+                    </td>
+                    <td style="padding: 6px 8px; border: 1px solid #e2e8f0; color: #64748b;">{{ diff.old_value if diff.old_value is not none else '—' }}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #e2e8f0; font-weight: 500;">{{ diff.new_value if diff.new_value is not none else '—' }}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">{{ diff.details or '—' }}</td>
+                </tr>
+                {% if diff.action == 'CONFLICT' %}
+                <tr>
+                    <td colspan="5" style="background: #fffbeb; padding: 8px; border: 1px solid #fef3c7;">
+                        <form method="POST" action="/file/{{ file.tracking_id }}/media-db-field-approval" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="hidden" name="field_name" value="{{ diff.field_name }}">
+                            <input type="hidden" name="has_reviewed_precondition" value="true">
+                            <input type="hidden" name="reviewed_precondition_json" value="{{ diff.old_value|tojson if diff.old_value is not none else 'null' }}">
+                            <input type="hidden" name="reviewed_precondition_value" value="{{ diff.old_value or '' }}">
+                            <span style="font-weight: 500; font-size: 12px;">Resolve Conflict for {{ diff.field_name }}:</span>
+                            <button type="submit" name="action" value="keep_database" class="btn" style="padding: 2px 8px; font-size: 11px;">Keep Database</button>
+                            <button type="submit" name="action" value="apply_correction" class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;">Apply Archive Value</button>
+                            <input type="hidden" name="approved_value" value="{{ diff.new_value or '' }}">
+                            <button type="submit" name="action" value="defer" class="btn" style="padding: 2px 8px; font-size: 11px; background: #94a3b8;">Defer</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+
+        {% if media_db_sync.result and media_db_sync.result.fields_preserved %}
+        <div style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
+            <strong>Preserved Online / Collaborator Fields:</strong> {{ media_db_sync.result.fields_preserved|join(', ') }}
+        </div>
+        {% endif %}
+
+        {% endif %}
+
+        <div style="display: flex; gap: 8px; margin-top: 12px;">
+            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
+                <input type="hidden" name="action" value="preview">
+                <button type="submit" class="btn">Preview Sync (Dry-run)</button>
+            </form>
+            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
+                <input type="hidden" name="action" value="commit">
+                <button type="submit" class="btn btn-primary">Synchronize Now</button>
+            </form>
+            {% if media_db_sync and media_db_sync.sync_status in ['PENDING_SYNC', 'FAILED_RETRYABLE', 'DATABASE_UNAVAILABLE'] %}
+            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
+                <input type="hidden" name="action" value="retry">
+                <button type="submit" class="btn btn-success">Retry Pending Sync</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
     <div class="card">
         <h2>Evidence Provenance</h2>
         <ul>

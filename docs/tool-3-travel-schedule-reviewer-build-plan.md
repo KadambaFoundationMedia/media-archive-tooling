@@ -11,6 +11,10 @@ Project-wide Baserow authority policy: `docs/baserow-live-data-policy.md`
 Tool 2 build plan: `docs/tool-2-media-database-reviewer-build-plan.md`  
 Tool 2 accepted implementation status: `status/tool-2-media-database-reviewer.md`
 
+Post-acceptance architecture amendment: `docs/baserow-access-boundary-amendment.md`
+
+The amendment supersedes any requirement below that lets Tool 3 itself receive credentials or contact Baserow. Tool 3 retains its accepted schedule reasoning and consumes a complete integrity-verified local schedule reference bootstrapped or verified through Tool 2's read-only boundary.
+
 ---
 
 ## 1. Purpose
@@ -51,7 +55,7 @@ Tool 3 is reusable by Tool 1 and by later tools that acquire new date/location c
 
 Tool 3 does not physically rename files. Tool 1 remains the canonical filename renderer and validator.
 
-Tool 3 does not write Baserow. Tool 4 remains the only Media database mutation boundary.
+Tool 3 does not access Baserow. Tool 2 owns read-only access; Tool 4 is the only writer.
 
 ---
 
@@ -68,15 +72,15 @@ Therefore:
 5. schedule disagreement is not permission to rewrite a filename date/location;
 6. Tool 3 must never manufacture certainty from a planned itinerary.
 
-The user's stated practical hierarchy remains:
+For an unconfirmed Media candidate, the practical hierarchy is:
 
 ```text
 filename/path evidence
-> Media-database evidence/candidates
+> unconfirmed Media-database candidates
 > travel-schedule evidence
 ```
 
-with one important identity distinction: once Tool 2 has safely confirmed that a specific Media row represents the same logical recording, that Media row is authoritative evidence for that recording. If explicit local filename/path evidence and a confirmed Media row materially contradict each other, Tool 3 must **not** silently choose a winner. Preserve the high-authority conflict for Tool 2/Tool 1 review; schedule context may be shown, but it cannot adjudicate the contradiction automatically.
+Once Tool 2 has safely confirmed that a specific Media row represents the same logical recording, its relevant populated metadata is leading and confirmed. Tool 1 uses that metadata for the final filename. If explicit local filename/path evidence materially contradicts the confirmed row, preserve and flag the contradiction rather than silently modifying the Baserow value; schedule context may be shown, but it cannot adjudicate the contradiction automatically.
 
 ---
 
@@ -101,15 +105,15 @@ Mutable Media rows remain under Tool 2's live-data rules. This static-reference 
 
 ## 5. Tool 2 integration boundary
 
-Tool 3 must **reuse Tool 2's Baserow/provider boundary** rather than introducing separate credentials, raw API code, or duplicated schema access.
+Tool 3 must use a Baserow-agnostic schedule-reference interface backed by a complete integrity-verified local artifact bootstrapped or verified through Tool 2's read-only provider boundary.
 
-The Builder may expose/refactor a dedicated read-only method such as a complete travel-schedule fetch on the accepted Tool 2 provider, or factor common Baserow read behavior into a shared adapter, provided Tool 2 behavior and tests remain intact.
+Tool 2 owns any Baserow bootstrap/remote verification of that artifact. Tool 3 only loads and interprets it; the accepted Tool 3 reasoning behavior and tests must remain intact.
 
 Requirements:
 
-- Tool 3 must not read Baserow credentials directly throughout its matching code;
-- Tool 3 must not issue Baserow mutations;
-- complete pagination is required when bootstrapping the schedule reference;
+- Tool 3 must not receive Baserow credentials or table IDs;
+- Tool 3 must not issue any Baserow read or mutation;
+- Tool 2 must use complete pagination when bootstrapping/verifying the schedule reference;
 - the accepted Tool 2 Media-review service remains the owner of Media-row reconciliation;
 - Tool 3 must not reimplement Tool 2's Media candidate engine.
 
@@ -224,8 +228,8 @@ If a verified complete local schedule reference exists and its checksum validate
 
 If no verified local schedule reference exists:
 
-1. use the Tool 2/shared Baserow provider;
-2. fetch the entire configured `travel_schedule` table with complete pagination;
+1. call Tool 2's read-only schedule-reference bootstrap service without receiving its provider or credentials;
+2. have Tool 2 fetch the entire configured `travel_schedule` table with complete pagination;
 3. normalize and validate the dataset;
 4. write the local reference atomically (temporary file then replace);
 5. calculate/store the deterministic checksum and row count;
@@ -479,7 +483,7 @@ For `EXISTING_MEDIA_MATCH` / explicit human-confirmed association:
 - if Media provides a missing local WHEN/WHERE, Tool 2/Tool 1 enrichment remains the owner of applying that authoritative value;
 - Tool 3 should not redundantly downgrade it to provisional schedule evidence.
 
-If confirmed Media evidence conflicts materially with explicit local filename/path evidence, Tool 3 records schedule context but does not choose between the high-authority sources. Preserve the existing conflict/review route.
+If confirmed Media evidence conflicts materially with explicit local filename/path evidence, Tool 3 records the local contradiction and schedule context without altering the confirmed row. Downstream Tool 1 applies the leading confirmed Media metadata to the final filename while keeping the contradiction visible for review.
 
 ---
 
@@ -651,7 +655,7 @@ Travel review must support:
 
 Reference commands must:
 
-- bootstrap only through the shared Tool 2/Baserow provider;
+- bootstrap only through Tool 2's read-only application service, without exposing its Baserow provider to Tool 3;
 - report row count/checksum/source table/retrieval metadata without secrets;
 - verify local integrity;
 - never silently replace a static reference whose remote checksum unexpectedly changed.
@@ -823,7 +827,7 @@ Use deterministic synthetic fixtures plus the project-wide full test suite. At m
 26. neither date nor location known → `INSUFFICIENT_EVIDENCE`, no unconstrained guess;
 27. parent-folder evidence is consumed through Tool 1 ParserResult; Tool 3 does not reparse raw folders independently;
 28. confirmed Tool 2 Media values are never overridden/downgraded by travel schedule;
-29. explicit local ↔ confirmed Media contradiction is preserved; Tool 3 does not adjudicate it;
+29. explicit local ↔ confirmed Media contradiction is preserved; Tool 3 does not override confirmed Media metadata and Tool 1 applies the leading value under the confirmed-row rule;
 30. probable/multiple Tool 2 candidate metadata does not leak into confirmed Renamer enrichment through Tool 3;
 31. historical stored Tool 2 result is not treated as current Media authority on an independent Tool 3 run that requires current Media context;
 32. Media context unavailable + static reference available may still produce explicitly provisional schedule evidence and records Media unavailability;
@@ -884,13 +888,13 @@ Also demonstrate at least one corroboration/conflict/multiple/no-support case fr
 Tool 3 is acceptable only when all of the following are true:
 
 1. finalized build-plan behavior is implemented through reusable Python services;
-2. no Baserow mutation exists in Tool 3;
-3. Tool 3 reuses Tool 2/shared Baserow access instead of duplicating credentials/API behavior;
+2. no Baserow access or mutation exists in Tool 3;
+3. schedule bootstrap/verification calls Tool 2's read-only service without passing credentials/provider behavior into Tool 3;
 4. the complete `travel_schedule` table can be bootstrapped once into a verified immutable local reference;
 5. normal per-file review uses the verified reference without network access;
 6. schedule reference integrity is protected by deterministic checksum/provenance;
 7. an unexpected remote schedule change is surfaced rather than silently accepted;
-8. filename/path and confirmed Media evidence are never silently overwritten by schedule evidence;
+8. confirmed Media metadata is never overwritten by schedule/local evidence, and contradictory local evidence remains visible for review;
 9. schedule absence is not treated as proof of absence;
 10. known-location/missing-date and known-date/missing-location cases behave according to Sections 16–17;
 11. both-missing input never triggers an unconstrained schedule guess;
@@ -930,7 +934,7 @@ Recommended implementation sequence:
 
 1. read this plan, Tool 3 status, architecture/protocol, static-schedule policy, accepted Tool 1/2 code/tests;
 2. define typed Travel Schedule reference/result models and static-reference integrity contract;
-3. expose/reuse a complete schedule fetch through the Tool 2/shared provider boundary;
+3. expose/reuse a complete schedule bootstrap operation through Tool 2's read-only application-service boundary;
 4. implement local reference bootstrap/load/verify/checksum behavior;
 5. implement deterministic date/range/location normalization and indexes;
 6. implement candidate retrieval + decision engine for Sections 15–23;

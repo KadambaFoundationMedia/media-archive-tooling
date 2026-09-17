@@ -6,11 +6,15 @@ Tracking issue: #2
 
 This document is the authoritative implementation specification for Tool 2. The implementation model must treat it as read-only and use `status/tool-2-media-database-reviewer.md` for progress, questions, review findings, and commit checkpoints.
 
+Post-acceptance architecture amendment: `docs/baserow-access-boundary-amendment.md`
+
+The amendment confirms Tool 2 as the read-only Baserow Media lookup/reconciliation boundary. Tool 2 may read current Baserow data but must never mutate rows, select options, or schema. Tool 4 uses Tool 2 for existing-item/candidate checks and remains the only writer.
+
 ## 1. Purpose
 
-Tool 2 is the project's **read-only Baserow media lookup and reconciliation service**.
+Tool 2 is the project's **read-only Baserow Media lookup and reconciliation service**.
 
-It queries the Media database for relevant media items and metadata so that other tools — especially the Renamer — can:
+It queries current Media data so that other tools — especially the Renamer and Tool 4 — can:
 
 - search for possible matching logical media items;
 - compare Baserow metadata with information already interpreted from the filename/path;
@@ -51,6 +55,8 @@ Tool 2 must not silently absorb Tool 3's complete responsibility.
 - Physical duplicate detection, content fingerprinting, and audio-level duplicate proof are outside Tool 2.
 - Existing fact-checked Baserow Media values are strong evidence.
 - Contradictions are retained and surfaced; Tool 2 never silently rewrites either the filename evidence or the Baserow fact.
+
+User clarification (2026-09-17): once Tool 2 safely confirms that an existing Media row represents the same logical recording, the relevant populated metadata currently stored in that row is leading and confirmed. Tool 1 should use that confirmed metadata when producing the final filename. This does not make probable, multiple, duplicate-looking, or otherwise unconfirmed candidate rows authoritative.
 
 ## 4. Baserow scope and read-only boundary
 

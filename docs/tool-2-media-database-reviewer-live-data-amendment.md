@@ -6,6 +6,10 @@ Tracking issue: #2
 
 Project-wide authority policy: `docs/baserow-live-data-policy.md`
 
+Later access-boundary amendment: `docs/baserow-access-boundary-amendment.md`
+
+The later amendment confirms this ownership and freshness model: Tool 2 performs read-only Baserow queries/reconciliation, while Tool 4 is the only writer and uses Tool 2 for fresh existing-item/candidate decisions.
+
 This amendment was added after clarification that the shared Baserow Media database is continuously changed by external collaborators. It supersedes any Tool 2 build-plan wording that permits stale/cached Baserow rows to stand in for current live data.
 
 All Tool 2 requirements not changed here remain exactly as defined in the original finalized build plan.

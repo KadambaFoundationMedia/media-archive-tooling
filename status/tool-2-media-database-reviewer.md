@@ -11,6 +11,8 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
+Post-acceptance architecture note (2026-09-17): `docs/baserow-access-boundary-amendment.md` confirms Tool 2's accepted read-only Baserow lookup/reconciliation role. Tool 1 uses it while producing the final filename, and Tool 4 uses it for the fresh existing-item/candidate gate before synchronization. Tool 2 remains technically incapable of mutations.
+
 Implementation branch: `tool-2-implementation`  
 Implementation PR: #19  
 Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`  
@@ -40,7 +42,7 @@ Acceptance specifically verifies that:
 - the Tool 1 ↔ Tool 2 enrichment path is idempotent;
 - the review portal has a single enrichment-handoff owner and does not duplicate enrichment audit actions;
 - contradictory defer-after-confirmed transitions are rejected, while unconfirmed defer state is cleared safely;
-- Tool 2 remains read-only to Baserow; Tool 4 remains the writer.
+- Tool 2 remains read-only to Baserow; Tool 4 remains the only writer.
 
 ## Resolved findings
 
