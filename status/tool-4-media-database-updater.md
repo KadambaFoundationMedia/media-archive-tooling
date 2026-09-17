@@ -10,14 +10,14 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-4-implementation`
-Builder implementation commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
-Evaluated clean commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
-Evaluation evidence commit: `5fc0c465a39bfbdf6fdb98a0c8b9195a947702f2`
+Builder implementation commit: `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`
+Evaluated clean commit: `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`
+Evaluation evidence commit: `b57511a7a0bdfa3577d637cba570f90c4bf46261`
 Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: PASS (Run 35244629789: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35244629789)
+PR #27 CI status: PENDING / MERGEABLE
 Last planning/review update: 2026-09-17
 
 ## Third independent review checkpoint
@@ -504,6 +504,61 @@ Required correction:
 - record representative before/initial/final/Tool-4-request identity evidence so this relationship is independently auditable;
 - rerun the 260-file evaluation from a clean pushed implementation commit only after R-036 and R-037 are resolved, then commit the corrected evidence separately.
 
-## Next milestone after fifth review
+## Fifth review resolution checkpoint (R-036, R-037, R-038)
 
-Builder correction round for R-036 through R-038 on `tool-4-implementation`. Return to `READY_FOR_REVIEW` only after the implementation, genuine production-path tests, corrected evaluation, and exact-head CI are complete.
+All findings from the fifth independent review have been addressed and verified:
+
+### R-036 Resolution — Fail-closed update path and fresh Tool 2 validation
+- `_commit_update()` in `engine.py` hardened: `tool2_service` is now an unconditional precondition. If `tool2_service is None`, raises an exception, or returns `None` / an invalid object, the update fails closed with `DATABASE_UNAVAILABLE` and `operation == SyncOperation.BLOCKED`.
+- `build_sync_request(force_refresh=True)` in `service.py`: On Tool 2 missing/exception/None/contract-failure, sets `tool2_decision = "DATABASE_UNAVAILABLE"` and `tool2_database_state = "DATABASE_UNAVAILABLE"`.
+- `plan_sync()` treats `DATABASE_UNAVAILABLE` decision/state as `SyncStatus.DATABASE_UNAVAILABLE` / `SyncOperation.BLOCKED` rather than falling through to normal human review.
+- Added explicit regression tests in `tests/test_media_db_updater.py`:
+  - `test_76_r036_update_with_no_tool2_fails_closed`: update commit without Tool 2 returns `DATABASE_UNAVAILABLE` / `BLOCKED`.
+  - `test_77_r036_update_with_tool2_exception_fails_closed`: update commit with Tool 2 exception returns `DATABASE_UNAVAILABLE` / `BLOCKED`.
+  - `test_78_r036_update_with_tool2_none_or_invalid_result_fails_closed`: update commit with None or non-model result returns `DATABASE_UNAVAILABLE` / `BLOCKED`.
+  - `test_79_r036_update_with_valid_fresh_tool2_result_succeeds`: update commit with valid fresh Tool 2 result returns `SYNCED` / `UPDATE`.
+  - `test_80_r036_build_sync_request_force_refresh_failure`: `build_sync_request(force_refresh=True)` failure sets `DATABASE_UNAVAILABLE`.
+- Updated older update tests (`test_01`, `test_02`, `test_03`, `test_06`, `test_07`, `test_08`, `test_15`, `test_18`, `test_24`, `test_35`, `test_36`, `test_39`, `test_60`, `test_66`) to supply valid mock Tool 2 services with corresponding row IDs and decisions.
+
+### R-037 Resolution — Trustworthy stage orchestration and genuine pipeline testing
+- Persisted `proposal_mode` in registry `files` table schema and automated migration in `LocalRegistry`.
+- `RenameCommitService.commit_file()` dynamically derives actual stage from `record.get("proposal_mode")` rather than hardcoding `FINALIZE`.
+- `_trigger_media_db_sync()` permits Tool 4 enqueue strictly when `mode == RenameMode.FINALIZE` and stored proposal mode is not initial/enrich.
+- `run_renamer(..., mode=FINALIZE)` in `cli.py` enforces fail-closed gates:
+  - If Tool 2 review fails, is missing, or reports `DATABASE_UNAVAILABLE`, proposals are marked `needs_review=True` / `status="blocked"` and recorded in registry.
+  - If Tool 3 travel schedule reference file is missing or file review fails, proposals are marked `needs_review=True` / `status="blocked"`.
+  - Step 4 records blocked state in registry, preventing unreviewed or failed files from being committed on disk or enqueued for Tool 4.
+  - `commit_proposals()` skips blocked/deferred proposals so no unreviewed files are renamed on disk.
+- Replaced `test_73` in `tests/test_media_db_updater.py` with a genuine production `FINALIZE` pipeline test:
+  - Instruments Tool 2, Tool 3, filesystem rename, and Tool 4 updater.
+  - Asserts exact call order: `["tool_2_review", "tool_3_review", "tool_4_sync"]`.
+  - Proves zero pre-commit Tool 4 calls (dry-run mode makes 0 Tool 4 calls; commit mode makes exactly 1 Tool 4 call after disk rename).
+  - Asserts file is renamed on disk, registry status is `committed`, and Tool 4 sync audit record is `SYNCED`.
+  - Added `test_73_b` and `test_73_c` verifying fail-closed blocking when Tool 2 fails or Tool 3 reference is missing.
+- Added portal regressions in `tests/test_portal.py`:
+  - `test_portal_commit_initial_proposal_does_not_call_tool_4`: initial proposal commit skips Tool 4.
+  - `test_portal_commit_enrich_proposal_does_not_call_tool_4`: enrich proposal commit skips Tool 4.
+  - `test_portal_commit_finalize_proposal_calls_tool_4`: finalize proposal commit calls Tool 4.
+
+### R-038 Resolution — Evaluation workspace isolation and committed-state identity evidence
+- `scripts/run_tool_4_evaluation.py` updated to run in an isolated evaluation workspace (`.renamer/eval_workspace/media/`), copying sample files into the workspace.
+- Step 4 groups proposals by directory and resolves batch collisions via `planner.resolve_batch_collisions()`.
+- Step 4b commits renames to disk in the isolated workspace before Step 5 preview.
+- Step 5 asserts for every single one of the 260 files:
+  - `req.current_filename == p.proposed_filename`
+  - `req.current_path == p.proposed_path`
+  - `Path(req.current_path).exists() is True`
+- Added `representative_identities` to `docs/eval_summary_tool4.json`, capturing before filename, initial proposed filename, final proposed filename, committed filename on disk, Tool 4 request filename, Tool 4 operation/status, and Tool 2 decision.
+- Executed strict multi-step commit protocol:
+  - Clean pushed implementation commit `b862435b6f1a162e3d3d2d62267b3a9de6e27a4d`.
+  - Evaluated on that clean commit with live Baserow access.
+  - Committed evidence to `docs/eval_summary_tool4.json` as commit `b57511a7a0bdfa3577d637cba570f90c4bf46261`.
+
+Verification:
+- Full test suite: **343 passed, 2 warnings** in 4.02s.
+- Focused Tool 4 suite: **111 passed, 2 warnings** in 2.08s.
+- Portal suite: **13 passed, 2 warnings** in 0.61s.
+- Package build: `uv build --offline` PASS.
+- Shell scripts: `sh -n` PASS.
+- `git diff --check origin/main` PASS.
+
