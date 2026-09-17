@@ -34,7 +34,14 @@ from media_archive_tooling.renamer.logging.logger import RenamerLogger
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
 from media_archive_tooling.media_db_reviewer.service import MediaDatabaseReviewService
-from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore
+from media_archive_tooling.travel_reviewer.models import (
+    NormalizedTravelRow,
+    TravelScheduleManifest,
+)
+from media_archive_tooling.travel_reviewer.reference_store import (
+    TravelReferenceStore,
+    compute_canonical_sha256,
+)
 from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
 from media_archive_tooling.media_db_updater.models import (
     MediaDbSyncRequest,
@@ -310,8 +317,33 @@ def test_rule_5_tool3_operates_offline_from_verified_artifact(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, "trk_rule5")
 
-    # Construct TravelReferenceStore with no Baserow provider
-    store = TravelReferenceStore(provider=None)
+    # Create the same complete, integrity-verified local artifact that Tool 2's
+    # read-only bootstrap boundary supplies in production. The test must not
+    # depend on a developer's ignored .renamer/reference state.
+    reference_path = tmp_path / "travel_schedule.json"
+    rows = [
+        NormalizedTravelRow(
+            id=1,
+            start_date="2014-08-04",
+            end_date="2014-08-04",
+            place="Leipzig",
+            country="Germany",
+            country_iso2="de",
+            schedule_text="Leipzig, Germany",
+        )
+    ]
+    manifest_fixture = TravelScheduleManifest(
+        source_table_id="travel-schedule-test",
+        retrieved_at="2026-09-17T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    TravelReferenceStore(reference_path=reference_path).save_reference(manifest_fixture)
+
+    # Load and use the verified artifact with no Baserow provider.
+    store = TravelReferenceStore(reference_path=reference_path, provider=None)
     assert store.provider is None
     # Reference schedule is loaded offline from verified local data
     manifest = store.load_reference()
@@ -462,4 +494,3 @@ def test_rule_8_access_matrix_and_boundaries_contract():
     assert not hasattr(MediaDatabaseReviewService, "create_row")
     assert not hasattr(BaserowReferenceProvider, "create_row")
     assert not hasattr(TravelReferenceStore, "create_row")
-
