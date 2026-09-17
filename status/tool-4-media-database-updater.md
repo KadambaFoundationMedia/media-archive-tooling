@@ -10,7 +10,7 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-4-implementation`
 Builder implementation commit: `74d1c75688da92a71c95cc7d8010c246b84a9ab4`
@@ -440,3 +440,70 @@ Required correction:
   - Run ID: `35244629789`
   - URL: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35244629789
   - Result: SUCCESS
+
+## Fifth independent review outcome
+
+PR #27 is **not approved and must not be merged yet**. R-031 through R-035 are materially improved, the recorded evaluation commit now exists, and all current automated checks pass. Independent production-path inspection nevertheless found three remaining fail-open or incorrectly simulated paths.
+
+Verification at branch head `87cb03e6e195c322ef30d6be94827cb1176f3245`:
+
+- full local suite: **333 passed, 2 warnings**;
+- focused Tool 4 plus access-boundary suites: **112 passed, 2 warnings**;
+- helper syntax: PASS;
+- package build: `uv build --offline` PASS;
+- `git diff --check origin/main...HEAD`: PASS;
+- evaluated commit `74d1c75688da92a71c95cc7d8010c246b84a9ab4`: exists and is an ancestor of the PR head;
+- GitHub Actions exact-head check: PASS — https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35244781599/job/105282060547;
+- working tree clean and synchronized with `origin/tool-4-implementation` before this status update.
+
+### R-036 — Existing-row update still fails open when Tool 2 is absent, and refresh failures are misclassified
+
+`_commit_update()` performs the new fresh Tool 2 gate only inside `if self.tool2_service is not None`. When the service is absent, execution skips the gate and proceeds to the live-row PATCH path. Existing regression `test_66_r024_valid_association_approval_succeeds` constructs `MediaDatabaseUpdaterService(..., tool2_service=None)` and expects a committed update, directly demonstrating the fail-open behavior.
+
+There is a second failure path in `build_sync_request(force_refresh=True)`: Tool 2 exceptions are logged and swallowed. The method then builds a request without a current decision, which is generally returned as `REVIEW_REQUIRED` rather than the required `DATABASE_UNAVAILABLE` provider state. A failed required live read must not be represented as a human metadata decision.
+
+Required correction:
+
+- make a configured Tool 2 service a hard precondition for every create and update commit;
+- return `DATABASE_UNAVAILABLE` / `BLOCKED` without any write when Tool 2 is absent, raises, returns no result, or fails contract validation;
+- do not swallow a forced-refresh failure into an ordinary request with an empty decision;
+- ensure retries preserve the same database-unavailable semantics;
+- add regressions for update with no Tool 2 service, Tool 2 exception, `None` result, invalid typed result, and a valid fresh result;
+- update older tests that currently authorize committed updates without Tool 2.
+
+### R-037 — CLI and review-portal stage orchestration is still not trustworthy
+
+The new CLI code contains the intended Tool 2/Tool 3/finalize structure, but the claimed orchestration test does not execute it: `test_73_cli_run_renamer_production_pipeline_orchestration` sets `args.mode = "initial"`. It only proves that an initial dry-run creates no pending sync. It does not exercise Tool 2, Tool 3, final proposal generation, final commit, Tool 4 ordering, or failure behavior.
+
+The production paths also remain fail-open or mislabelled:
+
+- `run_renamer(..., mode=FINALIZE)` catches a Tool 2 batch exception, prints a warning, and continues to final proposal/commit;
+- if the verified Tool 3 reference does not exist, the entire Tool 3 stage is silently skipped and finalization continues;
+- individual Tool 3 failures are logged and finalization continues without marking the affected proposal as blocked/review-required;
+- the review portal constructs `RenameCommitService(mode=FINALIZE)` unconditionally, without deriving or validating the actual stored proposal stage. An initial/intermediate proposal approved in the portal therefore triggers Tool 4 as though Tool 2/Tool 3 collaboration and finalization had occurred.
+
+Required correction:
+
+- persist or otherwise carry the actual rename stage for each proposal/commit and have the portal derive it rather than hard-code `FINALIZE`;
+- permit Tool 4 enqueue/call only for a proposal proven to be the finalized output of the required Tool 2/Tool 3 collaboration;
+- when required Tool 2 or Tool 3 processing is unavailable or fails, mark the affected file with the correct blocked/review state and do not silently claim/commit a completed final pipeline;
+- replace test 73 with a genuine `FINALIZE` production-path test using instrumented services and asserting exact call order, final filesystem/registry state, exactly one Tool 4 call after commit, and zero earlier calls;
+- add portal regressions for initial, intermediate, and finalized proposals so only the finalized proposal can enqueue Tool 4.
+
+### R-038 — The 260-file evaluation still previews pre-final current state
+
+The evaluation now generates `RenameMode.FINALIZE` proposals, but it only calls `eval_reg.save_proposal(prop)`. `LocalRegistry.save_proposal()` stores `proposal.current_filename/current_path`, not `proposal.proposed_filename/proposed_path`, as the current committed file state. Tool 4 preview then calls `build_sync_request()` from those unchanged `files.current_*` values.
+
+Consequently the evaluation's Tool 4 results are still based on the initial/current filename and path, not the final proposal it claims to evaluate. The evidence itself shows raw source filenames such as `HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3` as the Tool 4 input after the purported final stage.
+
+Required correction:
+
+- evaluate the final committed state in an isolated evaluation workspace without mutating the real sample files or production Baserow;
+- either safely commit copied files/proposals in that isolated workspace before preview or build an explicit preview request from the final proposed filename/path with equivalent committed-state semantics;
+- assert for every evaluated record that Tool 4's request filename/path equals the corresponding finalized Tool 1 output;
+- record representative before/initial/final/Tool-4-request identity evidence so this relationship is independently auditable;
+- rerun the 260-file evaluation from a clean pushed implementation commit only after R-036 and R-037 are resolved, then commit the corrected evidence separately.
+
+## Next milestone after fifth review
+
+Builder correction round for R-036 through R-038 on `tool-4-implementation`. Return to `READY_FOR_REVIEW` only after the implementation, genuine production-path tests, corrected evaluation, and exact-head CI are complete.
