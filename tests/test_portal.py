@@ -1,6 +1,20 @@
+from pathlib import Path
+from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 import media_archive_tooling.review_portal.app as portal_app
-from media_archive_tooling.review_portal.app import app, _dashboard_record
+from media_archive_tooling.review_portal.app import app, _dashboard_record, configure_review_context
+from media_archive_tooling.renamer.registry.registry import LocalRegistry
+from media_archive_tooling.renamer.models import (
+    Context,
+    Identity,
+    ParserResult,
+    RenameMode,
+    RenameProposal,
+    ResolutionState,
+    WhatResult,
+    WhenResult,
+    WhereResult,
+)
 
 
 def test_portal_healthz():
@@ -217,3 +231,119 @@ def test_batch_action_rejects_unsupported_action(monkeypatch):
 
     assert response.status_code == 400
     assert "approve, defer, commit, or approve_commit" in response.text
+
+
+def make_portal_proposal(source: Path, tracking_id: str, mode: RenameMode, *, needs_review: bool = False) -> RenameProposal:
+    parser = ParserResult(
+        identity=Identity(
+            tracking_id=tracking_id,
+            original_filename=source.name,
+            original_path=str(source),
+            current_filename=source.name,
+            extension=source.suffix.lower(),
+        ),
+        context=Context(parent_folder=source.parent.name),
+        when=WhenResult(selected_value="2015-07-25", precision="day", state=ResolutionState.EXACT),
+        what=WhatResult(selected_value="SB-7-2-16", state=ResolutionState.EXACT),
+        where=WhereResult(
+            place_location="Radhadesh",
+            country="Belgium",
+            country_iso2="be",
+            state=ResolutionState.EXACT,
+        ),
+        review_reasons=["manual check"] if needs_review else [],
+    )
+    proposed_filename = f"2015-07-25_KKS_SB-7-2-16_Radhadesh-be_ID-{tracking_id}.mp3"
+    return RenameProposal(
+        tracking_id=tracking_id,
+        original_path=str(source),
+        current_filename=source.name,
+        proposed_filename=proposed_filename,
+        proposed_path=str(source.with_name(proposed_filename)),
+        mode=mode,
+        needs_review=needs_review,
+        review_reasons=list(parser.review_reasons),
+        changes_detected=True,
+        parser_result=parser,
+    )
+
+
+def test_portal_commit_initial_proposal_does_not_call_tool_4(tmp_path):
+    reg_path = tmp_path / "portal_init.db"
+    reg = LocalRegistry(reg_path)
+    source = tmp_path / "initial_media.mp3"
+    source.write_bytes(b"initial media audio")
+
+    prop = make_portal_proposal(source, "trk_portal_init", RenameMode.INITIAL)
+    reg.save_proposal(prop)
+    reg.update_status("trk_portal_init", "approved")
+
+    mock_updater = MagicMock()
+    configure_review_context(registry=reg, media_db_updater_service=mock_updater, review_root=tmp_path)
+
+    client = TestClient(app)
+    response = client.post(
+        "/batch/update",
+        data={"tracking_ids": ["trk_portal_init"], "action": "commit", "filter": "all"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert mock_updater.synchronize.call_count == 0
+    assert reg.get_media_db_sync("trk_portal_init") is None
+    rec = reg.get_file("trk_portal_init")
+    assert rec["status"] == "committed"
+    assert rec["proposal_mode"] == "initial"
+
+
+def test_portal_commit_enrich_proposal_does_not_call_tool_4(tmp_path):
+    reg_path = tmp_path / "portal_enrich.db"
+    reg = LocalRegistry(reg_path)
+    source = tmp_path / "enrich_media.mp3"
+    source.write_bytes(b"enrich media audio")
+
+    prop = make_portal_proposal(source, "trk_portal_enrich", RenameMode.ENRICH)
+    reg.save_proposal(prop)
+    reg.update_status("trk_portal_enrich", "approved")
+
+    mock_updater = MagicMock()
+    configure_review_context(registry=reg, media_db_updater_service=mock_updater, review_root=tmp_path)
+
+    client = TestClient(app)
+    response = client.post(
+        "/batch/update",
+        data={"tracking_ids": ["trk_portal_enrich"], "action": "commit", "filter": "all"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert mock_updater.synchronize.call_count == 0
+    assert reg.get_media_db_sync("trk_portal_enrich") is None
+    rec = reg.get_file("trk_portal_enrich")
+    assert rec["status"] == "committed"
+    assert rec["proposal_mode"] == "enrich"
+
+
+def test_portal_commit_finalize_proposal_calls_tool_4(tmp_path):
+    reg_path = tmp_path / "portal_fin.db"
+    reg = LocalRegistry(reg_path)
+    source = tmp_path / "finalize_media.mp3"
+    source.write_bytes(b"finalize media audio")
+
+    prop = make_portal_proposal(source, "trk_portal_fin", RenameMode.FINALIZE)
+    reg.save_proposal(prop)
+    reg.update_status("trk_portal_fin", "approved")
+
+    mock_updater = MagicMock()
+    configure_review_context(registry=reg, media_db_updater_service=mock_updater, review_root=tmp_path)
+
+    client = TestClient(app)
+    response = client.post(
+        "/batch/update",
+        data={"tracking_ids": ["trk_portal_fin"], "action": "commit", "filter": "all"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert mock_updater.synchronize.call_count == 1
+    assert reg.get_media_db_sync("trk_portal_fin") is not None
+    rec = reg.get_file("trk_portal_fin")
+    assert rec["status"] == "committed"
+    assert rec["proposal_mode"] == "finalize"

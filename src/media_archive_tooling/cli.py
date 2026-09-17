@@ -67,10 +67,12 @@ def run_renamer(args):
     # Tool 1 receives no Baserow credentials/access (amendment section 1 & 5)
     provider = BaserowReferenceProvider()
 
-    updater_service = create_media_db_updater_service(
-        registry=registry,
-        config=config,
-    )
+    updater_service = getattr(args, "updater_service", None)
+    if updater_service is None:
+        updater_service = create_media_db_updater_service(
+            registry=registry,
+            config=config,
+        )
 
     if mode == RenameMode.FINALIZE:
         # Full authoritative pipeline (amendment section 2):
@@ -92,18 +94,55 @@ def run_renamer(args):
 
         print("=== Step 2: Tool 2 Media Database Candidate Review & Enrichment ===")
         t2_results = []
-        if updater_service.tool2_service is not None:
+        if updater_service.tool2_service is None:
+            err_msg = "Tool 2 media database review service is not configured; finalization blocked"
+            print(f"Error: {err_msg}", file=sys.stderr)
+            for p in proposals:
+                p.needs_review = True
+                p.status = "blocked"
+                p.review_reasons.append(err_msg)
+        else:
             try:
                 t2_results = updater_service.tool2_service.review_batch(force_refresh=False, auto_enrich=True)
                 print(f"Reviewed {len(t2_results)} files through Tool 2.")
             except Exception as e:
-                print(f"Warning: Tool 2 review encountered error: {e}")
+                err_msg = f"Tool 2 media database review encountered error: {e}"
+                print(f"Error: {err_msg}", file=sys.stderr)
+                for p in proposals:
+                    p.needs_review = True
+                    p.status = "blocked"
+                    p.review_reasons.append(err_msg)
 
         t2_by_id = {r.tracking_id: r for r in t2_results}
+        for p in proposals:
+            t2_r = t2_by_id.get(p.tracking_id)
+            if t2_r is None and not (p.needs_review and p.status == "blocked"):
+                p.needs_review = True
+                p.status = "blocked"
+                p.review_reasons.append("Tool 2 media database review missing for file")
+            elif t2_r is not None:
+                dec_val = t2_r.decision.value if hasattr(t2_r.decision, "value") else str(t2_r.decision)
+                if dec_val == "DATABASE_UNAVAILABLE":
+                    p.needs_review = True
+                    p.status = "blocked"
+                    p.review_reasons.append("Tool 2 reported DATABASE_UNAVAILABLE")
 
         print("=== Step 3: Tool 3 Travel Schedule Corroboration ===")
-        ref_store = TravelReferenceStore(reference_path=Path(".renamer/reference/travel_schedule.json"), provider=None)
-        if ref_store.reference_path.exists():
+        ref_path = getattr(args, "travel_schedule_path", None)
+        if ref_path is None:
+            ref_path = Path(".renamer/reference/travel_schedule.json")
+        else:
+            ref_path = Path(ref_path)
+        ref_store = TravelReferenceStore(reference_path=ref_path, provider=None)
+        if not ref_store.reference_path.exists():
+            err_msg = "Tool 3 verified travel schedule reference does not exist; finalization blocked"
+            print(f"Error: {err_msg}", file=sys.stderr)
+            for p in proposals:
+                p.needs_review = True
+                p.status = "blocked"
+                if err_msg not in p.review_reasons:
+                    p.review_reasons.append(err_msg)
+        else:
             t3_renamer = RenamerApplicationService(registry=registry)
             t3_service = TravelScheduleReviewService(
                 registry=registry,
@@ -111,11 +150,20 @@ def run_renamer(args):
                 renamer_service=t3_renamer,
             )
             for p in proposals:
+                if p.needs_review and p.status == "blocked":
+                    continue
                 t2_ctx = t2_by_id.get(p.tracking_id)
                 try:
-                    t3_service.review_file(p.tracking_id, tool2_context=t2_ctx, auto_enrich=True)
+                    t3_res = t3_service.review_file(p.tracking_id, tool2_context=t2_ctx, auto_enrich=True)
+                    if t3_res is None or getattr(t3_res, "decision", None) == "DATABASE_UNAVAILABLE":
+                        p.needs_review = True
+                        p.status = "blocked"
+                        p.review_reasons.append("Tool 3 travel schedule review unavailable")
                 except Exception as e:
                     logger.warning(f"Tool 3 review failed for {p.tracking_id}: {e}")
+                    p.needs_review = True
+                    p.status = "blocked"
+                    p.review_reasons.append(f"Tool 3 travel schedule review failed: {e}")
             print("Completed Tool 3 schedule corroboration.")
 
         print("=== Step 4: Final Proposal Generation ===")
@@ -128,6 +176,23 @@ def run_renamer(args):
         )
         final_proposals = []
         for p in proposals:
+            if p.needs_review and p.status == "blocked":
+                rec = registry.get_file(p.tracking_id)
+                if rec:
+                    registry.update_file_review(
+                        tracking_id=p.tracking_id,
+                        status="blocked",
+                        needs_review=True,
+                        review_reasons=p.review_reasons,
+                        proposed_filename=p.proposed_filename,
+                        when_val=rec.get("when_val") or "",
+                        what_val=rec.get("what_val") or "",
+                        where_val=rec.get("where_val") or "",
+                        parser_result_json=rec.get("parser_result_json") or "",
+                    )
+                final_proposals.append(p)
+                continue
+
             rec = registry.get_file(p.tracking_id)
             if rec and rec.get("parser_result"):
                 pr = ParserResult.model_validate(rec["parser_result"])
@@ -172,9 +237,11 @@ def run_renamer(args):
         committed_proposals = executor.commit_proposals(proposals)
         success_count = sum(1 for p in committed_proposals if p.status == "committed")
         skipped_count = sum(1 for p in committed_proposals if p.status == "skipped_unchanged")
+        blocked_count = sum(1 for p in committed_proposals if p.status == "blocked" or p.needs_review)
         failed_count = sum(1 for p in committed_proposals if p.status == "failed")
         print(f"Successfully renamed: {success_count}")
         print(f"Unchanged/skipped: {skipped_count}")
+        print(f"Blocked/needs review: {blocked_count}")
         print(f"Failed: {failed_count}")
     else:
         print("\nDry-run complete. No files were modified on disk. Use --commit to apply renames.")

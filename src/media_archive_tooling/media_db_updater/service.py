@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..renamer.registry.registry import LocalRegistry
 from .country_mapper import get_country_name_for_iso, normalize_country_name, is_valid_country_display_name
-from .engine import MediaDatabaseUpdateEngine
+from .engine import MediaDatabaseUpdateEngine, validate_tool2_review_result
 from .models import (
     AssociationApproval,
     FieldApproval,
@@ -56,14 +56,52 @@ class MediaDatabaseUpdaterService:
         if not file_rec:
             return None
 
-        # Fetch Tool 2 review (R-031: force fresh live review on commit or retry)
+        # Fetch Tool 2 review (R-031, R-036: force fresh live review on commit or retry)
         t2_rec = None
         if not force_refresh:
             t2_rec = self.registry.get_media_db_review(tracking_id)
 
-        if (t2_rec is None or force_refresh) and self.tool2_service:
+        if force_refresh:
+            if not self.tool2_service:
+                t2_rec = {
+                    "decision": "DATABASE_UNAVAILABLE",
+                    "database_state": "DATABASE_UNAVAILABLE",
+                    "selected_media_row_id": None,
+                    "snapshot_timestamp": None,
+                }
+            else:
+                try:
+                    t2_res = self.tool2_service.review_file(tracking_id, force_refresh=True)
+                    if t2_res is None:
+                        t2_rec = {
+                            "decision": "DATABASE_UNAVAILABLE",
+                            "database_state": "DATABASE_UNAVAILABLE",
+                            "selected_media_row_id": None,
+                            "snapshot_timestamp": None,
+                        }
+                    else:
+                        dec_val = t2_res.decision.value if hasattr(t2_res.decision, "value") else str(t2_res.decision or "")
+                        if not dec_val or dec_val == "None":
+                            dec_val = "DATABASE_UNAVAILABLE"
+                        db_state = getattr(t2_res, "database_state", None)
+                        t2_rec = {
+                            "decision": dec_val,
+                            "selected_media_row_id": getattr(t2_res, "selected_media_row_id", None),
+                            "database_state": db_state,
+                            "snapshot_timestamp": getattr(t2_res, "database_snapshot_at", None) or getattr(t2_res, "baserow_read_at", None),
+                            "result": t2_res.model_dump() if hasattr(t2_res, "model_dump") else t2_res,
+                        }
+                except Exception as e:
+                    logger.warning(f"Failed to fetch Tool 2 review for {tracking_id}: {e}")
+                    t2_rec = {
+                        "decision": "DATABASE_UNAVAILABLE",
+                        "database_state": "DATABASE_UNAVAILABLE",
+                        "selected_media_row_id": None,
+                        "snapshot_timestamp": None,
+                    }
+        elif t2_rec is None and self.tool2_service:
             try:
-                t2_res = self.tool2_service.review_file(tracking_id, force_refresh=force_refresh)
+                t2_res = self.tool2_service.review_file(tracking_id, force_refresh=False)
                 if t2_res:
                     dec_val = t2_res.decision.value if hasattr(t2_res.decision, "value") else str(t2_res.decision)
                     t2_rec = {

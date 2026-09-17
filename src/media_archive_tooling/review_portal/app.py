@@ -56,7 +56,7 @@ def configure_review_context(
     _media_db_updater_service = media_db_updater_service or get_media_db_updater_service()
     _commit_service = RenameCommitService(
         registry=registry,
-        mode=RenameMode.FINALIZE,
+        mode=RenameMode.INITIAL,
         media_db_updater_service=_media_db_updater_service,
     )
     _review_root = Path(review_root).expanduser().resolve() if review_root else None
@@ -75,7 +75,7 @@ def get_commit_service() -> RenameCommitService:
     if _commit_service is None:
         _commit_service = RenameCommitService(
             registry=get_service().registry,
-            mode=RenameMode.FINALIZE,
+            mode=RenameMode.INITIAL,
             media_db_updater_service=get_media_db_updater_service(),
         )
     return _commit_service

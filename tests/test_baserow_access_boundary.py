@@ -293,7 +293,8 @@ def test_rule_4_tool4_independently_revalidates_exact_row_and_preconditions(tmp_
         "Date": "2014-08-04",
         "Title": "Original Title",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    mock_t2 = make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=501, tracking_id="trk_rule4")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
 
     req = service.build_sync_request("trk_rule4")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"

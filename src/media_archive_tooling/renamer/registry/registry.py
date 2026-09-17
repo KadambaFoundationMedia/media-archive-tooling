@@ -38,6 +38,7 @@ class LocalRegistry:
                 needs_review INTEGER NOT NULL,
                 review_reasons TEXT,
                 parser_result_json TEXT NOT NULL,
+                proposal_mode TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -113,6 +114,10 @@ class LocalRegistry:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
                 pass
+            try:
+                cursor.execute("ALTER TABLE files ADD COLUMN proposal_mode TEXT")
+            except Exception:
+                pass
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(original_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_current_path ON files(current_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_decision ON media_db_reviews(decision)")
@@ -139,14 +144,13 @@ class LocalRegistry:
         required to make repeated analysis idempotent instead of generating a new registry
         row on every scan.
         """
-        normalized = str(Path(file_path).expanduser().resolve())
+        normalized = str(file_path.resolve())
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT tracking_id
-                FROM files
-                WHERE original_path = ? OR current_path = ?
+                SELECT tracking_id FROM files
+                WHERE current_path = ? OR original_path = ?
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
@@ -180,14 +184,15 @@ class LocalRegistry:
     def save_proposal(self, proposal: RenameProposal):
         now = datetime.now(timezone.utc).isoformat()
         pr = proposal.parser_result
+        mode_val = proposal.mode.value if hasattr(proposal.mode, "value") else str(proposal.mode)
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute("""
             INSERT INTO files (
                 tracking_id, original_path, current_path, original_filename, current_filename,
                 proposed_filename, when_val, who_val, what_val, where_val, status,
-                needs_review, review_reasons, parser_result_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                needs_review, review_reasons, parser_result_json, proposal_mode, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tracking_id) DO UPDATE SET
                 current_path = excluded.current_path,
                 current_filename = excluded.current_filename,
@@ -199,6 +204,7 @@ class LocalRegistry:
                 needs_review = excluded.needs_review,
                 review_reasons = excluded.review_reasons,
                 parser_result_json = excluded.parser_result_json,
+                proposal_mode = excluded.proposal_mode,
                 updated_at = excluded.updated_at
             """, (
                 proposal.tracking_id,
@@ -215,6 +221,7 @@ class LocalRegistry:
                 1 if proposal.needs_review else 0,
                 json.dumps(proposal.review_reasons),
                 pr.model_dump_json(),
+                mode_val,
                 now,
                 now
             ))

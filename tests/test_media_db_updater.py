@@ -213,7 +213,7 @@ def test_01_confirmed_existing_match_updates_only_safe_relevant_fields(tmp_path)
         "Youtube": "https://youtu.be/keep_me",
         "Audio link": "https://audio.com/keep_me",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=100, tracking_id="trk0001"))
 
     req = service.build_sync_request("trk0001")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
@@ -249,7 +249,7 @@ def test_02_existing_online_links_transcript_audio_survive_unchanged(tmp_path):
         "Status Transcript": "Completed",
         "Status Media": "Published",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=101, tracking_id="trk0002"))
     req = service.build_sync_request("trk0002")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 101
@@ -286,7 +286,7 @@ def test_03_blank_trusted_semantic_field_is_enriched(tmp_path):
         "Title": None,
         "Filename": "file.mp3",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=102, tracking_id="trk0003"))
     req = service.build_sync_request("trk0003")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 102
@@ -371,7 +371,7 @@ def test_06_explicit_human_overwrite_is_live_revalidated_before_write(tmp_path):
         "Date": "2015-09-09",
         "Filename": "test.mp3",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=105, tracking_id="trk0006"))
     req = service.build_sync_request("trk0006")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 105
@@ -412,7 +412,7 @@ def test_07_collaborator_relevant_field_change_blocks_stale_write(tmp_path):
         "Date": "2014-08-04",
         "Filename": "old.mp3",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=106, tracking_id="trk0007"))
     req = service.build_sync_request("trk0007")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 106
@@ -451,7 +451,7 @@ def test_08_collaborator_unrelated_field_change_preserved_by_minimal_patch(tmp_p
         "Filename": "old.mp3",
         "Youtube": "https://youtube.com/v1",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=107, tracking_id="trk0008"))
     req = service.build_sync_request("trk0008")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 107
@@ -662,7 +662,7 @@ def test_15_timeout_uncertain_update_outcome_is_reconciled(tmp_path):
     }])
     fake_db.simulate_timeout_on_patch = True
 
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=108, tracking_id="trk0015"))
     req = service.build_sync_request("trk0015")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 108
@@ -715,7 +715,7 @@ def test_18_later_full_date_fills_date_and_removes_incomplete_date_marker(tmp_pa
         "Date": None,
         "Notes": "Added from archive\nHuman comment here\nIncomplete recording date: 2019-09-DD",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=109, tracking_id="trk0018"))
     req = service.build_sync_request("trk0018")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 109
@@ -829,7 +829,7 @@ def test_24_existing_multivalue_tags_preserved_when_adding_tag(tmp_path):
         "id": 110,
         "Tag": ["intro"],
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=110, tracking_id="trk0024"))
     req = service.build_sync_request("trk0024")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 110
@@ -1019,7 +1019,7 @@ def test_35_existing_created_on_imported_on_not_reset_on_rename_update(tmp_path)
         "Created_on": "2018-01-01",
         "imported_on": "2018-01-01",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=111))
     req = service.build_sync_request("trk0035")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 111
@@ -1043,7 +1043,7 @@ def test_36_last_modified_and_last_modified_by_updated_on_write(tmp_path):
         "Last modified": "2018-01-01",
         "Last modified by": "2018-01-01",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=112))
     req = service.build_sync_request("trk0036")
     req.tool2_decision = "EXISTING_MEDIA_MATCH"
     req.selected_media_row_id = 112
@@ -1100,7 +1100,7 @@ def test_39_tracked_file_rename_safely_updates_filename_and_path(tmp_path):
         "Filename": "2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
         "media_archive_path": "/archive/2014-08-04_KKS_BG-01-18_Leipzig-de.mp3",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=114))
     req = service.build_sync_request("trk0039")
     req.original_filename = "2014-08-04_KKS_BG-01-18_Leipzig-de.mp3"
     req.original_path = "/archive/2014-08-04_KKS_BG-01-18_Leipzig-de.mp3"
@@ -1634,7 +1634,7 @@ def test_60_field_approvals_safeguards(tmp_path):
         "Category": "Srimad Bhagavatam",
         "Filename": "test.mp3",
     }])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=305))
 
     # Missing precondition triggers CONFLICT and is not applied
     req = service.build_sync_request("trk0060")
@@ -1986,7 +1986,7 @@ def test_66_r024_valid_association_approval_succeeds(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0066_assoc")
     fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 7, "Filename": "old.mp3"}])
-    service = MediaDatabaseUpdaterService(registry, fake_db)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=make_mock_tool2())
 
     req = service.build_sync_request("trk0066_assoc")
     req.tool2_decision = "MULTIPLE_CANDIDATES"
@@ -2427,32 +2427,233 @@ def test_72_rename_commit_service_never_calls_tool4_on_initial_mode(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 73: CLI run_renamer production pipeline orchestration (R-032)
+# Test 73: CLI run_renamer production pipeline orchestration (R-032 & R-037)
 # ---------------------------------------------------------------------------
-def test_73_cli_run_renamer_production_pipeline_orchestration(tmp_path):
+def test_73_cli_run_renamer_production_pipeline_orchestration(tmp_path, monkeypatch):
     from media_archive_tooling.cli import run_renamer
+    from media_archive_tooling.travel_reviewer.models import NormalizedTravelRow, TravelScheduleManifest
+    from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore, compute_canonical_sha256
+    from media_archive_tooling.travel_reviewer.service import TravelScheduleReviewService
 
     registry_path = tmp_path / "cli.db"
     media_dir = tmp_path / "media_cli"
     media_dir.mkdir()
-    f1 = media_dir / "2014-08-04_sample.mp3"
-    f1.write_text("data")
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("dummy audio data for testing")
+
+    ref_path = tmp_path / "travel_schedule.json"
+    rows = [
+        NormalizedTravelRow(
+            id=1,
+            start_date="2014-08-01",
+            end_date="2014-08-10",
+            place="Leipzig",
+            country="Germany",
+            country_iso2="de",
+            schedule_text="Leipzig, Germany",
+        )
+    ]
+    manifest = TravelScheduleManifest(
+        source_table_id="travel-schedule-test",
+        retrieved_at="2026-09-17T00:00:00Z",
+        complete=True,
+        row_count=len(rows),
+        canonical_sha256=compute_canonical_sha256(rows),
+        normalized_rows=rows,
+    )
+    TravelReferenceStore(reference_path=ref_path).save_reference(manifest)
+
+    events = []
+
+    # Instrument Tool 3 review_file to track exact call order
+    orig_t3_review = TravelScheduleReviewService.review_file
+    def instrumented_t3_review(self, tracking_id, tool2_context=None, auto_enrich=True):
+        events.append("tool_3_review")
+        return orig_t3_review(self, tracking_id, tool2_context=tool2_context, auto_enrich=auto_enrich)
+    monkeypatch.setattr(TravelScheduleReviewService, "review_file", instrumented_t3_review)
+
+    reg = LocalRegistry(registry_path)
+    mock_t2 = MagicMock()
+    def fake_review_batch(force_refresh=False, auto_enrich=True):
+        events.append("tool_2_review")
+        files = reg.list_files()
+        tid = files[0]["tracking_id"] if files else "trk0073"
+        return [
+            MediaDatabaseReviewResult(
+                tracking_id=tid,
+                decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+                live_read_complete=True,
+                snapshot_complete=True,
+                baserow_check_complete=True,
+                database_state="LIVE_CURRENT",
+                baserow_read_at="2026-09-17T12:00:00Z",
+            )
+        ]
+    mock_t2.review_batch.side_effect = fake_review_batch
+
+    def fake_review_file(tid: str, force_refresh: bool = False):
+        return MediaDatabaseReviewResult(
+            tracking_id=tid,
+            decision=ReviewDecision.NEW_MEDIA_CANDIDATE,
+            live_read_complete=True,
+            snapshot_complete=True,
+            baserow_check_complete=True,
+            database_state="LIVE_CURRENT",
+            baserow_read_at="2026-09-17T12:00:00Z",
+        )
+    mock_t2.review_file.side_effect = fake_review_file
+
+    fake_db = FakeBaserowWriteAdapter()
+    real_updater = MediaDatabaseUpdaterService(
+        registry=reg,
+        write_adapter=fake_db,
+        tool2_service=mock_t2,
+    )
+
+    mock_updater = MagicMock(wraps=real_updater)
+    def fake_synchronize(tracking_id, commit=True, request=None):
+        # Assert that filesystem rename has already happened when Tool 4 is called!
+        assert not src_file.exists(), "Tool 4 called before source file was renamed on disk"
+        mp3s = list(media_dir.glob("*.mp3"))
+        assert len(mp3s) == 1
+        assert mp3s[0] != src_file
+        events.append("tool_4_sync")
+        return real_updater.synchronize(tracking_id, commit=commit, request=request)
+    mock_updater.synchronize.side_effect = fake_synchronize
+
+    class Args:
+        pass
+
+    # 1. Dry-run mode in FINALIZE (commit = False)
+    args_dry = Args()
+    args_dry.target = str(media_dir)
+    args_dry.mode = "finalize"
+    args_dry.commit = False
+    args_dry.registry_path = str(registry_path)
+    args_dry.log_dir = str(tmp_path / "logs")
+    args_dry.updater_service = mock_updater
+    args_dry.travel_schedule_path = str(ref_path)
+
+    run_renamer(args_dry)
+
+    # Dry-run assertions: zero pre-commit Tool 4 calls, source file untouched
+    assert mock_updater.synchronize.call_count == 0
+    assert src_file.exists()
+    assert events == ["tool_2_review", "tool_3_review"]
+    assert len(reg.list_pending_media_db_syncs()) == 0
+
+    events.clear()
+
+    # 2. Live commit mode in FINALIZE (commit = True)
+    args_commit = Args()
+    args_commit.target = str(media_dir)
+    args_commit.mode = "finalize"
+    args_commit.commit = True
+    args_commit.registry_path = str(registry_path)
+    args_commit.log_dir = str(tmp_path / "logs")
+    args_commit.updater_service = mock_updater
+    args_commit.travel_schedule_path = str(ref_path)
+
+    run_renamer(args_commit)
+
+    # Commit assertions: exact call order
+    assert events == ["tool_2_review", "tool_3_review", "tool_4_sync"]
+    assert mock_updater.synchronize.call_count == 1
+    assert not src_file.exists()
+
+    mp3s = list(media_dir.glob("*.mp3"))
+    assert len(mp3s) == 1
+    final_file = mp3s[0]
+    assert "2014-08-04" in final_file.name
+    assert "Leipzig" in final_file.name
+
+    files = reg.list_files()
+    assert len(files) == 1
+    rec = files[0]
+    assert rec["status"] == "committed"
+    assert rec["current_filename"] == final_file.name
+    assert rec["proposal_mode"] == "finalize"
+
+    # Sync audit record committed
+    sync_rec = reg.get_media_db_sync(rec["tracking_id"])
+    assert sync_rec is not None
+    assert sync_rec["sync_status"] == "SYNCED"
+
+
+def test_73_b_cli_run_renamer_fails_closed_when_tool2_fails(tmp_path):
+    from media_archive_tooling.cli import run_renamer
+
+    registry_path = tmp_path / "cli_t2_fail.db"
+    media_dir = tmp_path / "media_cli_t2_fail"
+    media_dir.mkdir()
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("audio content")
+
+    mock_t2 = MagicMock()
+    mock_t2.review_batch.side_effect = RuntimeError("Baserow connection timed out")
+    fake_db = FakeBaserowWriteAdapter()
+    reg = LocalRegistry(registry_path)
+    updater = MediaDatabaseUpdaterService(registry=reg, write_adapter=fake_db, tool2_service=mock_t2)
+    mock_updater = MagicMock(wraps=updater)
 
     class Args:
         pass
 
     args = Args()
     args.target = str(media_dir)
-    args.mode = "initial"
-    args.commit = False
+    args.mode = "finalize"
+    args.commit = True
     args.registry_path = str(registry_path)
     args.log_dir = str(tmp_path / "logs")
+    args.updater_service = mock_updater
 
-    # Initial mode scan runs without error and leaves zero Tool 4 sync records
     run_renamer(args)
+
+    # Fail closed: no renames, zero Tool 4 calls, proposal marked blocked/needs_review
+    assert src_file.exists()
+    assert mock_updater.synchronize.call_count == 0
+    files = reg.list_files()
+    assert len(files) == 1
+    assert files[0]["status"] == "blocked"
+    assert files[0]["needs_review"] == 1
+
+
+def test_73_c_cli_run_renamer_fails_closed_when_tool3_reference_missing(tmp_path):
+    from media_archive_tooling.cli import run_renamer
+
+    registry_path = tmp_path / "cli_t3_fail.db"
+    media_dir = tmp_path / "media_cli_t3_fail"
+    media_dir.mkdir()
+    src_file = media_dir / "2014-08-04_KKS_BG-01-18_Leipzig.mp3"
+    src_file.write_text("audio content")
+
+    mock_t2 = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE")
+    fake_db = FakeBaserowWriteAdapter()
     reg = LocalRegistry(registry_path)
-    assert len(reg.list_files()) == 1
-    assert len(reg.list_pending_media_db_syncs()) == 0
+    updater = MediaDatabaseUpdaterService(registry=reg, write_adapter=fake_db, tool2_service=mock_t2)
+    mock_updater = MagicMock(wraps=updater)
+
+    class Args:
+        pass
+
+    args = Args()
+    args.target = str(media_dir)
+    args.mode = "finalize"
+    args.commit = True
+    args.registry_path = str(registry_path)
+    args.log_dir = str(tmp_path / "logs")
+    args.updater_service = mock_updater
+    args.travel_schedule_path = str(tmp_path / "missing_travel_schedule.json")
+
+    run_renamer(args)
+
+    # Fail closed: no renames, zero Tool 4 calls, proposal marked blocked/needs_review
+    assert src_file.exists()
+    assert mock_updater.synchronize.call_count == 0
+    files = reg.list_files()
+    assert len(files) == 1
+    assert files[0]["status"] == "blocked"
+    assert files[0]["needs_review"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2549,3 +2750,131 @@ def test_75_association_approval_precondition_filename_validation(tmp_path):
     )
     assert res_match.status == SyncStatus.SYNCED
     assert res_match.operation == SyncOperation.UPDATE
+
+
+# ---------------------------------------------------------------------------
+# Test 76: Update with no Tool 2 service fails closed with DATABASE_UNAVAILABLE (R-036)
+# ---------------------------------------------------------------------------
+def test_76_r036_update_with_no_tool2_fails_closed(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0076", filename="renamed.mp3")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 760, "Filename": "old.mp3"}])
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=None)
+
+    req = service.build_sync_request("trk0076")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 760
+
+    res = service.synchronize("trk0076", commit=True, request=req)
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED
+    assert res.review_required is True
+    assert any("Tool 2 service is not configured" in d for d in res.diagnostic_notes)
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 77: Update with Tool 2 exception fails closed with DATABASE_UNAVAILABLE (R-036)
+# ---------------------------------------------------------------------------
+def test_77_r036_update_with_tool2_exception_fails_closed(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0077", filename="renamed.mp3")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 770, "Filename": "old.mp3"}])
+
+    mock_t2 = MagicMock()
+    mock_t2.review_file.side_effect = RuntimeError("Baserow live query connection reset")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    req = service.build_sync_request("trk0077")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 770
+
+    res = service.synchronize("trk0077", commit=True, request=req)
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED
+    assert res.review_required is True
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 78: Update with Tool 2 None or invalid typed result fails closed (R-036)
+# ---------------------------------------------------------------------------
+def test_78_r036_update_with_tool2_none_or_invalid_result_fails_closed(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0078", filename="renamed.mp3")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 780, "Filename": "old.mp3"}])
+
+    # 1. Tool 2 returns None
+    mock_t2_none = MagicMock()
+    mock_t2_none.review_file.return_value = None
+    service_none = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_none)
+
+    req = service_none.build_sync_request("trk0078")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 780
+
+    res_none = service_none.synchronize("trk0078", commit=True, request=req)
+    assert res_none.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res_none.operation == SyncOperation.BLOCKED
+    assert res_none.review_required is True
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+    # 2. Tool 2 returns invalid typed object (e.g. dict or non-model)
+    mock_t2_dict = MagicMock()
+    mock_t2_dict.review_file.return_value = {"decision": "EXISTING_MEDIA_MATCH", "row_id": 780}
+    service_dict = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_dict)
+
+    res_dict = service_dict.synchronize("trk0078", commit=True, request=req)
+    assert res_dict.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res_dict.operation == SyncOperation.BLOCKED
+    assert res_dict.review_required is True
+    assert not any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 79: Update with valid fresh Tool 2 result succeeds (R-036)
+# ---------------------------------------------------------------------------
+def test_79_r036_update_with_valid_fresh_tool2_result_succeeds(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0079", filename="renamed.mp3")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 790, "Filename": "old.mp3"}])
+
+    mock_t2 = make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=790)
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    req = service.build_sync_request("trk0079")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 790
+
+    res = service.synchronize("trk0079", commit=True, request=req)
+    assert res.status == SyncStatus.SYNCED
+    assert res.operation == SyncOperation.UPDATE
+    assert any(c["action"] == "patch_row" for c in fake_db.calls)
+
+
+# ---------------------------------------------------------------------------
+# Test 80: build_sync_request(force_refresh=True) when Tool 2 raises or returns invalid (R-036)
+# ---------------------------------------------------------------------------
+def test_80_r036_build_sync_request_force_refresh_failure(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0080")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{"id": 800, "Filename": "file.mp3"}])
+
+    # Tool 2 raises on force_refresh
+    mock_t2_err = MagicMock()
+    mock_t2_err.review_file.side_effect = RuntimeError("Tool 2 offline")
+    service_err = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_err)
+
+    req = service_err.build_sync_request("trk0080", force_refresh=True)
+    assert req.tool2_decision == "DATABASE_UNAVAILABLE"
+    assert req.tool2_database_state == "DATABASE_UNAVAILABLE"
+
+    # Synchronize dry-run or commit with this request fails closed as DATABASE_UNAVAILABLE, not normal review
+    plan = service_err.synchronize("trk0080", commit=False, request=req)
+    assert plan.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert plan.operation == SyncOperation.BLOCKED
+
+    # Synchronize commit also returns DATABASE_UNAVAILABLE
+    res = service_err.synchronize("trk0080", commit=True, request=req)
+    assert res.status == SyncStatus.DATABASE_UNAVAILABLE
+    assert res.operation == SyncOperation.BLOCKED

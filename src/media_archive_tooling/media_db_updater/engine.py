@@ -382,7 +382,6 @@ class MediaDatabaseUpdateEngine:
         """Compute the intended sync operation, field diffs, and validation status."""
         # 1. Tool 2 Gate Evaluation
         t2_decision = (request.tool2_decision or "").upper()
-
         if t2_decision == "DATABASE_UNAVAILABLE":
             return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
@@ -1296,42 +1295,42 @@ class MediaDatabaseUpdateEngine:
         plan: MediaDbSyncResult,
     ) -> MediaDbSyncResult:
         """Execute CREATE with pre-create candidate revalidation race guard."""
-        # 1. Hard precondition: pre-create candidate revalidation via Tool 2 service (R-001)
+        # 1. Hard precondition: pre-create candidate revalidation via Tool 2 service (R-001, R-036)
         if self.tool2_service is None:
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.DATABASE_UNAVAILABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 diagnostic_notes=["Tool 2 service is not configured; cannot revalidate pre-create candidate safely"],
-            )
+            ), request)
 
         try:
             fresh_rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
         except Exception as e:
             logger.warning(f"Pre-create live check encountered error: {e}")
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.DATABASE_UNAVAILABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 error_message=redact_secrets(str(e)),
                 diagnostic_notes=[redact_secrets(f"Pre-create live check failed with exception: {e}")],
-            )
+            ), request)
 
         valid_rev, err_msg = validate_tool2_review_result(fresh_rev, request.tracking_id)
         if not valid_rev:
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.DATABASE_UNAVAILABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 diagnostic_notes=[f"Pre-create race guard: {err_msg}"],
-            )
+            ), request)
 
         dec_str = valid_rev.decision.value if hasattr(valid_rev.decision, "value") else str(valid_rev.decision)
         if dec_str != "NEW_MEDIA_CANDIDATE":
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.REVIEW_REQUIRED,
                 operation=SyncOperation.CONFLICT,
@@ -1340,7 +1339,7 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=[
                     f"Pre-create race guard: live Tool 2 check changed from NEW_MEDIA_CANDIDATE to {dec_str}"
                 ],
-            )
+            ), request)
 
         # Update request metadata with fresh live Tool 2 audit evidence
         read_ts = (valid_rev.baserow_read_at or valid_rev.database_snapshot_at or "").strip()
@@ -1353,33 +1352,33 @@ class MediaDatabaseUpdateEngine:
         try:
             live_fields = self.write_adapter.fetch_table_fields()
         except BaserowUnavailableError as e:
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.DATABASE_UNAVAILABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 diagnostic_notes=[f"Failed to fetch live schema in commit_create: {e}"],
-            )
+            ), request)
         except Exception as e:
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.FAILED_RETRYABLE,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 diagnostic_notes=[f"Failed to fetch live schema in commit_create: {e}"],
-            )
+            ), request)
 
         try:
             fields_by_name = index_fields_by_name(live_fields)
         except BaserowSchemaError as e:
-            return MediaDbSyncResult(
+            return self._enrich_result(MediaDbSyncResult(
                 tracking_id=request.tracking_id,
                 status=SyncStatus.FAILED_BLOCKED,
                 operation=SyncOperation.BLOCKED,
                 review_required=True,
                 error_message=str(e),
                 diagnostic_notes=[f"Ambiguous or duplicate field in live schema: {e}"],
-            )
+            ), request)
 
         # Pre-validate EVERY planned SET field against the live schema snapshot BEFORE any option creation or DB write (R-017)
         payload: Dict[str, Any] = {}
@@ -1387,35 +1386,35 @@ class MediaDatabaseUpdateEngine:
             if diff.action == FieldAction.SET:
                 norm_name = diff.field_name.strip().lower()
                 if norm_name not in fields_by_name:
-                    return MediaDbSyncResult(
+                    return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.FAILED_BLOCKED,
                         operation=SyncOperation.BLOCKED,
                         review_required=True,
                         error_message=f"Intended field '{diff.field_name}' not found in live table schema",
                         diagnostic_notes=[f"Schema mismatch: field '{diff.field_name}' missing from live table"],
-                    )
+                    ), request)
                 f_def = fields_by_name[norm_name]
                 if f_def.get("read_only"):
-                    return MediaDbSyncResult(
+                    return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.FAILED_BLOCKED,
                         operation=SyncOperation.BLOCKED,
                         review_required=True,
                         error_message=f"Field '{diff.field_name}' is read-only",
                         diagnostic_notes=[f"Schema error: field '{diff.field_name}' is read-only"],
-                    )
+                    ), request)
                 try:
                     validate_field_schema(f_def["name"], diff.new_value, f_def)
                 except BaserowSchemaError as e:
-                    return MediaDbSyncResult(
+                    return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.FAILED_BLOCKED,
                         operation=SyncOperation.BLOCKED,
                         review_required=True,
                         error_message=str(e),
                         diagnostic_notes=[f"Deterministic schema validation error on field '{diff.field_name}': {e}"],
-                    )
+                    ), request)
                 payload[f_def["name"]] = diff.new_value
 
         # 3. Ensure Country / Place, location select options only after full payload schema validation
@@ -1426,31 +1425,31 @@ class MediaDatabaseUpdateEngine:
                     canonical_opt = self.write_adapter.ensure_select_option(fld_name, val)
                     payload[fld_name] = canonical_opt
                 except AmbiguousOptionError as e:
-                    return MediaDbSyncResult(
+                    return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.REVIEW_REQUIRED,
                         operation=SyncOperation.CONFLICT,
                         review_required=True,
                         conflicts=[str(e)],
                         diagnostic_notes=[f"Ambiguous select option in {fld_name}: {e}"],
-                    )
+                    ), request)
                 except (BaserowSchemaError, TaxonomyForbiddenError) as e:
-                    return MediaDbSyncResult(
+                    return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.FAILED_BLOCKED,
                         operation=SyncOperation.BLOCKED,
                         review_required=True,
                         error_message=str(e),
                         diagnostic_notes=[f"Schema error ensuring select option for {fld_name}: {e}"],
-                    )
+                    ), request)
                 except Exception as e:
-                    return MediaDbSyncResult(
+                    return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.FAILED_RETRYABLE,
                         operation=SyncOperation.CONFLICT,
                         review_required=True,
                         diagnostic_notes=[f"Failed to ensure select option for {fld_name}: {e}"],
-                    )
+                    ), request)
 
         # 4. Perform write
         try:
@@ -1458,13 +1457,13 @@ class MediaDatabaseUpdateEngine:
             new_id = created_row.get("id")
             plan.media_row_id = new_id
             plan.status = SyncStatus.SYNCED
-            return plan
+            return self._enrich_result(plan, request)
         except BaserowUnavailableError as e:
             return self.reconcile_uncertain_create(request, plan, error_message=str(e))
         except Exception as e:
             plan.status = SyncStatus.FAILED_RETRYABLE
             plan.error_message = redact_secrets(str(e))
-            return plan
+            return self._enrich_result(plan, request)
 
     def _commit_update(
         self,
@@ -1476,71 +1475,80 @@ class MediaDatabaseUpdateEngine:
         row_id = plan.media_row_id
         if not row_id:
             plan.status = SyncStatus.FAILED_BLOCKED
-            return plan
+            return self._enrich_result(plan, request)
 
-        # R-031: Fresh Tool 2 write gate before update mutation
-        if self.tool2_service is not None:
-            try:
-                fresh_rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
-            except Exception as e:
-                logger.warning(f"Pre-update Tool 2 live check encountered error: {e}")
+        # R-031 & R-036: Fresh Tool 2 write gate before update mutation is a hard precondition
+        if self.tool2_service is None:
+            return self._enrich_result(MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                media_row_id=row_id,
+                review_required=True,
+                diagnostic_notes=["Tool 2 service is not configured; cannot revalidate pre-update target association safely"],
+            ), request)
+
+        try:
+            fresh_rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
+        except Exception as e:
+            logger.warning(f"Pre-update Tool 2 live check encountered error: {e}")
+            return self._enrich_result(MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                media_row_id=row_id,
+                review_required=True,
+                error_message=redact_secrets(str(e)),
+                diagnostic_notes=[redact_secrets(f"Pre-update Tool 2 live check failed with exception: {e}")],
+            ), request)
+
+        valid_rev, err_msg = validate_tool2_review_result(fresh_rev, request.tracking_id)
+        if not valid_rev:
+            return self._enrich_result(MediaDbSyncResult(
+                tracking_id=request.tracking_id,
+                status=SyncStatus.DATABASE_UNAVAILABLE,
+                operation=SyncOperation.BLOCKED,
+                media_row_id=row_id,
+                review_required=True,
+                diagnostic_notes=[f"Pre-update Tool 2 gate contract failure: {err_msg}"],
+            ), request)
+
+        # Update request metadata with fresh live Tool 2 audit evidence
+        read_ts = (valid_rev.baserow_read_at or valid_rev.database_snapshot_at or "").strip()
+        request.tool2_timestamp = valid_rev.database_snapshot_at or read_ts
+        request.live_query_timestamp = read_ts
+        request.tool2_database_state = valid_rev.database_state
+        t2_decision_val = valid_rev.decision.value if hasattr(valid_rev.decision, "value") else str(valid_rev.decision)
+        request.tool2_decision = t2_decision_val
+
+        # Validate decision gate for update (R-031)
+        assoc_approval = request.get_association_approval()
+        if assoc_approval is None:
+            # Without association approval, fresh review MUST be EXISTING_MEDIA_MATCH with exact same row_id
+            if t2_decision_val != "EXISTING_MEDIA_MATCH":
                 return self._enrich_result(MediaDbSyncResult(
                     tracking_id=request.tracking_id,
-                    status=SyncStatus.DATABASE_UNAVAILABLE,
-                    operation=SyncOperation.BLOCKED,
+                    status=SyncStatus.REVIEW_REQUIRED,
+                    operation=SyncOperation.CONFLICT,
                     media_row_id=row_id,
                     review_required=True,
-                    error_message=redact_secrets(str(e)),
-                    diagnostic_notes=[redact_secrets(f"Pre-update Tool 2 live check failed with exception: {e}")],
+                    conflicts=["TOOL2_DECISION_CHANGED"],
+                    diagnostic_notes=[
+                        f"Pre-update Tool 2 gate: live decision changed from EXISTING_MEDIA_MATCH to {t2_decision_val}; update blocked"
+                    ],
                 ), request)
-
-            valid_rev, err_msg = validate_tool2_review_result(fresh_rev, request.tracking_id)
-            if not valid_rev:
+            if valid_rev.selected_media_row_id != row_id:
                 return self._enrich_result(MediaDbSyncResult(
                     tracking_id=request.tracking_id,
-                    status=SyncStatus.DATABASE_UNAVAILABLE,
-                    operation=SyncOperation.BLOCKED,
+                    status=SyncStatus.REVIEW_REQUIRED,
+                    operation=SyncOperation.CONFLICT,
                     media_row_id=row_id,
                     review_required=True,
-                    diagnostic_notes=[f"Pre-update Tool 2 gate contract failure: {err_msg}"],
+                    conflicts=["TOOL2_SELECTED_ROW_CHANGED"],
+                    diagnostic_notes=[
+                        f"Pre-update Tool 2 gate: live selected row ID changed from {row_id} to {valid_rev.selected_media_row_id}; update blocked"
+                    ],
                 ), request)
-
-            # Update request metadata with fresh live Tool 2 audit evidence
-            read_ts = (valid_rev.baserow_read_at or valid_rev.database_snapshot_at or "").strip()
-            request.tool2_timestamp = valid_rev.database_snapshot_at or read_ts
-            request.live_query_timestamp = read_ts
-            request.tool2_database_state = valid_rev.database_state
-            t2_decision_val = valid_rev.decision.value if hasattr(valid_rev.decision, "value") else str(valid_rev.decision)
-            request.tool2_decision = t2_decision_val
-
-            # Validate decision gate for update (R-031)
-            assoc_approval = request.get_association_approval()
-            if assoc_approval is None:
-                # Without association approval, fresh review MUST be EXISTING_MEDIA_MATCH with exact same row_id
-                if t2_decision_val != "EXISTING_MEDIA_MATCH":
-                    return self._enrich_result(MediaDbSyncResult(
-                        tracking_id=request.tracking_id,
-                        status=SyncStatus.REVIEW_REQUIRED,
-                        operation=SyncOperation.CONFLICT,
-                        media_row_id=row_id,
-                        review_required=True,
-                        conflicts=["TOOL2_DECISION_CHANGED"],
-                        diagnostic_notes=[
-                            f"Pre-update Tool 2 gate: live decision changed from EXISTING_MEDIA_MATCH to {t2_decision_val}; update blocked"
-                        ],
-                    ), request)
-                if valid_rev.selected_media_row_id != row_id:
-                    return self._enrich_result(MediaDbSyncResult(
-                        tracking_id=request.tracking_id,
-                        status=SyncStatus.REVIEW_REQUIRED,
-                        operation=SyncOperation.CONFLICT,
-                        media_row_id=row_id,
-                        review_required=True,
-                        conflicts=["TOOL2_SELECTED_ROW_CHANGED"],
-                        diagnostic_notes=[
-                            f"Pre-update Tool 2 gate: live selected row ID changed from {row_id} to {valid_rev.selected_media_row_id}; update blocked"
-                        ],
-                    ), request)
 
         # 1. Fetch fresh live row immediately before write
         try:

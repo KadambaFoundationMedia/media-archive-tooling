@@ -120,6 +120,9 @@ class BatchExecutor:
         Isolates per-file failures so independent files succeed.
         """
         for prop in proposals:
+            if prop.needs_review or prop.status in ("blocked", "deferred"):
+                continue
+
             if not prop.changes_detected:
                 prop.status = "skipped_unchanged"
                 continue
@@ -144,8 +147,10 @@ class BatchExecutor:
                 prop.current_filename = target_path.name
                 # Record in local registry audit trail
                 self.registry.record_commit(prop, target_path)
-                # Tool 4 is called after final filename is committed, not after initial/intermediate rename (amendment section 2)
-                if self.mode != RenameMode.INITIAL:
+                # Tool 4 is called only after the final filename is committed for the current
+                # processing stage, and only for a proposal proven to be the finalized output of the
+                # required Tool 2/Tool 3 collaboration (mode == RenameMode.FINALIZE, amendment section 2 & R-037).
+                if self.mode == RenameMode.FINALIZE:
                     try:
                         self.registry.save_media_db_sync(
                             tracking_id=prop.tracking_id,

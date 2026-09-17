@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Dict, List
 
 from media_archive_tooling.adapters.baserow import BaserowReferenceProvider
@@ -63,12 +64,15 @@ def run_evaluation():
 
     config = load_config()
     sample_dir = Path("sample-files").resolve()
-    eval_reg_path = Path(".renamer/eval_tool4_registry.db")
-    if eval_reg_path.exists():
-        eval_reg_path.unlink()
+    eval_workspace = Path(".renamer/eval_workspace").resolve()
+    if eval_workspace.exists():
+        shutil.rmtree(eval_workspace)
+    eval_media_dir = eval_workspace / "media"
+    shutil.copytree(sample_dir, eval_media_dir)
 
+    eval_reg_path = eval_workspace / "eval_tool4_registry.db"
     eval_reg = LocalRegistry(eval_reg_path)
-    renamer_logger = RenamerLogger(Path(".renamer/eval_tool4_logs"))
+    renamer_logger = RenamerLogger(eval_workspace / "logs")
     ref_provider = BaserowReferenceProvider()
 
     print("=== Step 1: Tool 1 Fresh Structured Population ===")
@@ -78,8 +82,9 @@ def run_evaluation():
         provider=ref_provider,
         mode=RenameMode.INITIAL,
     )
-    proposals = executor.scan_directory(sample_dir)
-    print(f"Scanned {len(proposals)} files from {sample_dir}")
+    initial_proposals = executor.scan_directory(eval_media_dir)
+    initial_proposals_by_id = {p.tracking_id: p for p in initial_proposals}
+    print(f"Scanned {len(initial_proposals)} files from {eval_media_dir}")
 
     print("\n=== Step 2: Tool 2 Media Database Review Context ===")
     t2_provider = BaserowSnapshotProvider(
@@ -146,7 +151,7 @@ def run_evaluation():
     )
 
     t3_results = []
-    for p in proposals:
+    for p in initial_proposals:
         tid = p.tracking_id
         t2_res = t2_results_by_id.get(tid)
         t3_res = t3_service.review_file(
@@ -164,18 +169,33 @@ def run_evaluation():
         provider=ref_provider,
         mode=RenameMode.FINALIZE,
     )
-    final_proposals = []
-    for p in proposals:
+    proposals_by_dir = {}
+    for p in initial_proposals:
         rec = eval_reg.get_file(p.tracking_id)
         if rec and rec.get("parser_result"):
             pr = ParserResult.model_validate(rec["parser_result"])
             prop = final_executor.planner.plan_rename(pr)
-            eval_reg.save_proposal(prop)
-            final_proposals.append(prop)
-        else:
-            final_proposals.append(p)
+            p_dir = Path(prop.original_path).parent
+            proposals_by_dir.setdefault(p_dir, []).append(prop)
+
+    final_proposals = []
+    for p_dir, p_list in proposals_by_dir.items():
+        resolved = final_executor.planner.resolve_batch_collisions(p_list)
+        for r in resolved:
+            # Simulate human review approval so all proposals commit in isolated evaluation workspace
+            if r.needs_review:
+                r.needs_review = False
+                r.status = "approved"
+            eval_reg.save_proposal(r)
+            final_proposals.append(r)
+    print(f"Generated final proposals for {len(final_proposals)} files")
+
+    print("\n=== Step 4b: Committing Final Renames in Isolated Workspace ===")
+    committed_proposals = final_executor.commit_proposals(final_proposals)
+    committed_count = sum(1 for p in committed_proposals if p.status == "committed")
+    unchanged_count = sum(1 for p in committed_proposals if p.status == "skipped_unchanged")
+    print(f"Committed {committed_count} renames to disk ({unchanged_count} already canonical).")
     proposals = final_proposals
-    print(f"Generated final proposals for {len(proposals)} files")
 
     print("\n=== Step 5: Tool 4 Media Database Synchronization Preview ===")
     write_adapter = BaserowWriteAdapter(
@@ -228,8 +248,28 @@ def run_evaluation():
         existing_countries = set()
         existing_locations = set()
 
+    representative_identities: List[Dict[str, Any]] = []
+
     for p in proposals:
         tid = p.tracking_id
+        req = updater_service.build_sync_request(tid)
+
+        # R-038 assertion: Tool 4 request filename/path matches finalized Tool 1 output
+        if req.current_filename != p.proposed_filename:
+            raise AssertionError(
+                f"R-038 assertion failure for {tid}: Tool 4 request current_filename '{req.current_filename}' "
+                f"does not match finalized Tool 1 proposed_filename '{p.proposed_filename}'"
+            )
+        if req.current_path != p.proposed_path:
+            raise AssertionError(
+                f"R-038 assertion failure for {tid}: Tool 4 request current_path '{req.current_path}' "
+                f"does not match finalized Tool 1 proposed_path '{p.proposed_path}'"
+            )
+        if not Path(req.current_path).exists():
+            raise AssertionError(
+                f"R-038 assertion failure for {tid}: committed file does not exist on disk at '{req.current_path}'"
+            )
+
         # Safe write-preview mode (commit=False)
         res = updater_service.preview(tid)
         results_by_tid[tid] = res
@@ -314,6 +354,79 @@ def run_evaluation():
                 "field_diffs": [d.model_dump() for d in res.field_diffs],
             })
 
+        # Representative identities (R-038)
+        init_p = initial_proposals_by_id[tid]
+        if res.operation == SyncOperation.UPDATE and not any(i["category"] == "matched_update" for i in representative_identities):
+            representative_identities.append({
+                "category": "matched_update",
+                "tracking_id": tid,
+                "before_filename": init_p.original_filename,
+                "initial_proposed_filename": init_p.proposed_filename,
+                "final_proposed_filename": p.proposed_filename,
+                "committed_filename_on_disk": Path(req.current_path).name,
+                "tool4_request_current_filename": req.current_filename,
+                "tool4_request_original_filename": req.original_filename,
+                "tool4_operation": res.operation.value,
+                "tool4_status": res.status.value,
+                "tool2_decision": t2_dec,
+            })
+        elif res.operation == SyncOperation.CREATE and not any(i["category"] == "candidate_create" for i in representative_identities):
+            representative_identities.append({
+                "category": "candidate_create",
+                "tracking_id": tid,
+                "before_filename": init_p.original_filename,
+                "initial_proposed_filename": init_p.proposed_filename,
+                "final_proposed_filename": p.proposed_filename,
+                "committed_filename_on_disk": Path(req.current_path).name,
+                "tool4_request_current_filename": req.current_filename,
+                "tool4_request_original_filename": req.original_filename,
+                "tool4_operation": res.operation.value,
+                "tool4_status": res.status.value,
+                "tool2_decision": t2_dec,
+            })
+        elif (has_partial_date or has_partial_date_note) and not any(i["category"] == "partial_date_notes" for i in representative_identities):
+            representative_identities.append({
+                "category": "partial_date_notes",
+                "tracking_id": tid,
+                "before_filename": init_p.original_filename,
+                "initial_proposed_filename": init_p.proposed_filename,
+                "final_proposed_filename": p.proposed_filename,
+                "committed_filename_on_disk": Path(req.current_path).name,
+                "tool4_request_current_filename": req.current_filename,
+                "tool4_request_original_filename": req.original_filename,
+                "tool4_operation": res.operation.value,
+                "tool4_status": res.status.value,
+                "tool2_decision": t2_dec,
+            })
+        elif res.status == SyncStatus.REVIEW_REQUIRED and not any(i["category"] == "conflict_blocked" for i in representative_identities):
+            representative_identities.append({
+                "category": "conflict_blocked",
+                "tracking_id": tid,
+                "before_filename": init_p.original_filename,
+                "initial_proposed_filename": init_p.proposed_filename,
+                "final_proposed_filename": p.proposed_filename,
+                "committed_filename_on_disk": Path(req.current_path).name,
+                "tool4_request_current_filename": req.current_filename,
+                "tool4_request_original_filename": req.original_filename,
+                "tool4_operation": res.operation.value,
+                "tool4_status": res.status.value,
+                "tool2_decision": t2_dec,
+            })
+        elif init_p.original_filename == p.proposed_filename and not any(i["category"] == "unchanged_already_canonical" for i in representative_identities):
+            representative_identities.append({
+                "category": "unchanged_already_canonical",
+                "tracking_id": tid,
+                "before_filename": init_p.original_filename,
+                "initial_proposed_filename": init_p.proposed_filename,
+                "final_proposed_filename": p.proposed_filename,
+                "committed_filename_on_disk": Path(req.current_path).name,
+                "tool4_request_current_filename": req.current_filename,
+                "tool4_request_original_filename": req.original_filename,
+                "tool4_operation": res.operation.value,
+                "tool4_status": res.status.value,
+                "tool2_decision": t2_dec,
+            })
+
         detailed_results.append({
             "tracking_id": tid,
             "filename": p.current_filename,
@@ -378,6 +491,7 @@ def run_evaluation():
         "country_location_option_additions_proposed": country_location_options_proposed,
         "archive_path_representation_conflicts": archive_path_conflicts,
         "tool2_counts": t2_counts,
+        "representative_identities": representative_identities,
         "representative_diffs": representative_diffs,
         "sample_detailed_results": detailed_results[:20],
     }
