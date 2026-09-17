@@ -71,7 +71,11 @@ class MediaDatabaseUpdaterService:
                 }
             else:
                 try:
-                    t2_res = self.tool2_service.review_file(tracking_id, force_refresh=True)
+                    t2_res = self.tool2_service.review_file(
+                        tracking_id,
+                        force_refresh=True,
+                        auto_enrich=False,
+                    )
                     if t2_res is None:
                         t2_rec = {
                             "decision": "DATABASE_UNAVAILABLE",
@@ -101,7 +105,11 @@ class MediaDatabaseUpdaterService:
                     }
         elif t2_rec is None and self.tool2_service:
             try:
-                t2_res = self.tool2_service.review_file(tracking_id, force_refresh=False)
+                t2_res = self.tool2_service.review_file(
+                    tracking_id,
+                    force_refresh=False,
+                    auto_enrich=False,
+                )
                 if t2_res:
                     dec_val = t2_res.decision.value if hasattr(t2_res.decision, "value") else str(t2_res.decision)
                     t2_rec = {

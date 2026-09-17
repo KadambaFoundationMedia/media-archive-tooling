@@ -1359,7 +1359,11 @@ class MediaDatabaseUpdateEngine:
             ), request)
 
         try:
-            fresh_rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
+            fresh_rev = self.tool2_service.review_file(
+                request.tracking_id,
+                force_refresh=True,
+                auto_enrich=False,
+            )
         except Exception as e:
             logger.warning(f"Pre-create live check encountered error: {e}")
             return self._enrich_result(MediaDbSyncResult(
@@ -1542,7 +1546,11 @@ class MediaDatabaseUpdateEngine:
             ), request)
 
         try:
-            fresh_rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
+            fresh_rev = self.tool2_service.review_file(
+                request.tracking_id,
+                force_refresh=True,
+                auto_enrich=False,
+            )
         except Exception as e:
             logger.warning(f"Pre-update Tool 2 live check encountered error: {e}")
             return self._enrich_result(MediaDbSyncResult(
@@ -1826,7 +1834,11 @@ class MediaDatabaseUpdateEngine:
         logger.info(f"Reconciling uncertain create for {request.tracking_id}...")
         try:
             if self.tool2_service is not None:
-                rev = self.tool2_service.review_file(request.tracking_id, force_refresh=True)
+                rev = self.tool2_service.review_file(
+                    request.tracking_id,
+                    force_refresh=True,
+                    auto_enrich=False,
+                )
                 if rev and rev.selected_media_row_id:
                     plan.media_row_id = rev.selected_media_row_id
                     plan.status = SyncStatus.SYNCED
