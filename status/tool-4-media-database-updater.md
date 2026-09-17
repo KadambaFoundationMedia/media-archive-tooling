@@ -646,3 +646,7 @@ Verification:
 ## Final planning/review acceptance
 
 R-040 was independently reviewed at `f589a55d0db2a15afb3fabbf69199459c2a35a1f`. The focused failure/success regressions passed locally (**5 passed**), helper syntax passed, the working tree was clean, and the exact-head required GitHub Actions check passed. All Tool 4 findings R-001 through R-040 are resolved or explicitly withdrawn. Tool 4 is accepted for merge and practical single-file testing.
+
+## Post-acceptance practical smoke test
+
+The first production single-file CREATE attempt on 2026-09-17 safely blocked before mutation because the live `Language` column is `multiple_select`, while the test adapter modeled it as `single_select` and Tool 4 prepared the scalar `"English"`. The maintenance fix preserves existing single-select compatibility and sends `["English"]` when the live schema reports `multiple_select`. A focused regression covers both schema shapes. No partial Baserow row was created by the blocked attempt.
