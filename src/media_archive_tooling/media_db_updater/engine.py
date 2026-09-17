@@ -88,8 +88,9 @@ def validate_tool2_review_result(
     if result_model.snapshot_complete is not True:
         return None, "Tool 2 snapshot_complete is not True"
 
-    if result_model.baserow_check_complete is not True:
-        return None, "Tool 2 baserow_check_complete is not True"
+    if result_model.decision in (ReviewDecision.EXISTING_MEDIA_MATCH, ReviewDecision.NEW_MEDIA_CANDIDATE):
+        if result_model.baserow_check_complete is not True:
+            return None, "Tool 2 baserow_check_complete is not True"
 
     if result_model.database_state not in ("LIVE_CURRENT", "LIVE_COMPLETE"):
         return None, f"Tool 2 check incomplete or non-live (database_state '{result_model.database_state}' not in ('LIVE_CURRENT', 'LIVE_COMPLETE'))"

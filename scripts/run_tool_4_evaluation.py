@@ -114,8 +114,9 @@ def run_evaluation():
             raise RuntimeError(f"Tool 2 result for {r.tracking_id} has live_read_complete != True")
         if r.snapshot_complete is not True:
             raise RuntimeError(f"Tool 2 result for {r.tracking_id} has snapshot_complete != True")
-        if r.baserow_check_complete is not True:
-            raise RuntimeError(f"Tool 2 result for {r.tracking_id} has baserow_check_complete != True")
+        if r.decision in (ReviewDecision.EXISTING_MEDIA_MATCH, ReviewDecision.NEW_MEDIA_CANDIDATE):
+            if r.baserow_check_complete is not True:
+                raise RuntimeError(f"Tool 2 result for {r.tracking_id} with decision {r.decision} has baserow_check_complete != True")
         if r.database_state not in ("LIVE_CURRENT", "LIVE_COMPLETE"):
             raise RuntimeError(f"Tool 2 result for {r.tracking_id} has non-live database_state: {r.database_state}")
         read_ts = (r.baserow_read_at or r.database_snapshot_at or "").strip()
