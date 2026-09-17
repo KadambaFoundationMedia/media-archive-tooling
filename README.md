@@ -73,6 +73,8 @@ Important consequences include:
 - `travel_schedule` is a deliberate exception to per-decision freshness: it is static, so Tool 3 may use a complete verified local snapshot bootstrapped/verified through Tool 2's read-only boundary across files, batches, sessions, and offline runs;
 - Tool 4 uses Tool 2 for a fresh existing-item check, then directly revalidates the exact target/write preconditions so collaborator changes are not silently overwritten or duplicated;
 - Tool 1 calls Tool 4 only after it has combined Tool 2 and Tool 3 evidence and committed the final filename for that stage;
+- after a Media association is safely confirmed, populated relevant metadata on the current Baserow row is leading/confirmed; contradictions are preserved for review rather than overwritten automatically;
+- `media_archive_link` is unavailable to Tools 1–4, so it remains empty on create and is preserved exactly on existing rows;
 - stored mutable Baserow values remain useful for audit provenance, but not as a substitute for a fresh current read.
 
 The static nature of `travel_schedule` changes only its freshness/caching semantics. Its evidentiary strength remains limited: planned travel may corroborate or suggest WHEN/WHERE, but it is not absolute proof that a recording occurred at that place/time.

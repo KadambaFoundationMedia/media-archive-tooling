@@ -54,6 +54,8 @@ Tool 2 owns read-only Baserow Media candidate retrieval and reconciliation. It m
 
 Tool 2 must never create, update, delete, or mutate Baserow rows, select options, or schema. It returns typed decisions, candidates, completeness, database state, live-read timestamp, table/row identity, and provenance.
 
+Once Tool 2 has safely confirmed that an existing Media row represents the same logical recording, the relevant populated metadata currently stored on that row is leading and confirmed. Tool 1 uses it when producing the final filename. Candidate-only or ambiguous rows do not gain that authority merely because they exist in Baserow.
+
 Tool 2 is used twice where required:
 
 1. by Tool 1 while producing the final filename;
@@ -70,6 +72,8 @@ Travel-schedule evidence remains contextual. It may corroborate or narrow a reco
 Tool 4 owns all Baserow mutations plus the direct reads required for schema validation, exact-row inspection, pre-write revalidation, uncertain-outcome reconciliation, and safe minimal patches.
 
 For Media existence/candidate matching, Tool 4 uses Tool 2 rather than reimplementing Tool 2's reconciliation algorithm. Tool 4 validates the returned Tool 2 contract and defaults to blocking when the decision, completeness, database state, timestamp, or provenance is missing, unknown, stale, partial, or unavailable.
+
+For a confirmed existing row, populated relevant Baserow metadata is leading. Tool 4 may fill blank fields with trustworthy new archive metadata, but it must not automatically replace a contradictory populated value. It flags that contradiction for review and preserves the current database value unless a separately authorized correction workflow explicitly permits the exact field change after live revalidation.
 
 ## 4. Freshness and race safety
 

@@ -72,15 +72,15 @@ Therefore:
 5. schedule disagreement is not permission to rewrite a filename date/location;
 6. Tool 3 must never manufacture certainty from a planned itinerary.
 
-The user's stated practical hierarchy remains:
+For an unconfirmed Media candidate, the practical hierarchy is:
 
 ```text
 filename/path evidence
-> Media-database evidence/candidates
+> unconfirmed Media-database candidates
 > travel-schedule evidence
 ```
 
-with one important identity distinction: once Tool 2 has safely confirmed that a specific Media row represents the same logical recording, that Media row is authoritative evidence for that recording. If explicit local filename/path evidence and a confirmed Media row materially contradict each other, Tool 3 must **not** silently choose a winner. Preserve the high-authority conflict for Tool 2/Tool 1 review; schedule context may be shown, but it cannot adjudicate the contradiction automatically.
+Once Tool 2 has safely confirmed that a specific Media row represents the same logical recording, its relevant populated metadata is leading and confirmed. Tool 1 uses that metadata for the final filename. If explicit local filename/path evidence materially contradicts the confirmed row, preserve and flag the contradiction rather than silently modifying the Baserow value; schedule context may be shown, but it cannot adjudicate the contradiction automatically.
 
 ---
 
@@ -483,7 +483,7 @@ For `EXISTING_MEDIA_MATCH` / explicit human-confirmed association:
 - if Media provides a missing local WHEN/WHERE, Tool 2/Tool 1 enrichment remains the owner of applying that authoritative value;
 - Tool 3 should not redundantly downgrade it to provisional schedule evidence.
 
-If confirmed Media evidence conflicts materially with explicit local filename/path evidence, Tool 3 records schedule context but does not choose between the high-authority sources. Preserve the existing conflict/review route.
+If confirmed Media evidence conflicts materially with explicit local filename/path evidence, Tool 3 records the local contradiction and schedule context without altering the confirmed row. Downstream Tool 1 applies the leading confirmed Media metadata to the final filename while keeping the contradiction visible for review.
 
 ---
 
@@ -827,7 +827,7 @@ Use deterministic synthetic fixtures plus the project-wide full test suite. At m
 26. neither date nor location known → `INSUFFICIENT_EVIDENCE`, no unconstrained guess;
 27. parent-folder evidence is consumed through Tool 1 ParserResult; Tool 3 does not reparse raw folders independently;
 28. confirmed Tool 2 Media values are never overridden/downgraded by travel schedule;
-29. explicit local ↔ confirmed Media contradiction is preserved; Tool 3 does not adjudicate it;
+29. explicit local ↔ confirmed Media contradiction is preserved; Tool 3 does not override confirmed Media metadata and Tool 1 applies the leading value under the confirmed-row rule;
 30. probable/multiple Tool 2 candidate metadata does not leak into confirmed Renamer enrichment through Tool 3;
 31. historical stored Tool 2 result is not treated as current Media authority on an independent Tool 3 run that requires current Media context;
 32. Media context unavailable + static reference available may still produce explicitly provisional schedule evidence and records Media unavailability;
@@ -894,7 +894,7 @@ Tool 3 is acceptable only when all of the following are true:
 5. normal per-file review uses the verified reference without network access;
 6. schedule reference integrity is protected by deterministic checksum/provenance;
 7. an unexpected remote schedule change is surfaced rather than silently accepted;
-8. filename/path and confirmed Media evidence are never silently overwritten by schedule evidence;
+8. confirmed Media metadata is never overwritten by schedule/local evidence, and contradictory local evidence remains visible for review;
 9. schedule absence is not treated as proof of absence;
 10. known-location/missing-date and known-date/missing-location cases behave according to Sections 16–17;
 11. both-missing input never triggers an unconstrained schedule guess;

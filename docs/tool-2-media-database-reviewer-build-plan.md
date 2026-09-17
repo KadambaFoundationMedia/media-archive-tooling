@@ -56,6 +56,8 @@ Tool 2 must not silently absorb Tool 3's complete responsibility.
 - Existing fact-checked Baserow Media values are strong evidence.
 - Contradictions are retained and surfaced; Tool 2 never silently rewrites either the filename evidence or the Baserow fact.
 
+User clarification (2026-09-17): once Tool 2 safely confirms that an existing Media row represents the same logical recording, the relevant populated metadata currently stored in that row is leading and confirmed. Tool 1 should use that confirmed metadata when producing the final filename. This does not make probable, multiple, duplicate-looking, or otherwise unconfirmed candidate rows authoritative.
+
 ## 4. Baserow scope and read-only boundary
 
 The Media database currently contains:

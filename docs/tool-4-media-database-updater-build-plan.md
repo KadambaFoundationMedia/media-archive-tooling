@@ -33,6 +33,8 @@ Tool 4 must:
 
 Tool 4 is not a duplicate detector based on media bytes and does not merge/delete duplicate rows automatically.
 
+For a safely confirmed existing Media association, the relevant populated metadata currently stored in Baserow is leading and confirmed. Tool 4 fills trustworthy missing metadata, but it does not automatically overwrite contradictory populated database metadata; it preserves the value and flags the contradiction for review.
+
 ---
 
 ## 2. Pipeline position and reuse
@@ -415,9 +417,13 @@ Empty on create unless explicitly supplied.
 
 ### Media Archive link
 
-**Do not populate automatically in Tool 4.** The user has explicitly deferred this field because its shared-drive URL is added manually until a later dedicated tool/workflow is developed.
+The underlying field is currently `media_archive_link` (displayed as Media Archive Link) and contains a URL. Tools 1, 2, 3, and 4 do not possess this URL and must not invent or derive it from `media_archive_path`.
 
-On existing rows, preserve the field exactly unless a future explicit requirement says otherwise.
+- on a new row, leave `media_archive_link` empty;
+- on an existing row, preserve the field exactly whether it is empty or populated;
+- if an unexpected request proposes a value for this field, do not write it; block/flag the unsupported input rather than overwriting the live value.
+
+A populated value should not normally enter this workflow because none of Tools 1–4 can produce it. The preservation rule is nevertheless mandatory protection for existing rows.
 
 ### media_archive_path
 
@@ -717,7 +723,7 @@ The implementation must include focused regression/integration coverage for at l
 34. new-row timestamps/default dates are populated as specified;
 35. existing `Created_on`/`imported_on` are not reset on ordinary rename updates;
 36. `Last modified` and `Last modified by` follow the specified current-date write rule;
-37. `Media Archive link` remains untouched/empty and is never auto-derived;
+37. `media_archive_link` is empty on create, is never auto-derived, and any existing populated value is preserved exactly;
 38. `media_archive_path` stores full current path;
 39. same tracked file rename safely updates Filename/path from old to new;
 40. different unproven archive representation does not overwrite existing path;
@@ -804,7 +810,7 @@ The Builder must **not** silently change:
 - the no-silent-overwrite conflict rule;
 - full-date-only Baserow `Date` semantics;
 - partial-date-in-Notes behavior;
-- `Media Archive link` being out of scope/manual;
+- `media_archive_link` being unavailable to Tools 1–4, empty on create, and immutable through this workflow;
 - `media_archive_path` full-path behavior;
 - preservation of unrelated format/source fields;
 - select-option policy, especially country/location-only automatic additions;

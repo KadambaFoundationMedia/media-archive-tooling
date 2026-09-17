@@ -179,19 +179,21 @@ Required correction:
 - have Tool 1 ask Tool 2 for the Media check and Tool 3 for recording-date/schedule evidence before committing the final filename;
 - have Tool 1 call Tool 4 once after that final filename/current stage state is committed;
 - have Tool 4 use Tool 2 for a fresh existing-item/candidate check, validate the complete Tool 2 result contract, then directly revalidate the exact row/schema/write preconditions;
+- treat populated relevant metadata on a safely confirmed existing Baserow row as leading/confirmed; fill blanks from trustworthy archive evidence but preserve and flag contradictory populated values;
+- leave `media_archive_link` empty on create and preserve it exactly on existing rows because Tools 1–4 do not possess its URL;
 - retain durable Tool 4 synchronization for every later final Tool 1 rename produced by stronger WHAT/WHERE/WHEN evidence;
 - add architecture/integration tests for the access matrix and exact call ordering;
 - preserve accepted Tool 1–3 domain behavior and keep the full regression suite green.
 
 The controlling specification is `docs/baserow-access-boundary-amendment.md`. Where older finalized plans, statuses, README text, or implementation structure conflict with it, the amendment wins.
 
-## Open requirement clarification
+## Resolved requirement clarification
 
 ### Q-001 — `Media Archive link` source and current policy
 
-The requirements re-shared on 2026-09-17 say `Media Archive link` should contain the shared-drive URL to the media file. The current finalized plan records a later decision that this URL is added manually and Tool 4 must leave the field empty/unchanged until a dedicated workflow exists.
+Resolved by the user on 2026-09-17.
 
-The Builder must not guess or derive a URL from `media_archive_path`. The user must confirm whether the newly re-shared requirement supersedes the manual/deferred rule. If automatic population is restored, the plan also needs the authoritative source or mapping rule that produces the shared-drive URL.
+The relevant field is `media_archive_link`, which contains a URL. Tools 1, 2, 3, and 4 do not have this information. Tool 4 must therefore leave it empty on new rows and preserve it exactly on existing rows. It must never derive a URL from `media_archive_path` or overwrite a populated value. A populated incoming proposal is unsupported and must be blocked/flagged rather than written.
 
 ## Next milestone
 

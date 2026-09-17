@@ -36,6 +36,8 @@ This includes at least:
 
 A previous batch/session snapshot, persisted cache, exported copy, or prior review result of mutable data is **historical evidence**, not current database state.
 
+After Tool 2 safely confirms that a current row represents the same logical recording, the relevant populated metadata on that current row is leading and confirmed. This authority does not apply to unconfirmed candidates, duplicate-looking rows, or ambiguous associations.
+
 `travel_schedule` is excluded from this rule because its contents are immutable by project policy.
 
 ## 3. No stale-cache fallback for authoritative mutable decisions
