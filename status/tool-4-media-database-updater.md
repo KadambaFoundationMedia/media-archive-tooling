@@ -654,3 +654,16 @@ The first production single-file CREATE attempt on 2026-09-17 safely blocked bef
 The retry then safely blocked because live Baserow reports `Last modified by` and `Last modified` as read-only audit fields. Tool 4 now skips requested timestamp fields when the live schema marks them read-only, while continuing to populate writable timestamp columns such as `imported_on`. A focused create regression covers this live-schema behavior; the blocked retry also created no partial row.
 
 The next retry showed that the live location column is named `place_location`, one of Tool 4's accepted lookup aliases, but the create diff still used the hard-coded display name `Place, location`. Tool 4 now carries the actual live field name into the validated create payload. A focused alias regression covers this behavior; no partial row was created by the blocked retry.
+
+## Orchestrator practical metadata correction (2026-09-17)
+
+The user identified missing metadata in the first single-file result. The orchestrator implemented and regression-tested the direct corrections, and records them here for the Builder:
+
+- pure scripture titles render in readable Baserow form (`SB 1.19.31`);
+- exact live Category spelling is retained (`Srimad-bhagavatam`);
+- text Tag fields receive a scalar verse (`1.19.31`) rather than a list;
+- live multi-select Language uses the retrieved `English` option, while updates preserve existing language selections;
+- Notes records `Added from archive`, original filename, and original full path idempotently;
+- the immediately previous committed path/filename is included in the request so a second rename of the same tracked file can safely correct the row without looking like an unrelated archive collision.
+
+Focused verification includes the exact Oslo sample, live schema shapes for Category/Tag/Language, Notes provenance idempotency, existing-language preservation, and repeat-rename reconciliation.

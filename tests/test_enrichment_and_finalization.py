@@ -61,10 +61,13 @@ def test_enrichment_updates_combination_and_reasons(enrich_env):
     service = enrich_env["service"]
     tid = enrich_env["tracking_id"]
 
-    # Initial proposed name is unsplit combination (stem + ID)
+    # Exact primary content is named canonically even while the combination
+    # flag keeps the file routed for later splitting.
     f_init = service.get_file(tid)
     assert "_ID-c0ffee01" in f_init["proposed_filename"]
-    assert "JRM and class" in f_init["proposed_filename"]
+    assert f_init["proposed_filename"] == (
+        "2011-05-24_KKS_Jaya-Radha-Madhava_Villa-Vrindavan-it_ID-c0ffee01.mp3"
+    )
     assert f_init["needs_review"] == 1
 
     # Apply enrichment from Tool 5 (Audio Splitter) marking split complete

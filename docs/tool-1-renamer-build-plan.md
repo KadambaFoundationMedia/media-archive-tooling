@@ -834,3 +834,13 @@ Tool 1 does not:
 - use folder location as workflow state
 
 Those responsibilities belong to other tools and the future orchestrator.
+
+## 36. User-directed practical naming correction (2026-09-17)
+
+This post-acceptance correction is authoritative where it differs from earlier combination fallback behavior:
+
+- dotted scripture aliases such as `S.B.` are valid evidence for `SB`;
+- scripture punctuation is normalized to hyphens in filenames (`SB-1-19-31`);
+- a secondary combination marker such as `with Radha Madhava` sets combination routing for Tools 5/6 but does not discard an exact primary class reference;
+- generated and fallback filenames may contain only ASCII letters, digits, hyphens, underscores, and the single extension dot; parentheses and other punctuation are forbidden;
+- `KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA` finalizes as `2011-08-29_KKS_SB-1-19-31_Oslo-no.wma` while remaining marked as a combination.
