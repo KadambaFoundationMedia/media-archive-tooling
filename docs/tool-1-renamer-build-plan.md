@@ -844,3 +844,4 @@ This post-acceptance correction is authoritative where it differs from earlier c
 - a secondary combination marker such as `with Radha Madhava` sets combination routing for Tools 5/6 but does not discard an exact primary class reference;
 - generated and fallback filenames may contain only ASCII letters, digits, hyphens, underscores, and the single extension dot; parentheses and other punctuation are forbidden;
 - `KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA` finalizes as `2011-08-29_KKS_SB-1-19-31_Oslo-no.wma` while remaining marked as a combination.
+- archive-language context may establish a country without establishing a city: `DUBEN` supplies Czech Republic / `cz`, while location remains unresolved for later tools or human review.

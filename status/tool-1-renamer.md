@@ -223,3 +223,8 @@ Merge PR #5 after required CI, then re-run `./scripts/review-tool-1.sh` locally 
 - Added dotted `S.B.` recognition, punctuation-safe fallback rendering, strict special-character validation, and exact primary-class naming for combination recordings.
 - Combination detection/routing remains intact for downstream Tools 5/6.
 - Added an exact regression for the Oslo sample and updated the older combination regression to the user-directed behavior.
+
+### 2026-09-17 — Czech month country-context correction
+- The second practical sample showed that Tool 1 used `DUBEN` for April but discarded its Czech-language country evidence.
+- Tool 1 now resolves country `Czech Republic` / `cz` from this folder context without inventing a location.
+- Exact regression: `02 KKS. SB. 3.1.20.mp3` in `KKS DUBEN 2008 MP3` proposes `2008-04-DD_KKS_SB-3-1-20_cz.mp3`; location remains unresolved for later audio processing or human review.
