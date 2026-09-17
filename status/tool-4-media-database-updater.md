@@ -10,7 +10,7 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-4-implementation`
 Builder implementation commit: `fb9cb72eebeb1e23c2dd7888d240a32638740088`
@@ -293,4 +293,102 @@ All third-round review findings R-023 through R-030 and requirement clarificatio
 
 ## Next milestone
 
-Independent fourth review of PR #27 (`tool-4-implementation`). All findings R-023 through R-030 and Q-001 are addressed and verified.
+Builder correction round for the fourth independent review of PR #27 (`tool-4-implementation`).
+
+## Fourth independent review outcome
+
+PR #27 is **not approved and must not be merged yet**. The correction branch is substantially improved and its automated suites are green, but the independent review found that the authoritative Tool 1–4 sequence and fresh Tool 2 write gate are not yet enforced in all production paths. The new evaluation evidence also has invalid commit provenance.
+
+Verification at branch head `bbb67ad136036785649a9dd819fed0e500cf89f3`:
+
+- full local suite: **327 passed, 2 warnings**;
+- focused Tool 4 plus access-boundary suites: **106 passed, 2 warnings**;
+- helper syntax: PASS;
+- package build: `uv build --offline` PASS;
+- GitHub Actions exact-head check: PASS — https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35234371626/job/105246376186;
+- `git diff --check origin/main...HEAD`: FAILS because `engine.py` and `commit_service.py` contain an extra blank line at EOF;
+- working tree clean and synchronized with `origin/tool-4-implementation` before this status update.
+
+Passing tests and CI are not sufficient because the current tests encode or omit the production-path failures below.
+
+### R-031 — Existing-row updates and retries do not use a fresh Tool 2 gate
+
+The authoritative amendment requires Tool 4 to use Tool 2's fresh current review as the create-vs-update gate. The create path invokes `review_file(..., force_refresh=True)`, but the update path does not.
+
+Current behavior:
+
+- `MediaDatabaseUpdaterService.build_sync_request()` reuses `registry.get_media_db_review()` whenever a persisted review exists and calls Tool 2 only when no record exists;
+- `execute_sync()` accepts that stored `EXISTING_MEDIA_MATCH` and directly fetches/patches the selected row;
+- `retry_pending()` claims to use fresh live state but simply rebuilds from the same persisted review;
+- therefore a stale match can authorize an update even if a fresh Tool 2 candidate query would now return multiple candidates, a conflict, unavailable/incomplete data, or a different association.
+
+Required correction:
+
+- before every commit mutation, invoke Tool 2 with `force_refresh=True` and validate its typed complete live-current result;
+- use that fresh result as the actual create/update/block gate and update the request/audit provenance from it;
+- for an existing-row update, require the fresh result to confirm the same selected row, or require a still-valid explicit human association precondition;
+- block on changed association, incomplete/unavailable reads, missing provenance/timestamp, or any non-authorizing decision;
+- make `retry_pending()` perform this same fresh gate rather than relying on persisted audit evidence;
+- add regressions where a stored `EXISTING_MEDIA_MATCH` changes to every blocking Tool 2 result, changes row ID, and remains a valid same-row match.
+
+### R-032 — The required Tool 1 → Tool 2/3 → final Tool 1 → Tool 4 production flow is not composed
+
+The access-boundary test covers only `BatchExecutor`. It does not prove the real CLI/review-portal path.
+
+Current behavior:
+
+- `run_renamer()` scans and optionally commits one pass; it does not invoke Tool 2 and Tool 3 before producing/committing the final filename;
+- `RenameCommitService` defaults to `RenameMode.INITIAL` but unconditionally records and triggers Tool 4 from both commit paths;
+- the review portal constructs that default-initial commit service, so approving an initial/intermediate rename can call Tool 4;
+- the older updater tests explicitly expect an initial-mode `RenameCommitService` commit to call Tool 4, contradicting the authoritative amendment and newer boundary test.
+
+Required correction:
+
+- provide one production orchestration path implementing the documented sequence: initial Tool 1 state, Tool 2 review, Tool 3 corroboration, Tool 1 final proposal/commit, then one Tool 4 call;
+- ensure both batch and review-portal commit services carry the real rename stage/mode and never enqueue/call Tool 4 for `INITIAL` or intermediate commits;
+- ensure later finalized renames enqueue exactly one new Tool 4 synchronization;
+- replace contradictory tests and add end-to-end CLI and portal tests proving exact call order and zero Tool 4 calls before the final committed filename.
+
+### R-033 — Tool 2 and human-association contracts remain only partially validated
+
+R-023 required validating the returned object as the Tool 2 result contract rather than accepting arbitrary attribute bags. `_commit_create()` still uses direct attribute access/`getattr`, and the regressions intentionally use `MagicMock` objects rather than the real `MediaDatabaseReviewResult`. An arbitrary object with the expected attribute names can therefore authorize create without model validation, tracking-ID binding, timestamp freshness, or provenance validation.
+
+Association approval has a similar gap: `reviewed_precondition_filename` is optional and is never compared with the live row. The code validates only that two submitted row IDs equal the fetched row ID. A previously reviewed row whose identifying content changed can still be updated under the stored approval.
+
+Required correction:
+
+- parse/validate fresh Tool 2 responses through the actual `MediaDatabaseReviewResult` contract;
+- require matching tracking ID, valid decision enum, complete live-current flags, non-empty live-read timestamp, and the required provenance/row identity;
+- require a meaningful association precondition snapshot/fingerprint, not merely repeated row IDs, and revalidate it against the live row before update;
+- block missing or changed association preconditions and add real-model tests instead of only `MagicMock` attribute bags.
+
+### R-034 — Evaluation provenance and integrated-flow claim are invalid
+
+`docs/eval_summary_tool4.json` and the handoff status report `faea43627671f373b750adc3c77bdc3c066814e1` as the evaluated clean commit. That object does not exist in the fetched repository and is not an ancestor of PR head `bbb67ad`. The evidence commit `8450141` descends directly from `2075419`, so the recorded commit cannot be reproduced from the PR history.
+
+The evaluation runner also records `LIVE_CURRENT` through `getattr(t2_provider, "state", "LIVE_CURRENT")`; the fallback invents a healthy state rather than deriving and validating one consistent state from all typed Tool 2 results. Finally, the runner performs an `INITIAL` Tool 1 scan, Tool 2/3 enrichment, then Tool 4 preview without a final Tool 1 render/commit stage, so it does not execute the integrated flow it claims to evaluate.
+
+Required correction:
+
+- remove the invalid evidence and rerun only after R-031 through R-033 are committed and pushed;
+- run from a clean, pushed commit that exists in PR #27 history and record that exact SHA;
+- derive database state/read timestamps from validated Tool 2 results and fail the evaluation if results are inconsistent, missing, stale, partial, or unavailable;
+- run the real integrated flow through final Tool 1 proposal/commit semantics before Tool 4 preview, while continuing to prohibit bulk production writes;
+- record portable evidence without misleading local-path provenance and commit generated evidence separately.
+
+### R-035 — Final handoff assertions must match the exact final head
+
+The current status claims `git diff --check` passed, but it reports extra EOF blank lines in:
+
+- `src/media_archive_tooling/media_db_updater/engine.py`;
+- `src/media_archive_tooling/renamer/commit_service.py`.
+
+The recorded Actions run `35233454978` belongs to evidence commit `8450141`, not final handoff head `bbb67ad`. The exact head did subsequently pass run `35234371626`, but that was not the run recorded by the Builder.
+
+Required correction:
+
+- remove the whitespace errors;
+- run all verification commands again after all corrections;
+- commit implementation first, run the corrected evaluation from that real clean commit, commit evidence next, and update status in a final handoff commit;
+- wait for and record the Actions check attached to that exact final handoff SHA;
+- return to `READY_FOR_REVIEW` only after the branch, status, evaluation SHA, test counts, and exact-head CI all agree.
