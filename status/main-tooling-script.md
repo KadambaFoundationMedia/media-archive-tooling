@@ -136,3 +136,15 @@ order-dependent.
 
 No open review findings remain. PR #40 is approved for a normal merge commit
 after the required check passes on the final review/status head.
+
+## Post-acceptance documentation maintenance — 2026-09-19
+
+The root README was refocused on the project summary and practical Main Tooling
+Script instructions. Detailed Builder workflow, branch/PR protocol,
+architecture, Baserow authority, CI, and per-tool reference material was moved
+to `docs/project-reference.md`.
+
+This is a documentation-only reorganization on branch
+`docs/readme-main-script-focus`. It does not change accepted tool behavior or
+the Main Tooling Script interface. The Builder should use `BUILDER.md` and the
+new project-reference document for the moved implementation-process context.
