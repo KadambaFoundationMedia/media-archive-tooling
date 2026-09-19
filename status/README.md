@@ -15,6 +15,15 @@ status/tool-3-travel-schedule-reviewer.md
 ...
 ```
 
+The unnumbered orchestration entry point uses the explicit exception:
+
+```text
+status/main-tooling-script.md
+docs/main-tooling-script-build-plan.md
+```
+
+It is not Tool 12 and uses branch `main-tooling-script-implementation`.
+
 The implementation model updates the relevant status file throughout the build. Finalized build plans remain read-only to the implementation model.
 
 If a build-plan requirement is unclear, contradictory, impossible as written, or conflicts with another finalized requirement, record it in the tool status file under `Open questions / contradictions` and do not silently change the specification.

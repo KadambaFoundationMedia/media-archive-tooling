@@ -6,6 +6,8 @@ Do not rely on previous chat history. The repository is the persistent project m
 
 ## Start / resume command
 
+### Numbered tools
+
 When the user says:
 
 ```text
@@ -37,6 +39,32 @@ and pushes/tracks that branch before implementation begins. The user therefore k
 If the helper updates or switches the repository, it restarts itself and reads the newly current files.
 
 If shell execution is unavailable, perform the same procedure manually using the sync and branch rules below before reading any project files.
+
+### Unnumbered Main Tooling Script
+
+When the user says:
+
+```text
+BUILD MAIN SCRIPT
+```
+
+this refers to the unnumbered project orchestrator, not Tool 12. Synchronize with GitHub using the same mandatory rules in this file, then create or resume:
+
+```text
+main-tooling-script-implementation
+```
+
+Read in this order:
+
+1. `BUILDER.md`
+2. `status/main-tooling-script.md`
+3. `docs/main-tooling-script-build-plan.md`
+4. `docs/project-implementation-architecture.md`
+5. `docs/implementation-protocol.md`
+6. `docs/planner-builder-coordination.md`
+7. referenced Tool 1–4 plans/status and relevant code/tests
+
+The numeric `builder-start.sh` helper does not select the unnumbered Main Tooling Script. Follow its synchronization/protected-branch checks manually. All other branch, PR, CI, status, commit/push, and review rules in this file apply unchanged.
 
 ## Mandatory start-of-work repository sync
 
