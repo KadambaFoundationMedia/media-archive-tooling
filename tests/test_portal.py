@@ -57,27 +57,36 @@ def test_dashboard_hides_tracking_token_from_proposed_filename():
     assert "deadbeef" not in display["display_proposed_filename"]
 
 
-def test_portal_file_detail_and_update():
-    from media_archive_tooling.review_portal.app import get_registry
-    client = TestClient(app)
-    reg = get_registry()
-    files = reg.list_files()
-    if files:
-        f = files[0]
-        tid = f["tracking_id"]
-        res = client.get(f"/file/{tid}")
-        assert res.status_code == 200
+def test_portal_file_detail_and_update(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_detail.db")
+    source = tmp_path / "detail_media.mp3"
+    source.write_bytes(b"detail media audio")
+    proposal = make_portal_proposal(source, "detail01", RenameMode.INITIAL, needs_review=True)
+    reg.save_proposal(proposal)
+    configure_review_context(
+        registry=reg,
+        media_db_updater_service=MagicMock(),
+        review_root=tmp_path,
+    )
 
-        res_post = client.post(f"/file/{tid}/update", data={
-            "action": "approve",
-            "when_val": f["when_val"],
-            "what_val": f["what_val"],
-            "where_val": f["where_val"],
-            "proposed_filename": f["proposed_filename"]
-        }, follow_redirects=True)
-        assert res_post.status_code == 200
-        updated = reg.get_file(tid)
-        assert updated["status"] == "approved"
+    client = TestClient(app)
+    files = reg.list_files()
+    assert len(files) == 1
+    f = files[0]
+    tid = f["tracking_id"]
+    res = client.get(f"/file/{tid}")
+    assert res.status_code == 200
+
+    res_post = client.post(f"/file/{tid}/update", data={
+        "action": "approve",
+        "when_val": f["when_val"],
+        "what_val": f["what_val"],
+        "where_val": f["where_val"],
+        "proposed_filename": f["proposed_filename"]
+    }, follow_redirects=True)
+    assert res_post.status_code == 200
+    updated = reg.get_file(tid)
+    assert updated["status"] == "approved"
 
 
 def test_batch_approve_uses_application_service(monkeypatch):

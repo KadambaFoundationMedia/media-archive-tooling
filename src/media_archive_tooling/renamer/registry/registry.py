@@ -175,6 +175,16 @@ class LocalRegistry:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_rename_history(self, tracking_id: str) -> List[Dict[str, Any]]:
+        """Return all committed renames for a tracking ID in chronological order."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM rename_history WHERE tracking_id = ? ORDER BY id ASC",
+                (tracking_id,),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
     def list_files(self, status: Optional[str] = None, needs_review: Optional[bool] = None) -> List[Dict[str, Any]]:
         query = "SELECT * FROM files WHERE 1=1"
         params = []

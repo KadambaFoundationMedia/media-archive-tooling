@@ -50,7 +50,13 @@ class MediaDatabaseUpdaterService:
         self.renamer_service = renamer_service
         self.engine = MediaDatabaseUpdateEngine(write_adapter=write_adapter, tool2_service=tool2_service)
 
-    def build_sync_request(self, tracking_id: str, force_refresh: bool = False) -> Optional[MediaDbSyncRequest]:
+    def build_sync_request(
+        self,
+        tracking_id: str,
+        force_refresh: bool = False,
+        projected_filename: Optional[str] = None,
+        projected_path: Optional[str] = None,
+    ) -> Optional[MediaDbSyncRequest]:
         """Construct a structured MediaDbSyncRequest from local registry state."""
         file_rec = self.registry.get_file(tracking_id)
         if not file_rec:
@@ -201,10 +207,13 @@ class MediaDatabaseUpdaterService:
             reviewer_notes = prior_req.get("reviewer_notes")
             is_human_approved = bool(prior_req.get("is_human_approved", False))
 
+        eff_current_fn = projected_filename or file_rec["current_filename"]
+        eff_current_path = projected_path or file_rec["current_path"]
+
         return MediaDbSyncRequest(
             tracking_id=tracking_id,
-            current_filename=file_rec["current_filename"],
-            current_path=file_rec["current_path"],
+            current_filename=eff_current_fn,
+            current_path=eff_current_path,
             original_filename=file_rec.get("original_filename"),
             original_path=file_rec.get("original_path"),
             previous_filename=previous_fn or None,
@@ -316,9 +325,21 @@ class MediaDatabaseUpdaterService:
         return self.synchronize(tracking_id, commit=commit, request=req)
 
 
-    def preview(self, tracking_id: str, request: Optional[MediaDbSyncRequest] = None) -> MediaDbSyncResult:
+    def preview(
+        self,
+        tracking_id: str,
+        request: Optional[MediaDbSyncRequest] = None,
+        projected_filename: Optional[str] = None,
+        projected_path: Optional[str] = None,
+    ) -> MediaDbSyncResult:
         """Dry-run preview computing field diffs and actions without performing Baserow mutations."""
-        return self.synchronize(tracking_id, commit=False, request=request)
+        req = request or self.build_sync_request(
+            tracking_id,
+            force_refresh=False,
+            projected_filename=projected_filename,
+            projected_path=projected_path,
+        )
+        return self.synchronize(tracking_id, commit=False, request=req)
 
     def synchronize(
         self,

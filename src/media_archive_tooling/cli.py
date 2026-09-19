@@ -18,6 +18,8 @@ from .travel_reviewer.models import TravelReviewDecision
 from .travel_reviewer.reference_store import TravelReferenceStore
 from .travel_reviewer.service import TravelScheduleReviewService, validate_tool3_review_result
 from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
+from .orchestrator.models import WorkflowType
+from .orchestrator.service import create_main_tooling_service, MainToolingScriptService
 
 
 def create_media_db_updater_service(
@@ -595,9 +597,72 @@ def run_media_db_update(args):
                 print(f"    Conflicts: {', '.join(r.conflicts)}")
 
 
+def run_main_script(args):
+    """Main Tooling Script entry point (media-archive run)."""
+    config = load_config()
+    targets = args.targets
+    dry_run = getattr(args, "dry_run", False)
+    verbose = getattr(args, "verbose", False)
+    workflow_str = getattr(args, "workflow", "all")
+    reg_path = getattr(args, "registry_path", None)
+    log_file = getattr(args, "log_file", None)
+    review_portal = getattr(args, "review_portal", False)
+    host = getattr(args, "host", "127.0.0.1")
+    port = getattr(args, "port", 8000)
+
+    try:
+        workflow = WorkflowType(workflow_str)
+    except ValueError:
+        print(f"Error: Invalid workflow '{workflow_str}'. Choose from: all, renamer, processing", file=sys.stderr)
+        sys.exit(1)
+
+    service = getattr(args, "orchestrator_service", None)
+    if service is None:
+        service = create_main_tooling_service(
+            config=config,
+            registry_path=reg_path,
+            log_file=log_file,
+            workflow=workflow,
+            dry_run=dry_run,
+            verbose=verbose,
+            tool2_service=getattr(args, "tool2_service", None),
+            travel_service=getattr(args, "travel_service", None),
+            tool4_service=getattr(args, "tool4_service", None),
+        )
+
+    summary = service.run(targets)
+
+    if review_portal:
+        import uvicorn
+        from .review_portal.app import app as portal_app, configure_review_context
+        configure_review_context(
+            registry=service.registry,
+            media_db_service=service.tool2_service,
+            media_db_updater_service=service.tool4_service,
+        )
+        print(f"\nStarting review portal on http://{host}:{port}/ ...")
+        uvicorn.run(portal_app, host=host, port=port, log_level="info")
+
+    if summary.exit_code != 0:
+        sys.exit(summary.exit_code)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Main Tooling Script orchestrator command
+    run_parser = subparsers.add_parser("run", help="Run Main Tooling Script orchestrator (Phase A: Tools 1–4)")
+    run_parser.add_argument("targets", nargs="+", help="Target media file(s) and/or folder(s)")
+    run_parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=False, help="Perform dry-run preview without modifying filesystem or database")
+    run_parser.add_argument("--verbose", action="store_true", default=False, help="Show detailed output in terminal")
+    run_parser.add_argument("--workflow", choices=["all", "renamer", "processing"], default="all", help="Workflow selection: all (default), renamer, processing")
+    run_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    run_parser.add_argument("--log-file", help="Custom persistent log file path (default: .renamer/media-archive-tooling.log)")
+    run_parser.add_argument("--review-portal", action="store_true", default=False, help="Launch review portal web server after run")
+    run_parser.add_argument("--host", choices=["127.0.0.1", "localhost"], default="127.0.0.1", help="Loopback host for review portal (default: 127.0.0.1)")
+    run_parser.add_argument("--port", type=int, default=8000, help="Port for review portal (default: 8000)")
+    run_parser.set_defaults(func=run_main_script)
 
     # Tool 4: Media Database Updater command
     media_update_parser = subparsers.add_parser("media-db-update", help="Run Tool 4: Media Database Updater")

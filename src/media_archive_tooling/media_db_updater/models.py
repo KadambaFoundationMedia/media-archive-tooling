@@ -267,3 +267,4 @@ class MediaDbSyncResult(BaseModel):
     last_attempt_at: Optional[str] = None
     error_message: Optional[str] = None
     review_required: bool = False
+    live_row: Optional[Dict[str, Any]] = None
