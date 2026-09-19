@@ -31,18 +31,35 @@ class RenamerApplicationService:
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
         return self.registry.get_file(tracking_id)
 
-    def list_files(self, filter_mode: str = "all") -> Dict[str, Any]:
+    def list_files(self, filter_mode: str = "evaluation") -> Dict[str, Any]:
         all_files = self.registry.list_files()
         total_count = len(all_files)
-        review_count = sum(1 for f in all_files if f["needs_review"])
-        committed_count = sum(1 for f in all_files if f["status"] == "committed")
 
-        if filter_mode == "review":
-            display_files = [f for f in all_files if f["needs_review"]]
+        def requires_evaluation(f: Dict[str, Any]) -> bool:
+            if f.get("needs_review"):
+                return True
+            if f.get("status") in ("blocked", "deferred", "review_required", "conflict", "failed"):
+                return True
+            reasons = f.get("review_reasons")
+            if reasons and len(reasons) > 0:
+                return True
+            sync_rec = self.registry.get_media_db_sync(f["tracking_id"])
+            if sync_rec and sync_rec.get("sync_status") in ("PENDING_SYNC", "FAILED_RETRYABLE", "FAILED_FATAL", "BLOCKED", "CONFLICT"):
+                return True
+            return False
+
+        evaluation_files = [f for f in all_files if requires_evaluation(f)]
+        review_count = len(evaluation_files)
+        committed_count = sum(1 for f in all_files if f.get("status") == "committed" and not requires_evaluation(f))
+
+        if filter_mode in ("evaluation", "review", "active"):
+            display_files = evaluation_files
         elif filter_mode == "committed":
-            display_files = [f for f in all_files if f["status"] == "committed"]
-        else:
+            display_files = [f for f in all_files if f.get("status") == "committed"]
+        elif filter_mode == "all":
             display_files = all_files
+        else:
+            display_files = evaluation_files
 
         return {
             "files": display_files,

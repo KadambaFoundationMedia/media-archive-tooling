@@ -101,9 +101,9 @@
     </div>
 
     <div class="controls">
-        <a href="/?filter=all" class="btn {% if current_filter == 'all' %}active{% endif %}">All Files</a>
-        <a href="/?filter=review" class="btn {% if current_filter == 'review' %}active{% endif %}">Needs Review ({{ review_count }})</a>
-        <a href="/?filter=committed" class="btn {% if current_filter == 'committed' %}active{% endif %}">Committed</a>
+        <a href="/?filter=evaluation" class="btn {% if current_filter in ('evaluation', 'review', 'active') %}active{% endif %}">Active Evaluation Queue ({{ review_count }})</a>
+        <a href="/?filter=all" class="btn {% if current_filter == 'all' %}active{% endif %}">All Files ({{ total_count }})</a>
+        <a href="/?filter=committed" class="btn {% if current_filter == 'committed' %}active{% endif %}">Committed ({{ committed_count }})</a>
     </div>
 
     {% if batch_message %}<div class="feedback feedback-success">{{ batch_message }}</div>{% endif %}
@@ -132,7 +132,15 @@
                 <td><span class="badge badge-{{ f.parser_result.when.state }}">{{ f.parser_result.when.state }}</span><div class="field-value">{{ f.when_val }}</div></td>
                 <td><span class="badge badge-{{ f.parser_result.what.state }}">{{ f.parser_result.what.state }}</span><div class="field-value">{{ f.what_val or "—" }}</div></td>
                 <td><span class="badge badge-{{ f.parser_result.where.state }}">{{ f.parser_result.where.state }}</span><div class="field-value">{{ f.where_val or "—" }}</div></td>
-                <td><span style="font-weight: 500;">{{ f.status }}</span>{% if f.needs_review %}<div class="status-review">NEEDS REVIEW</div>{% endif %}</td>
+                <td>
+                    <span style="font-weight: 500;">{{ f.status }}</span>
+                    {% if f.needs_review %}<div class="status-review">NEEDS REVIEW</div>{% endif %}
+                    {% if f.review_reasons %}
+                        <div style="font-size: 11px; color: #dc2626; margin-top: 3px; max-width: 250px; overflow-wrap: anywhere;">
+                            {{ f.review_reasons|join('; ') }}
+                        </div>
+                    {% endif %}
+                </td>
                 <td><a href="/file/{{ f.tracking_id }}" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px; white-space: nowrap;">Inspect / Review</a></td>
             </tr>
             {% else %}

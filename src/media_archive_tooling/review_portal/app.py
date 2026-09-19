@@ -155,7 +155,7 @@ def healthz():
 @app.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
-    filter: str = "all",
+    filter: str = "evaluation",
     batch_message: str = "",
     batch_error: str = "",
 ):

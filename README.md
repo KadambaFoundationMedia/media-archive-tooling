@@ -174,3 +174,68 @@ Tool 2's accepted read-only lookup and reconciliation behavior remains approved.
 The accepted implementation resolved findings R-001 through R-015. Required GitHub CI passed with **157 tests**, helper-script validation, and package build success. A fresh live read-only evaluation across the 260 representative sample files produced 1 confirmed existing match, 20 probable matches, 99 multiple-candidate cases, 39 new-media candidates, 32 insufficient-evidence cases, 69 conflicts, and 0 database failures.
 
 The final Tool 1 ↔ Tool 2 acceptance smoke test verified the supported automatic enrichment path. The confirmed live match for Baserow row `2335` changed the Tool 1 proposal from `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-f7903be1.mp3` to `2015-08-27_KKS_SB-3-6-6-class_Sweden-se_ID-f7903be1.mp3`. Candidate-only metadata from unconfirmed results was not copied into filenames, and valid completed no-match decisions propagated `baserow_check_complete=True` without inventing title/location metadata.
+
+### Tool 3 — Travel Schedule Reviewer
+
+Status: **ACCEPTED**
+
+Build plan: `docs/tool-3-travel-schedule-reviewer-build-plan.md`
+
+Implementation status and acceptance record: `status/tool-3-travel-schedule-reviewer.md`
+
+Implementation walkthrough: `docs/tool-3-travel-schedule-reviewer-walkthrough.md`
+
+Tool 3 provides verified travel-schedule lookup against an immutable, offline reference store (`travel_schedule.json`) bootstrapped through Tool 2. It requires zero live Baserow network access, validates SHA-256 integrity upon loading, corroborates or proposes WHEN/WHERE location metadata, and detects date/location travel conflicts.
+
+### Tool 4 — Media Database Updater
+
+Status: **ACCEPTED**
+
+Build plan: `docs/tool-4-media-database-updater-build-plan.md`
+
+Implementation status and acceptance record: `status/tool-4-media-database-updater.md`
+
+Implementation walkthrough: `docs/tool-4-media-database-updater-walkthrough.md`
+
+Tool 4 is the sole authorized writer to the Baserow Media database. It is invoked only after Tool 1 commits the final filename for that stage. It performs fresh pre-write precondition checks via Tool 2, computes minimal field PATCH diffs, manages durable `PENDING_SYNC` outbox state, and updates row metadata including `media_archive_path`, `Filename`, `Place, location`, `Tag`, and provenance in `Notes`.
+
+### Main Tooling Script
+
+Status: **READY_FOR_REVIEW**
+
+Build plan: `docs/main-tooling-script-build-plan.md`
+
+Implementation status: `status/main-tooling-script.md`
+
+Implementation walkthrough: `docs/main-tooling-script-walkthrough.md`
+
+The Main Tooling Script (`media-archive run`) is the unnumbered CLI orchestrator that coordinates the complete Phase A pipeline:
+```text
+Tool 1 initial interpretation
+→ Tool 2 live read-only Media review
+→ Tool 3 verified travel-schedule review
+→ Tool 1 final proposal and immediate live commit when allowed
+→ Tool 4 synchronization (preview or live write)
+```
+
+#### Usage
+
+```sh
+# Live mode (default, operates directly on files, no prompts)
+media-archive run /path/to/media/files
+
+# Dry-run preview (no disk or database changes)
+media-archive run /path/to/media/files --dry-run
+
+# Verbose output
+media-archive run /path/to/media/files --verbose
+
+# Specific workflow (all default, renamer, processing)
+media-archive run /path/to/media/files --workflow all
+```
+
+- Accepts a single file, multiple files, directories recursively, and mixed targets.
+- Skips unsupported non-media files with non-fatal notices.
+- Persists all execution evidence to `.renamer/media-archive-tooling.log`.
+- Routes items requiring human attention to the review portal Active Evaluation Queue (`/`).
+
