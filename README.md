@@ -20,29 +20,26 @@ not yet implemented.
 
 ## Quick start
 
-Requirements:
-
-- Python 3.12;
-- [`uv`](https://docs.astral.sh/uv/);
-- a local `.env` based on `.env.example` for live Baserow access.
-
-Prepare the locked environment from the repository root:
-
-```sh
-uv sync --extra dev --frozen
-```
+Use the included launcher from the repository folder. It performs the required
+first-time setup automatically. You do not need to install or operate Python
+development tools yourself.
 
 Preview one file without renaming it or writing to Baserow:
 
 ```sh
-uv run media-archive run "/path/to/recording.mp3" --dry-run
+./run-media-archive.sh "/path/to/recording.mp3" --dry-run
 ```
 
 Process that file live:
 
 ```sh
-uv run media-archive run "/path/to/recording.mp3"
+./run-media-archive.sh "/path/to/recording.mp3"
 ```
+
+On its first run—or after the project dependencies change—the launcher prepares
+the private application environment. This may require an internet connection
+and can take a little longer. Later runs start directly. Live Baserow use also
+requires the project `.env` configuration.
 
 > **Important:** live mode is the default. Without `--dry-run`, eligible files
 > are renamed immediately and Tool 4 may write to Baserow. There is no
@@ -53,7 +50,7 @@ uv run media-archive run "/path/to/recording.mp3"
 The main command accepts one or more files and directories:
 
 ```sh
-uv run media-archive run <target> [<target> ...] [options]
+./run-media-archive.sh <target> [<target> ...] [options]
 ```
 
 Directories are scanned recursively. Files, directories, and mixed targets may
@@ -64,13 +61,13 @@ be supplied in the same command.
 Preview a directory recursively:
 
 ```sh
-uv run media-archive run "/path/to/archive-folder" --dry-run
+./run-media-archive.sh "/path/to/archive-folder" --dry-run
 ```
 
 Preview several explicit files:
 
 ```sh
-uv run media-archive run \
+./run-media-archive.sh \
   "/path/to/first.mp3" \
   "/path/to/second.wma" \
   --dry-run
@@ -79,13 +76,13 @@ uv run media-archive run \
 Run with detailed per-stage output:
 
 ```sh
-uv run media-archive run "/path/to/archive-folder" --dry-run --verbose
+./run-media-archive.sh "/path/to/archive-folder" --dry-run --verbose
 ```
 
 Use explicit registry and log locations:
 
 ```sh
-uv run media-archive run "/path/to/archive-folder" \
+./run-media-archive.sh "/path/to/archive-folder" \
   --dry-run \
   --registry-path "/path/to/registry.db" \
   --log-file "/path/to/media-archive-tooling.log"
@@ -94,7 +91,7 @@ uv run media-archive run "/path/to/archive-folder" \
 Start the localhost review portal after processing:
 
 ```sh
-uv run media-archive run "/path/to/archive-folder" \
+./run-media-archive.sh "/path/to/archive-folder" \
   --dry-run \
   --review-portal
 ```
@@ -118,7 +115,7 @@ state appear in its active queue.
 | `--host HOST` | Select `127.0.0.1` or `localhost` as the loopback portal host. |
 | `--port PORT` | Select the portal port; the default is `8000`. |
 
-Run `uv run media-archive run --help` for the installed command reference.
+Run `./run-media-archive.sh --help` for the complete command reference.
 
 ### What the runner reports
 
@@ -157,7 +154,7 @@ remains recoverable.
 To open the review portal later against an existing registry:
 
 ```sh
-uv run media-archive review --registry-path "/path/to/registry.db"
+./run-media-archive.sh --review-only --registry-path "/path/to/registry.db"
 ```
 
 The older Tool 1 review helper remains available for a standalone dry-run and
