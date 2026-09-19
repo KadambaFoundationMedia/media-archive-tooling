@@ -1,240 +1,178 @@
-# media-archive-tooling
+# Media Archive Tooling
 
-Tools for processing media files in the archive.
+Media Archive Tooling is a local Python application for inspecting, renaming,
+reviewing, and registering archive media. It provides a command-line runner for
+individual files and recursive batches, plus a localhost review portal for
+items that need human attention.
 
-## Builder quick start
+The accepted Phase A workflow is:
 
-The implementation model has one stable entry point: `BUILDER.md`.
+```text
+Tool 1: interpret filename
+→ Tool 2: review the live Baserow Media database (read-only)
+→ Tool 3: check the verified travel schedule
+→ Tool 1: create and commit the final filename
+→ Tool 4: create, update, or preserve the Baserow Media row
+```
 
-To start or resume a tool locally, run:
+Tools 1–4 and the Main Tooling Script are accepted. Tools 5–11 are planned but
+not yet implemented.
+
+## Quick start
+
+Requirements:
+
+- Python 3.12;
+- [`uv`](https://docs.astral.sh/uv/);
+- a local `.env` based on `.env.example` for live Baserow access.
+
+Prepare the locked environment from the repository root:
 
 ```sh
-./scripts/builder-start.sh <tool-number>
+uv sync --extra dev --frozen
 ```
 
-Examples:
+Preview one file without renaming it or writing to Baserow:
 
 ```sh
-./scripts/builder-start.sh 1
-./scripts/builder-start.sh 2
+uv run media-archive run "/path/to/recording.mp3" --dry-run
 ```
 
-The helper synchronizes the repository, detects the tool's current status, and prints the exact files to read plus the action required for that state. The user can therefore simply tell the implementation model:
+Process that file live:
 
-```text
-BUILD TOOL 1
+```sh
+uv run media-archive run "/path/to/recording.mp3"
 ```
 
-or:
+> **Important:** live mode is the default. Without `--dry-run`, eligible files
+> are renamed immediately and Tool 4 may write to Baserow. There is no
+> confirmation prompt.
 
-```text
-BUILD TOOL 2
+## Main Tooling Script
+
+The main command accepts one or more files and directories:
+
+```sh
+uv run media-archive run <target> [<target> ...] [options]
 ```
 
-The builder must run the helper command (or follow `BUILDER.md` manually if shell execution is unavailable). It must not depend on previous chat history.
+Directories are scanned recursively. Files, directories, and mixed targets may
+be supplied in the same command.
 
-## Protected `main`, implementation branches, and pull requests
+### Common examples
 
-`main` is protected by the active GitHub ruleset **Protect main**. Normal implementation work is no longer performed directly on `main`.
+Preview a directory recursively:
 
-Each tool uses a durable implementation branch with the standard name:
-
-```text
-tool-<number>-implementation
+```sh
+uv run media-archive run "/path/to/archive-folder" --dry-run
 ```
 
-When `./scripts/builder-start.sh <number>` is started from `main` for a mutable tool state, the helper automatically creates or resumes that branch and restarts there. The user-facing `BUILD TOOL <number>` command therefore does not change.
+Preview several explicit files:
 
-Implementation, correction, tests, walkthrough, and status changes remain on the tool branch through review cycles. A pull request from the tool branch to `main` is the review surface, and planning/review findings are committed back to the same branch rather than merging partial work into `main`.
+```sh
+uv run media-archive run \
+  "/path/to/first.mp3" \
+  "/path/to/second.wma" \
+  --dry-run
+```
 
-## Project implementation architecture
+Run with detailed per-stage output:
 
-The project uses a **local, reusable Python 3.12 application/package** with two first-class interfaces: a CLI for automation/testing/batch work and a **localhost browser-based review portal** for human review and corrections.
+```sh
+uv run media-archive run "/path/to/archive-folder" --dry-run --verbose
+```
 
-Project-wide architecture: `docs/project-implementation-architecture.md`
+Use explicit registry and log locations:
 
-Planner / Builder coordination: `docs/planner-builder-coordination.md`
+```sh
+uv run media-archive run "/path/to/archive-folder" \
+  --dry-run \
+  --registry-path "/path/to/registry.db" \
+  --log-file "/path/to/media-archive-tooling.log"
+```
 
-The implementation uses `uv` for Python environment/dependency management. Tool logic remains callable programmatically for the future orchestrator; CLI and review UI both call the same Python application services. The initial review portal uses FastAPI with server-rendered Jinja2 + HTMX so no Xcode/Swift or Node/React toolchain is required for v1. A packaged desktop shell can be evaluated later without moving archive logic out of Python.
+Start the localhost review portal after processing:
 
-## Baserow data authority
+```sh
+uv run media-archive run "/path/to/archive-folder" \
+  --dry-run \
+  --review-portal
+```
 
-The mutable Baserow Media database is continuously updated by external collaborators. Tool 2 has read-only Baserow access for current Media lookup/reconciliation. Tool 4 has read-and-write access and is the only tool allowed to mutate rows, select options, or schema. Tools 1 and 3 do not access Baserow. Persisted mutable row copies are audit/history only and must not be used as an authoritative operational cache.
+The portal is available at `http://127.0.0.1:8000` by default. Only files that
+need evaluation, have a conflict, or have an actionable Tool 4 synchronization
+state appear in its active queue.
 
-Project-wide policy: `docs/baserow-live-data-policy.md`
+### Options
 
-Access-boundary amendment: `docs/baserow-access-boundary-amendment.md`
+| Option | Meaning |
+| --- | --- |
+| `--dry-run` | Preview final filenames and Tool 4 changes without renaming files or mutating Baserow. |
+| `--verbose` | Show additional structured details for every tool stage. |
+| `--workflow all` | Default Phase A workflow. Runs Tools 1–4 and reports Tools 5–11 as pending. |
+| `--workflow renamer` | Runs the currently available renaming workflow: Tools 1–4. |
+| `--workflow processing` | Reserved for Tools 4–11; currently exits before mutation because Tools 5–11 are pending. |
+| `--registry-path PATH` | Use a specific SQLite registry instead of the configured default. |
+| `--log-file PATH` | Write the combined append-only JSONL log to a specific file. |
+| `--review-portal` | Start the localhost review portal after the run. |
+| `--host HOST` | Select `127.0.0.1` or `localhost` as the loopback portal host. |
+| `--port PORT` | Select the portal port; the default is `8000`. |
 
-Important consequences include:
+Run `uv run media-archive run --help` for the installed command reference.
 
-- database/network failure is not treated as a valid Media no-match;
-- cached mutable rows cannot produce a current confirmed Media association or enrichment;
-- Tool 2 performs targeted, pagination-complete live reads and returns structured candidate/reconciliation results;
-- `travel_schedule` is a deliberate exception to per-decision freshness: it is static, so Tool 3 may use a complete verified local snapshot bootstrapped/verified through Tool 2's read-only boundary across files, batches, sessions, and offline runs;
-- Tool 4 uses Tool 2 for a fresh existing-item check, then directly revalidates the exact target/write preconditions so collaborator changes are not silently overwritten or duplicated;
-- Tool 1 calls Tool 4 only after it has combined Tool 2 and Tool 3 evidence and committed the final filename for that stage;
-- after a Media association is safely confirmed, populated relevant metadata on the current Baserow row is leading/confirmed; contradictions are preserved for review rather than overwritten automatically;
-- `media_archive_link` is unavailable to Tools 1–4, so it remains empty on create and is preserved exactly on existing rows;
-- stored mutable Baserow values remain useful for audit provenance, but not as a substitute for a fresh current read.
+### What the runner reports
 
-The static nature of `travel_schedule` changes only its freshness/caching semantics. Its evidentiary strength remains limited: planned travel may corroborate or suggest WHEN/WHERE, but it is not absolute proof that a recording occurred at that place/time.
+For each file, terminal output separates the stages and summarizes:
 
-## Continuous integration
+- Tool 1 filename evidence and proposed final filename;
+- Tool 2 live Media database decision and candidate row number when available;
+- Tool 3 travel-schedule result;
+- whether Tool 1 can safely commit the rename;
+- Tool 4 `CREATE`, `UPDATE`, `NOOP`, conflict, or blocked result;
+- fields that would be or were written;
+- the created or selected Baserow row number;
+- verified live values after a successful write.
 
-GitHub Actions CI is configured in `.github/workflows/ci.yml`.
+Detailed structured events from all tools are appended to one log file. With
+the default configuration it is `.renamer/logs/media-archive-tooling.log`.
+Registry state is stored in SQLite so interrupted or retryable Tool 4 work
+remains recoverable.
 
-On every push to `main`, every pull request, and manual workflow dispatch, CI:
+### Safety and data ownership
 
-1. checks out the repository;
-2. uses Python 3.12;
-3. installs `uv`;
-4. reproduces the locked environment with `uv sync --extra dev --frozen`;
-5. validates repository shell helper syntax;
-6. runs the full `pytest` suite;
-7. verifies that the Python package builds successfully with `uv build`.
+- Tool 2 may read current Baserow Media data but cannot mutate it.
+- Tool 3 uses a verified local travel-schedule reference and has no Baserow
+  access.
+- Tool 4 is the only component allowed to create or update Baserow rows or
+  select options.
+- Existing confirmed Baserow metadata is leading. Contradictions are routed to
+  review instead of being overwritten automatically.
+- An existing `media_archive_link` is preserved; Tools 1–4 do not invent or
+  replace it.
+- A filesystem rename is not rolled back when a later Baserow operation fails.
+  The synchronization state is retained for review or retry.
 
-CI deliberately does not use the local `.env` or live Baserow/Vedabase/location credentials. Automated tests must mock external services so repository verification remains deterministic and safe.
+## Review portal only
 
-The `Protect main` ruleset requires the status check **Python 3.12 tests** to pass and requires the PR branch to be up to date before merge. It also blocks branch deletion/force-push behavior covered by the ruleset and requires pull-request review flow with conversations resolved.
+To open the review portal later against an existing registry:
 
-## Build plans
+```sh
+uv run media-archive review --registry-path "/path/to/registry.db"
+```
 
-Each finalized tool has its own implementation-ready Markdown build plan under `docs/`. A finalized build plan is the authoritative specification for that tool.
-
-**Implementation models must not edit finalized build plans.** If a requirement is unclear, contradictory, impossible as written, or conflicts with another finalized requirement, the implementation model must record the problem in the tool's status file under `status/` and continue unaffected work where possible. Specification changes are made only through planning/review with the user.
-
-Project-wide handoff and review rules: `docs/implementation-protocol.md`
-
-Builder entry point: `BUILDER.md`
-
-### Tool 1 — Renamer
-
-Status: **ACCEPTED**
-
-Build plan: `docs/tool-1-renamer-build-plan.md`
-
-Implementation status and acceptance record: `status/tool-1-renamer.md`
-
-Implementation tracking/discussion: GitHub issue #1
-
-Accepted implementation code commit: `9e96c4550977c59e9a1840cde6b4e53a5b80b638`.
-
-Tool 1 is the fast, repeatable filename interpretation and normalization engine. It assigns a stable temporary `_ID-xxxxxxxx`, extracts and progressively enriches WHEN/WHO/WHAT/WHERE metadata, consumes stronger Tool 2/Tool 3 evidence, handles ambiguous dates and multilingual archive naming patterns, and performs safe dry-run/commit renames without blocking the batch on ordinary incompleteness. After it commits the final filename for the current stage, Tool 1 calls Tool 4 for Baserow synchronization; Tool 1 itself never accesses Baserow.
-
-The accepted v1 passed the project's review/correction cycle through findings R-001 to R-024. The final builder report records 68 passing Python 3.12 tests and a 260-file representative dry-run in which 255 files continued automatically/downstream, 5 required immediate human review, 2 were routed as combination candidates, and 0 were blocked. The five human-review cases were genuine filename/folder date contradictions rather than routine missing metadata. GitHub Actions CI is now operational for subsequent commits; Tool 1's original acceptance remains based on the reviewed implementation/test evidence recorded in its status file.
-
-#### One-command local review
-
-From the repository root, run:
+The older Tool 1 review helper remains available for a standalone dry-run and
+portal session:
 
 ```sh
 ./scripts/review-tool-1.sh
 ```
 
-The helper safely synchronizes the current branch when possible, prepares the locked Python environment, performs a Tool 1 **dry-run** against `sample-files/`, starts the localhost review portal, and opens `http://127.0.0.1:8000` in the default browser on macOS/Linux when supported. The dry-run does not rename files.
+## Project documentation
 
-The review helper uses a **separate per-target review registry** under `.renamer/review/` rather than the general operational registry. A normal review run starts from a fresh current-scan snapshot so stale rows from older parser versions cannot inflate the dashboard counts. Each reviewed directory stays isolated from other review targets, while Tool 1 still reuses existing tracking IDs in persistent operational registries.
-
-The dashboard shows original filename, proposed filename, source path, WHEN/WHAT/WHERE and review status. Technical tracking IDs remain part of Tool 1's underlying in-process identity and filename semantics, but the dashboard intentionally hides the ID column and `_ID-xxxxxxxx` token from the **displayed** proposed filename because they are not useful for human review. The dashboard also includes dark mode, sticky table headers and batch row selection.
-
-Selected rows can be processed with batch **Approve**, **Defer**, **Commit**, and **Approve + commit** actions. Approval accepts the current proposal without changing files; commit performs the filesystem rename through the shared safe commit service and requires explicit confirmation plus resolved review blockers.
-
-To review another directory instead of `sample-files/`:
-
-```sh
-./scripts/review-tool-1.sh /path/to/media/files
-```
-
-Press `Ctrl-C` in the terminal to stop the local review portal when finished.
-
-### Tool 2 — Media Database Reviewer
-
-Status: **ACCEPTED**
-
-Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
-
-Authoritative live-data amendment: `docs/tool-2-media-database-reviewer-live-data-amendment.md`
-
-Project-wide Baserow policy: `docs/baserow-live-data-policy.md`
-
-Implementation status and acceptance record: `status/tool-2-media-database-reviewer.md`
-
-Implementation walkthrough: `docs/tool-2-media-database-reviewer-walkthrough.md`
-
-Implementation tracking/discussion: GitHub issue #2
-
-Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`.
-
-Tool 2 is the read-only live Baserow Media lookup and reconciliation service. It consumes structured Tool 1 filename evidence, performs targeted and pagination-complete live candidate retrieval, compares WHEN/WHAT/WHERE and supporting category/travel evidence, separates confirmed enrichment from candidate-only metadata, and returns structured decisions for the Renamer, Tool 3, Tool 4, CLI, and review portal. It cannot mutate Baserow.
-
-Every current-state **mutable Media/database** decision uses a live Tool 2 read: persisted mutable Baserow rows/results are audit/history only. Database unavailability cannot be treated as a Media no-match, and human confirmations are live-revalidated. Tool 4 uses Tool 2 for the fresh existence/candidate decision before synchronization, then performs its own exact-row/schema/write-precondition reads. The immutable `travel_schedule` reference is exempt from per-decision freshness requirements and may be supplied to Tool 3 as a verified local artifact produced through Tool 2's read-only boundary.
-
-Tool 2's accepted read-only lookup and reconciliation behavior remains approved. Tool 4 remains the sole writer.
-
-The accepted implementation resolved findings R-001 through R-015. Required GitHub CI passed with **157 tests**, helper-script validation, and package build success. A fresh live read-only evaluation across the 260 representative sample files produced 1 confirmed existing match, 20 probable matches, 99 multiple-candidate cases, 39 new-media candidates, 32 insufficient-evidence cases, 69 conflicts, and 0 database failures.
-
-The final Tool 1 ↔ Tool 2 acceptance smoke test verified the supported automatic enrichment path. The confirmed live match for Baserow row `2335` changed the Tool 1 proposal from `2015-08-27_KKS_SB-3-6-6_Sweden-se_ID-f7903be1.mp3` to `2015-08-27_KKS_SB-3-6-6-class_Sweden-se_ID-f7903be1.mp3`. Candidate-only metadata from unconfirmed results was not copied into filenames, and valid completed no-match decisions propagated `baserow_check_complete=True` without inventing title/location metadata.
-
-### Tool 3 — Travel Schedule Reviewer
-
-Status: **ACCEPTED**
-
-Build plan: `docs/tool-3-travel-schedule-reviewer-build-plan.md`
-
-Implementation status and acceptance record: `status/tool-3-travel-schedule-reviewer.md`
-
-Implementation walkthrough: `docs/tool-3-travel-schedule-reviewer-walkthrough.md`
-
-Tool 3 provides verified travel-schedule lookup against an immutable, offline reference store (`travel_schedule.json`) bootstrapped through Tool 2. It requires zero live Baserow network access, validates SHA-256 integrity upon loading, corroborates or proposes WHEN/WHERE location metadata, and detects date/location travel conflicts.
-
-### Tool 4 — Media Database Updater
-
-Status: **ACCEPTED**
-
-Build plan: `docs/tool-4-media-database-updater-build-plan.md`
-
-Implementation status and acceptance record: `status/tool-4-media-database-updater.md`
-
-Implementation walkthrough: `docs/tool-4-media-database-updater-walkthrough.md`
-
-Tool 4 is the sole authorized writer to the Baserow Media database. It is invoked only after Tool 1 commits the final filename for that stage. It performs fresh pre-write precondition checks via Tool 2, computes minimal field PATCH diffs, manages durable `PENDING_SYNC` outbox state, and updates row metadata including `media_archive_path`, `Filename`, `Place, location`, `Tag`, and provenance in `Notes`.
-
-### Main Tooling Script
-
-Status: **ACCEPTED**
-
-Build plan: `docs/main-tooling-script-build-plan.md`
-
-Implementation status: `status/main-tooling-script.md`
-
-Implementation walkthrough: `docs/main-tooling-script-walkthrough.md`
-
-The Main Tooling Script (`media-archive run`) is the unnumbered CLI orchestrator that coordinates the complete Phase A pipeline:
-```text
-Tool 1 initial interpretation
-→ Tool 2 live read-only Media review
-→ Tool 3 verified travel-schedule review
-→ Tool 1 final proposal and immediate live commit when allowed
-→ Tool 4 synchronization (preview or live write)
-```
-
-#### Usage
-
-```sh
-# Live mode (default, operates directly on files, no prompts)
-media-archive run /path/to/media/files
-
-# Dry-run preview (no disk or database changes)
-media-archive run /path/to/media/files --dry-run
-
-# Verbose output
-media-archive run /path/to/media/files --verbose
-
-# Specific workflow (all default, renamer, processing)
-media-archive run /path/to/media/files --workflow all
-```
-
-- Accepts a single file, multiple files, directories recursively, and mixed targets.
-- Skips unsupported non-media files with non-fatal notices.
-- Persists all execution evidence to `.renamer/media-archive-tooling.log`.
-- Routes items requiring human attention to the review portal Active Evaluation Queue (`/`).
+- [Project reference and development process](docs/project-reference.md)
+- [Main Tooling Script build plan](docs/main-tooling-script-build-plan.md)
+- [Main Tooling Script walkthrough](docs/main-tooling-script-walkthrough.md)
+- [Main Tooling Script acceptance status](status/main-tooling-script.md)
+- [Project implementation architecture](docs/project-implementation-architecture.md)
+- [Baserow live-data policy](docs/baserow-live-data-policy.md)
+- [Builder instructions](BUILDER.md)
