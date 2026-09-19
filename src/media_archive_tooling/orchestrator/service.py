@@ -274,12 +274,19 @@ class MainToolingScriptService:
                 cand_count = len(t2_res.candidates)
                 selected_row = t2_res.selected_media_row_id
                 enriched_title = t2_res.renamer_enrichment.title_full if (t2_res.renamer_enrichment and t2_res.renamer_enrichment.confirmed) else None
+                related_series = t2_res.selected_field_evidence.get("related_series", [])
 
                 t2_summary = f"Tool 2 — Media DB: {dec_str} (candidates: {cand_count})"
                 if selected_row:
                     t2_summary += f", selected row #{selected_row}"
                 if enriched_title:
                     t2_summary += f", confirmed title: '{enriched_title}'"
+                if related_series:
+                    related = related_series[0]
+                    t2_summary += (
+                        f", related series row #{related.get('media_row_id')} "
+                        f"({related.get('date')}, {related.get('title') or related.get('what')})"
+                    )
 
                 t2_stage = StageResult(
                     stage_name=StageName.TOOL_2_REVIEW,
@@ -291,6 +298,7 @@ class MainToolingScriptService:
                         "candidate_count": cand_count,
                         "selected_media_row_id": selected_row,
                         "confirmed_title": enriched_title,
+                        "related_series": related_series,
                     },
                 )
                 if dec_str == "DATABASE_UNAVAILABLE":
@@ -834,4 +842,3 @@ def create_main_tooling_service(
         dry_run=dry_run,
         verbose=verbose,
     )
-

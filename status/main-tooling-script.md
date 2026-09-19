@@ -168,3 +168,30 @@ Planner verification:
 - Main Script and review-portal help passthrough: passed;
 - practical Duben dry run through the launcher: passed with zero mutations;
 - full regression suite: **399 passed, 2 warnings**.
+
+## Post-acceptance Oslo date/verse correction — 2026-09-19
+
+The planner corrected the exact practical case
+`KKS_S.B. 1.19.30_28.8.11_Oslo_ .WMA` after the user clarified that
+consecutive verses may be consecutive daily classes at the same location.
+Builder must preserve these rules in later work:
+
+- the explicit filename date `28.8.11` resolves to `2011-08-28`; earlier
+  scripture numbers must not stop date scanning;
+- folder `From JVD (8.9.11)` is supporting August/September 2011 collection
+  context, not an authoritative exact recording date;
+- a database row is related sequence evidence—not a duplicate/conflict—only
+  when the date and single scripture verse both move by exactly one day/verse,
+  the scripture book/canto/chapter match, the location matches exactly, and
+  the countries do not contradict;
+- same-date verse contradictions and direct-identity contradictions remain
+  conflicts.
+
+Live dry-run result:
+
+- Tool 1 final proposal:
+  `2011-08-28_KKS_SB-1-19-30_Oslo-no.wma`;
+- Tool 2: `NEW_MEDIA_CANDIDATE`, with Baserow row **3231** (`2011-08-29`,
+  `SB 1.19.31`, Oslo) shown separately as the next class in the series;
+- Tool 4: `WOULD CREATE` a new row titled `SB 1.19.30`; no write was made;
+- full regression suite: **402 passed, 2 warnings**.

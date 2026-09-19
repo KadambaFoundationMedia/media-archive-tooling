@@ -2800,3 +2800,45 @@ def test_63_r014_defer_on_unconfirmed_stored_review_resets_enrichment_state(tmp_
 
     # Verify apply_enrichment_to_renamer returns None (defense-in-depth)
     assert service.apply_enrichment_to_renamer("defunconf01") is None
+
+
+def test_adjacent_daily_verse_is_related_series_not_conflicting_duplicate():
+    engine = MediaDatabaseReconciliationEngine()
+    parser_result = make_parser_result(
+        orig_filename="KKS_S.B. 1.19.30_28.8.11_Oslo_ .WMA",
+        date_val="2011-08-28",
+        what_val="SB-1-19-30",
+        what_category="Srimad Bhagavatam",
+        place="Oslo",
+        country="NO",
+    )
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-19T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[{
+            "id": 3231,
+            "Date": "2011-08-29",
+            "Place": "Oslo",
+            "Country": "Norway",
+            "Title": "SB 1.19.31",
+            "Category": "Srimad-bhagavatam",
+        }],
+    )
+
+    result = engine.reconcile(parser_result, snapshot)
+
+    assert result.decision == ReviewDecision.NEW_MEDIA_CANDIDATE
+    assert result.proposed_tool4_action == Tool4Action.CREATE_NEW
+    assert result.review_required is False
+    assert result.candidates == []
+    assert result.selected_field_evidence["related_series"] == [{
+        "media_row_id": 3231,
+        "date": "2011-08-29",
+        "what": "",
+        "title": "SB 1.19.31",
+        "place": "Oslo",
+        "country": "Norway",
+        "relationship": "next_class",
+    }]
+    assert "related_series_row:3231" in result.evidence

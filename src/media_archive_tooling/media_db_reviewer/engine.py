@@ -148,6 +148,75 @@ def parse_scripture_reference(val: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _adjacent_scripture_series_context(
+    local_date: Optional[str],
+    local_what: Optional[str],
+    local_place: Optional[str],
+    local_country: Optional[str],
+    row: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Identify a neighboring daily class without treating it as a duplicate.
+
+    The rule is deliberately strict: both dates and both single-verse
+    references must advance (or retreat) by exactly one, and the normalized
+    location must be identical with no country contradiction.
+    """
+    if not (local_date and local_what and local_place and row.get("date") and row.get("place")):
+        return None
+
+    try:
+        local_day = datetime.strptime(local_date, "%Y-%m-%d").date()
+        database_day = datetime.strptime(str(row["date"]), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+    day_delta = (database_day - local_day).days
+    if abs(day_delta) != 1:
+        return None
+
+    local_reference = parse_scripture_reference(local_what)
+    database_reference = (
+        parse_scripture_reference(row.get("what"))
+        or parse_scripture_reference(row.get("title"))
+    )
+    if not (local_reference and database_reference):
+        return None
+    if any(
+        local_reference[key] != database_reference[key]
+        for key in ("book", "canto", "chapter")
+    ):
+        return None
+    if local_reference["v_start"] != local_reference["v_end"]:
+        return None
+    if database_reference["v_start"] != database_reference["v_end"]:
+        return None
+
+    verse_delta = database_reference["v_start"] - local_reference["v_start"]
+    if verse_delta != day_delta:
+        return None
+
+    if _norm_token(local_place) != _norm_token(row.get("place")):
+        return None
+    normalized_local_country = _norm_country(local_country)
+    normalized_database_country = _norm_country(row.get("country"))
+    if (
+        normalized_local_country
+        and normalized_database_country
+        and normalized_local_country != normalized_database_country
+    ):
+        return None
+
+    return {
+        "media_row_id": row.get("id"),
+        "date": row.get("date"),
+        "what": row.get("what"),
+        "title": row.get("title"),
+        "place": row.get("place"),
+        "country": row.get("country"),
+        "relationship": "next_class" if day_delta == 1 else "previous_class",
+    }
+
+
 def compose_what_val(local_what: Optional[str], title_full: Optional[str]) -> Optional[str]:
     """Combine local WHAT evidence and database title into an enriched WHAT token idempotently."""
     if not title_full or not str(title_full).strip():
@@ -416,6 +485,7 @@ class MediaDatabaseReconciliationEngine:
 
         # 1. Candidate Retrieval & Comparison
         candidates: List[MediaCandidate] = []
+        related_series_context: List[Dict[str, Any]] = []
 
         for row in norm_media_rows:
             reasons = []
@@ -450,6 +520,20 @@ class MediaDatabaseReconciliationEngine:
                     reasons.append(f"Attachment name match '{att}'")
                     identity_evidence.append(f"attachment:{att}")
                     score += 90.0
+
+            # A neighboring daily scripture class at the same location is
+            # useful sequence evidence, but it is a separate recording rather
+            # than a conflicting duplicate candidate.
+            related_class = _adjacent_scripture_series_context(
+                local_date,
+                local_what,
+                local_place,
+                local_country,
+                row,
+            )
+            if related_class and not identity_evidence:
+                related_series_context.append(related_class)
+                continue
 
             # B. Semantic date match
             date_match = False
@@ -906,6 +990,16 @@ class MediaDatabaseReconciliationEngine:
             or review_required_now
         )
 
+        if related_series_context:
+            related_rows = ", ".join(
+                f"{item['media_row_id']} ({item['date']}, {item['title'] or item['what']})"
+                for item in related_series_context
+            )
+            diag_notes.append(
+                "Related scripture sequence found, not a duplicate candidate: "
+                f"Baserow row(s) {related_rows}"
+            )
+
         return MediaDatabaseReviewResult(
             tracking_id=tracking_id,
             database_state=snapshot.state,
@@ -923,6 +1017,7 @@ class MediaDatabaseReconciliationEngine:
                 "local_what": local_what,
                 "local_place": local_place,
                 "local_country": local_country,
+                "related_series": related_series_context,
             },
             renamer_enrichment=renamer_enr,
             proposed_tool4_action=tool4_action,
@@ -932,5 +1027,9 @@ class MediaDatabaseReconciliationEngine:
             review_reasons=review_reasons,
             conflicts=conflicts_out,
             diagnostic_notes=diag_notes,
-            evidence=[f"snapshot_state:{snapshot.state}"] + (best_candidate.retrieval_reasons if best_candidate else []),
+            evidence=(
+                [f"snapshot_state:{snapshot.state}"]
+                + (best_candidate.retrieval_reasons if best_candidate else [])
+                + [f"related_series_row:{item['media_row_id']}" for item in related_series_context]
+            ),
         )
