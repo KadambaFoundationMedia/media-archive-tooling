@@ -645,7 +645,7 @@ def test_17_local_missing_field_is_local_missing_and_enriches_when_confirmed():
     )
     result = engine.reconcile(parser_res, snapshot)
     assert result.decision == ReviewDecision.EXISTING_MEDIA_MATCH
-    assert result.renamer_enrichment.where_val == "Leipzig-Germany"
+    assert result.renamer_enrichment.where_val == "Leipzig-de"
 
 
 # ---------------------------------------------------------------------------
@@ -739,11 +739,48 @@ def test_20_valid_complete_no_match_new_media_candidate_when_discriminating():
     assert result.proposed_tool4_action == Tool4Action.CREATE_NEW
 
 
+def test_confirmed_location_alias_preserves_tool1_canonical_filename_value():
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-19T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[{
+            "id": 3234,
+            "Date": "2003-10-25",
+            "Title": "SB 4.9.11",
+            "Category": "Srimad-bhagavatam",
+            "Place, location": "Farma-Krishna-Dvur",
+            "Country": "Czech-republic",
+        }],
+    )
+    parser_result = make_parser_result(
+        tracking_id="prague3234",
+        date_val="2003-10-25",
+        what_val="SB-4-9-11",
+        what_category="Srimad Bhagavatam",
+        place="Krsna-Dvur",
+        country="cz",
+    )
+
+    result = MediaDatabaseReconciliationEngine().reconcile(parser_result, snapshot)
+
+    assert result.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    assert result.selected_media_row_id == 3234
+    assert result.renamer_enrichment.where_val == "Krsna-Dvur-cz"
+
+
 def test_20_country_only_evidence_excludes_foreign_partial_date_noise():
     assert _compare_places(None, "cz", "Amsterdam", "Netherlands") == (
         FieldComparisonState.CONFLICT,
         "Country conflict: local 'cz' (CZ) contradicts database 'Netherlands' (NL)",
     )
+
+    assert _compare_places(
+        "Krsna-Dvur",
+        "cz",
+        "Farma-Krishna-Dvur",
+        "Czech-republic",
+    ) == (FieldComparisonState.AGREES, None)
 
     parser_result = make_parser_result(
         tracking_id="duben02",

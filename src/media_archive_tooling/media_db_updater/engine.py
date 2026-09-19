@@ -706,15 +706,46 @@ class MediaDatabaseUpdateEngine:
                 diffs.append(FieldDiff(field_name="Tag", old_value=None, new_value=target_verse, action=FieldAction.SET))
 
 
-        # 5. Language (defaults to English)
+        # 5. Language. Czech archive recordings contain the English class and
+        # a live Czech translation, so both existing options apply.
         lang_fld = fields_by_name.get("language")
         if lang_fld:
-            matched_lang, _ = self._match_select_option(lang_fld.get("select_options", []), "English")
-            if matched_lang:
-                language_value = [matched_lang] if lang_fld.get("type") == "multiple_select" else matched_lang
-                diffs.append(FieldDiff(field_name="Language", old_value=None, new_value=language_value, action=FieldAction.SET))
-            else:
-                conflicts.append("Required Language option 'English' not found in live schema")
+            desired_languages = ["English"]
+            is_czech_recording = (
+                is_semantic_state_eligible(request.where_state)
+                and (
+                    are_countries_equivalent(request.where_country_iso, "cz")
+                    or are_countries_equivalent(request.where_country, "cz")
+                )
+            )
+            if lang_fld.get("type") == "multiple_select" and is_czech_recording:
+                desired_languages.append("Czech")
+
+            matched_languages = []
+            for desired_language in desired_languages:
+                matched_lang, _ = self._match_select_option(
+                    lang_fld.get("select_options", []),
+                    desired_language,
+                )
+                if matched_lang:
+                    matched_languages.append(matched_lang)
+                else:
+                    conflicts.append(
+                        f"Required Language option '{desired_language}' not found in live schema"
+                    )
+
+            if len(matched_languages) == len(desired_languages):
+                language_value = (
+                    matched_languages
+                    if lang_fld.get("type") == "multiple_select"
+                    else matched_languages[0]
+                )
+                diffs.append(FieldDiff(
+                    field_name="Language",
+                    old_value=None,
+                    new_value=language_value,
+                    action=FieldAction.SET,
+                ))
 
         # 6. Statuses: Status Media, Status thumb, Status Transcript (default to Not-started)
         for stat_name in ("Status Media", "Status thumb", "Status Transcript"):
@@ -909,6 +940,28 @@ class MediaDatabaseUpdateEngine:
                 return str(v[0]["value"]).strip()
             s = str(v).strip()
             return s if s else None
+
+        def _get_select_values(field_key: str) -> List[str]:
+            value = live_row.get(field_key)
+            if value is None:
+                for key, candidate in live_row.items():
+                    if key.strip().lower() == field_key.strip().lower():
+                        value = candidate
+                        break
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return [
+                    str(item.get("value", "")).strip()
+                    if isinstance(item, dict)
+                    else str(item).strip()
+                    for item in value
+                    if (item.get("value") if isinstance(item, dict) else item)
+                ]
+            if isinstance(value, dict) and value.get("value"):
+                return [str(value["value"]).strip()]
+            text_value = str(value).strip()
+            return [text_value] if text_value else []
 
         # 1. Filename & media_archive_path (Archive linkage)
         curr_fn = _get_text("Filename")
@@ -1303,6 +1356,48 @@ class MediaDatabaseUpdateEngine:
                 diffs.append(FieldDiff(field_name="Tag", old_value=curr_tags, new_value=curr_tags, action=FieldAction.PRESERVED))
 
 
+        # Language enrichment is additive. Existing Baserow values remain
+        # leading; Czech recordings add any missing English/Czech options.
+        lang_fld = fields_by_name.get("language")
+        curr_languages = _get_select_values("Language")
+        is_czech_recording = (
+            is_semantic_state_eligible(request.where_state)
+            and (
+                are_countries_equivalent(request.where_country_iso, "cz")
+                or are_countries_equivalent(request.where_country, "cz")
+            )
+        )
+        if lang_fld and lang_fld.get("type") == "multiple_select" and is_czech_recording:
+            new_languages = list(curr_languages)
+            for desired_language in ("English", "Czech"):
+                matched_lang, _ = self._match_select_option(
+                    lang_fld.get("select_options", []),
+                    desired_language,
+                )
+                if not matched_lang:
+                    conflicts.append(
+                        f"Required Language option '{desired_language}' not found in live schema"
+                    )
+                elif not any(
+                    _normalize_option_text(existing) == _normalize_option_text(matched_lang)
+                    for existing in new_languages
+                ):
+                    new_languages.append(matched_lang)
+            if len(new_languages) > len(curr_languages):
+                diffs.append(FieldDiff(
+                    field_name="Language",
+                    old_value=curr_languages,
+                    new_value=new_languages,
+                    action=FieldAction.SET,
+                ))
+            elif curr_languages:
+                diffs.append(FieldDiff(
+                    field_name="Language",
+                    old_value=curr_languages,
+                    new_value=curr_languages,
+                    action=FieldAction.PRESERVED,
+                ))
+
         # Notes Merge
         curr_notes = _get_text("Notes")
         inc_date_arg = request.when_val.strip() if date_is_incomplete else None
@@ -1327,10 +1422,12 @@ class MediaDatabaseUpdateEngine:
             if fields_by_name.get("last modified") and not fields_by_name["last modified"].get("read_only"):
                 diffs.append(FieldDiff(field_name="Last modified", old_value=_get_text("Last modified"), new_value=today, action=FieldAction.SET))
 
-        # Always preserve unrelated online fields, statuses, language, import date
+        # Always preserve unrelated online fields, statuses, and import date.
         preserved_fields = list(UNRELATED_ONLINE_FIELDS) + [
-            "Status Media", "Status thumb", "Status Transcript", "Language", "Created_on", "imported_on"
+            "Status Media", "Status thumb", "Status Transcript", "Created_on", "imported_on"
         ]
+        if not any(d.field_name == "Language" and d.action == FieldAction.SET for d in diffs):
+            preserved_fields.append("Language")
 
         has_conflicts = len(conflicts) > 0
         status = SyncStatus.REVIEW_REQUIRED if has_conflicts else SyncStatus.SYNCING
