@@ -36,7 +36,7 @@ jobs:
         run: uv sync --extra dev --frozen
 
       - name: Validate helper scripts
-        run: sh -n scripts/builder-start.sh scripts/review-tool-1.sh
+        run: sh -n run-media-archive.sh scripts/builder-start.sh scripts/review-tool-1.sh
 
       - name: Run test suite
         run: uv run pytest -q

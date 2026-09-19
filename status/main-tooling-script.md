@@ -148,3 +148,23 @@ This is a documentation-only reorganization on branch
 `docs/readme-main-script-focus`. It does not change accepted tool behavior or
 the Main Tooling Script interface. The Builder should use `BUILDER.md` and the
 new project-reference document for the moved implementation-process context.
+
+## Post-acceptance launcher maintenance — 2026-09-19
+
+The user requested one executable entry point that hides Python environment
+setup. `run-media-archive.sh` now prepares the locked private environment when
+needed and then invokes the accepted Main Tooling Script. It passes normal
+targets/options through unchanged and supports `--review-only` for opening the
+portal against an existing registry.
+
+The README now uses this launcher exclusively for operator instructions. The
+Builder should preserve this simple user-facing entry point when later tools
+are added; development and CI may continue using `uv` directly.
+
+Planner verification:
+
+- launcher shell syntax: passed;
+- automatic isolated runtime setup: passed;
+- Main Script and review-portal help passthrough: passed;
+- practical Duben dry run through the launcher: passed with zero mutations;
+- full regression suite: **399 passed, 2 warnings**.
