@@ -6,10 +6,10 @@ Project architecture: `docs/project-implementation-architecture.md`
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `IN_PROGRESS`
 
 Implementation branch: `main-tooling-script-implementation`
-Implementation PR: not created
+Implementation PR: in progress
 Last planning update: 2026-09-19
 
 ## Current action
