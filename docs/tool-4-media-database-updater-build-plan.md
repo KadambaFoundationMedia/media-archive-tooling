@@ -260,7 +260,7 @@ The exact value written must be an available live Baserow Category option.
 
 ### Adding country/location options
 
-User policy explicitly permits Tool 4 to add legitimate new **Country** and **Place/location** select options when the resolved value is missing.
+Tool 4 may add a legitimate new **Country** option automatically when the resolved value is missing. A genuinely new **Place/location** option always requires explicit human approval; it must never be added merely because Tool 1, Tool 2, or Tool 3 produced a location value.
 
 Before adding an option:
 
@@ -268,8 +268,11 @@ Before adding an option:
 2. normalize conservatively to avoid case/diacritic/whitespace duplicates;
 3. if an equivalent option exists, reuse it;
 4. if multiple similar options make identity ambiguous, do not guess — review;
-5. append/create the new option without dropping or rewriting existing options;
-6. verify the option exists after the schema mutation before assigning it to the Media row.
+5. for Place/location, stop for human approval if no equivalent live option exists;
+6. after the required approval, append/create the new option without dropping or rewriting existing options;
+7. verify the option exists after the schema mutation before assigning it to the Media row.
+
+Known location aliases must reuse the established live option rather than create spelling variants. For example, `Krsna-Dvur` / `Farma KD` resolves to an existing `Farma-Krishna-Dvur` option when present. If multiple equivalent live labels already exist, reuse the first established live option deterministically and do not add another one.
 
 No other select field gets new options automatically in v1. Missing Category, Language, status, Tag-select, or other required options produce a schema-option mismatch/review rather than Tool 4 inventing taxonomy.
 

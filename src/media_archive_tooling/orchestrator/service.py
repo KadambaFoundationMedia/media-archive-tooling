@@ -354,7 +354,20 @@ class MainToolingScriptService:
                     loc_summary = f"{c.place}, {c.country}" if c.place else c.country
 
                 t3_summary = f"Tool 3 — Travel Schedule: {t3_dec}"
-                if loc_summary:
+                retained_location_note = next(
+                    (
+                        note for note in (t3_res.diagnostic_notes or [])
+                        if "retained exact filename location" in note
+                    ),
+                    None,
+                )
+                if retained_location_note:
+                    retained_where = t3_res.input_where_val or "exact filename location"
+                    t3_summary += (
+                        f" (date supported; retained {retained_where}; "
+                        f"schedule context: {loc_summary or 'different place'})"
+                    )
+                elif loc_summary:
                     t3_summary += f" ({loc_summary})"
 
                 is_enriched = t3_res.provisional_enrichment is not None
@@ -368,6 +381,7 @@ class MainToolingScriptService:
                     details={
                         "decision": t3_dec,
                         "location": loc_summary,
+                        "retained_filename_location": t3_res.input_where_val if retained_location_note else None,
                         "enriched": is_enriched,
                         "reasons": t3_reasons,
                     },

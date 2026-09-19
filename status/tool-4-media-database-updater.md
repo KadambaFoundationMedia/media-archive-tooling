@@ -706,3 +706,7 @@ Following human review of the sibling collection and travel schedule, Tool 4 app
 - Prague temple as an explicitly unconfirmed location hypothesis, supported by the morning-temple class pattern.
 
 The structured Date and Place/location fields remain blank. The local review audit for tracking ID `902b923a` records the human-directed Notes enrichment.
+
+### Location taxonomy approval correction (2026-09-19)
+
+Builder notice: genuinely new Place/location select options must now receive explicit human approval before Tool 4 creates them. Known aliases reuse an established live option without approval or schema growth. In particular, `Krsna-Dvur` and `Farma KD` reuse the existing `Farma-Krishna-Dvur` option (including the live `place_location` field alias); Tool 4 must not create another spelling variant. Country option behavior is unchanged.

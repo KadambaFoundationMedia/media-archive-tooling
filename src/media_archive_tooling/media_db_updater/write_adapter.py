@@ -3,7 +3,8 @@
 Enforces:
 - Secret protection: API tokens are never leaked in logs, __repr__, or __str__.
 - Live schema verification: validates field existence and types.
-- Strict select-column policy: only Country and Place, location may have new options created.
+- Strict select-column policy: Country options may be created automatically;
+  new Place/location options require explicit human approval.
   All other select fields (Category, Language, Status, Tag) strictly disallow automatic creation.
 - Hermetic test fake: FakeBaserowWriteAdapter for offline testing and verification.
 """
@@ -60,6 +61,8 @@ SECRET_PATTERNS = [
 
 SECRET_KEY_PATTERN = re.compile(r"(?:authorization|token|key|password|secret)", re.IGNORECASE)
 
+_LOCATION_ALIAS_TO_CANONICAL: Optional[Dict[str, str]] = None
+
 
 def redact_secrets(val: Any) -> Any:
     """Redact API tokens, bearer tokens, or secrets from strings, keys, JSON, or recursive structures."""
@@ -95,6 +98,28 @@ def _normalize_option_text(text: str) -> str:
     return to_ascii_latin(text).strip().lower()
 
 
+def _normalize_location_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", to_ascii_latin(text).lower())
+
+
+def _canonical_location_key(text: str) -> str:
+    """Resolve known archive location aliases to one comparison key."""
+    global _LOCATION_ALIAS_TO_CANONICAL
+    if _LOCATION_ALIAS_TO_CANONICAL is None:
+        from ..renamer.parser.where import LOCATIONS_PATH
+
+        alias_map: Dict[str, str] = {}
+        if LOCATIONS_PATH.exists():
+            with open(LOCATIONS_PATH, "r", encoding="utf-8") as location_file:
+                for location in json.load(location_file):
+                    canonical = _normalize_location_text(location["canonical_place"])
+                    for alias in [location["canonical_place"]] + location.get("aliases", []):
+                        alias_map[_normalize_location_text(alias)] = canonical
+        _LOCATION_ALIAS_TO_CANONICAL = alias_map
+    normalized = _normalize_location_text(text)
+    return _LOCATION_ALIAS_TO_CANONICAL.get(normalized, normalized)
+
+
 def _matching_select_options(
     field_name: str,
     option_name: str,
@@ -113,6 +138,14 @@ def _matching_select_options(
             option
             for option in existing_options
             if are_countries_equivalent(option.get("value"), option_name)
+        ]
+
+    if field_name.strip().lower() in {"place, location", "place_location", "location"}:
+        target_location = _canonical_location_key(option_name)
+        return [
+            option
+            for option in existing_options
+            if _canonical_location_key(option.get("value", "")) == target_location
         ]
 
     norm_target = _normalize_option_text(option_name)
@@ -294,16 +327,17 @@ class BaserowWriteAdapter:
         except Exception as e:
             raise BaserowUnavailableError(redact_secrets(f"Network error patching row {row_id}: {e}")) from e
 
-    def ensure_select_option(self, field_name: str, option_name: str) -> str:
+    def ensure_select_option(self, field_name: str, option_name: str, allow_create: bool = False) -> str:
         """Ensure a select option exists, creating it if permitted.
 
-        Strictly permitted ONLY for Country and Place, location.
+        Country creation is permitted automatically. A new Place/location option
+        is created only when the caller supplies an explicit approval.
         """
         norm_field = field_name.strip().lower()
         if norm_field not in ALLOWED_SELECT_CREATION_FIELDS:
             raise TaxonomyForbiddenError(
                 f"Automatic creation of select option '{option_name}' is forbidden for field '{field_name}'. "
-                "Only Country and Place, location allow automatic option creation."
+                "Only Country allows automatic option creation; Place/location requires approval."
             )
 
         fields = self.fetch_table_fields()
@@ -318,19 +352,38 @@ class BaserowWriteAdapter:
 
         field_id = target_field["id"]
         existing_options = target_field.get("select_options", [])
-        norm_target_val = _normalize_option_text(option_name)
         matches = _matching_select_options(field_name, option_name, existing_options)
+
+        literal_matches = [
+            option for option in existing_options
+            if option.get("value", "").strip() == option_name.strip()
+        ]
 
         if matches and norm_field == "country":
             # Multiple labels can already represent the same country in the
             # authoritative live options. Reuse the first established option;
             # never create another spelling variant.
             return matches[0]["value"]
+        if len(literal_matches) == 1:
+            return literal_matches[0]["value"]
+        if len(literal_matches) > 1:
+            raise AmbiguousOptionError(
+                f"Multiple options match '{option_name}' in field '{field_name}': {[m['value'] for m in literal_matches]}"
+            )
+        if matches and norm_field in {"place, location", "place_location", "location"}:
+            # Known aliases map to one canonical archive location. Reuse the
+            # first established live option instead of adding another label.
+            return matches[0]["value"]
         if len(matches) == 1:
             return matches[0]["value"]
         elif len(matches) > 1:
             raise AmbiguousOptionError(
                 f"Multiple options match '{option_name}' in field '{field_name}': {[m['value'] for m in matches]}"
+            )
+
+        if norm_field in {"place, location", "place_location", "location"} and not allow_create:
+            raise TaxonomyForbiddenError(
+                f"New location option '{option_name}' requires explicit human approval"
             )
 
         # Append new option preserving all existing options
@@ -461,6 +514,7 @@ DEFAULT_MEDIA_TABLE_FIELDS = [
             {"id": 71, "value": "Vrindavan", "color": "orange"},
             {"id": 72, "value": "Bratislava", "color": "red"},
             {"id": 73, "value": "London", "color": "green"},
+            {"id": 74, "value": "Oslo", "color": "cyan"},
         ],
     },
 ]
@@ -552,7 +606,7 @@ class FakeBaserowWriteAdapter:
         self.rows[row_id].update(copy.deepcopy(fields))
         return copy.deepcopy(self.rows[row_id])
 
-    def ensure_select_option(self, field_name: str, option_name: str) -> str:
+    def ensure_select_option(self, field_name: str, option_name: str, allow_create: bool = False) -> str:
         self.calls.append({"action": "ensure_select_option", "field_name": field_name, "option_name": option_name})
         if self.simulate_network_failure:
             raise BaserowUnavailableError("Simulated network failure ensuring select option")
@@ -561,7 +615,7 @@ class FakeBaserowWriteAdapter:
         if norm_field not in ALLOWED_SELECT_CREATION_FIELDS:
             raise TaxonomyForbiddenError(
                 f"Automatic creation of select option '{option_name}' is forbidden for field '{field_name}'. "
-                "Only Country and Place, location allow automatic option creation."
+                "Only Country allows automatic option creation; Place/location requires approval."
             )
 
         target_field = None
@@ -575,14 +629,31 @@ class FakeBaserowWriteAdapter:
 
         existing_options = target_field.get("select_options", [])
         matches = _matching_select_options(field_name, option_name, existing_options)
+        literal_matches = [
+            option for option in existing_options
+            if option.get("value", "").strip() == option_name.strip()
+        ]
 
         if matches and norm_field == "country":
+            return matches[0]["value"]
+        if len(literal_matches) == 1:
+            return literal_matches[0]["value"]
+        if len(literal_matches) > 1:
+            raise AmbiguousOptionError(
+                f"Multiple options match '{option_name}' in field '{field_name}': {[m['value'] for m in literal_matches]}"
+            )
+        if matches and norm_field in {"place, location", "place_location", "location"}:
             return matches[0]["value"]
         if len(matches) == 1:
             return matches[0]["value"]
         elif len(matches) > 1:
             raise AmbiguousOptionError(
                 f"Multiple options match '{option_name}' in field '{field_name}': {[m['value'] for m in matches]}"
+            )
+
+        if norm_field in {"place, location", "place_location", "location"} and not allow_create:
+            raise TaxonomyForbiddenError(
+                f"New location option '{option_name}' requires explicit human approval"
             )
 
         # Create option

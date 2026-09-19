@@ -587,7 +587,13 @@ class TravelScheduleEngine:
 
         norm_local_place = self.index.canonical_place(place)
         corroborating_candidates = []
+        contextual_candidates = []
         conflicting_candidates = []
+        direct_filename_location = bool(
+            parser_result.where
+            and parser_result.where.state == ResolutionState.EXACT
+            and any(e.source == "filename_exact" for e in parser_result.where.evidence)
+        )
 
         for cand in candidates:
             cand_canon_place = self.index.canonical_place(cand.place)
@@ -621,6 +627,17 @@ class TravelScheduleEngine:
             if place_agrees and country_compatible:
                 cand.match_reasons.append(f"Schedule corroborates {place} on {exact_date}")
                 corroborating_candidates.append(cand)
+            elif direct_filename_location and country_compatible:
+                # A travel schedule describes the planned/base location and can
+                # be less specific than the recording filename. Preserve exact
+                # filename evidence, use the schedule to corroborate the date,
+                # and retain its place only as non-authoritative context.
+                cand.place_comparison = FieldComparisonState.NOT_COMPARABLE.value
+                cand.match_reasons.append(
+                    f"Schedule corroborates date {exact_date}; exact filename location "
+                    f"{place} retained over schedule context {cand.place}"
+                )
+                contextual_candidates.append(cand)
             else:
                 conflict_details = []
                 if not place_agrees:
@@ -661,6 +678,20 @@ class TravelScheduleEngine:
                 f"Schedule corroborates recording date {exact_date} and location {place}"
             )
             # Never overwrite or change fields on CORROBORATED
+            return res
+
+        if contextual_candidates and not conflicting_candidates:
+            res.decision = TravelReviewDecision.CORROBORATED
+            res.selected_schedule_row_ids = [
+                rid for c in contextual_candidates for rid in c.schedule_row_ids
+            ]
+            context_places = ", ".join(
+                dict.fromkeys(c.place for c in contextual_candidates if c.place)
+            )
+            res.diagnostic_notes.append(
+                f"Schedule corroborates recording date {exact_date}; retained exact filename "
+                f"location {place} and recorded schedule place {context_places} as context only"
+            )
             return res
 
         # If matching rows exist on that date but all are elsewhere: SCHEDULE_CONFLICT
