@@ -201,7 +201,7 @@ Tool 4 is the sole authorized writer to the Baserow Media database. It is invoke
 
 ### Main Tooling Script
 
-Status: **READY_FOR_REVIEW**
+Status: **ACCEPTED**
 
 Build plan: `docs/main-tooling-script-build-plan.md`
 
@@ -238,4 +238,3 @@ media-archive run /path/to/media/files --workflow all
 - Skips unsupported non-media files with non-fatal notices.
 - Persists all execution evidence to `.renamer/media-archive-tooling.log`.
 - Routes items requiring human attention to the review portal Active Evaluation Queue (`/`).
-

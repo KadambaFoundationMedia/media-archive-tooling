@@ -7,7 +7,7 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `ACCEPTED`
 
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/40
@@ -107,3 +107,32 @@ All shell helper scripts validated with `bash -n`:
 - Populated `live_row` in `MediaDbUpdaterEngine` on CREATE, UPDATE, and NOOP.
 - `TerminalReporter` and `MainToolingScriptService` format and display verified live row values (Row ID, Title, Date, Place, Filename) in terminal output upon write.
 - Verified with `tests/test_main_script.py::test_41`.
+
+## Planning/review acceptance — 2026-09-19
+
+Accepted implementation commit: `0aba5de`
+
+The planner independently inspected the implementation diff and confirmed that
+R-001 through R-005 are resolved. Verification performed:
+
+- focused Tool 1/Main Script regressions: **47 passed**;
+- portal suite after test isolation correction: **13 passed**;
+- full local suite: **399 passed, 2 warnings**;
+- exact Duben practical dry run:
+  - WHAT: `SB-3-1-21`;
+  - final projection: `2008-04-DD_KKS_SB-3-1-21_cz.mp3`;
+  - Tool 2: `NEW_MEDIA_CANDIDATE`;
+  - Tool 4: `WOULD CREATE`, with Title `SB 3.1.21`, Category
+    `Srimad-bhagavatam`, Tag `3.1.21`, Language `English`, Czech country
+    evidence, and original filename/path provenance in Notes;
+- GitHub Actions required check `Python 3.12 tests`: **passed** on `0aba5de`
+  (job 105933860813).
+
+The planner also made one test-only correction after review: the older portal
+detail/update test now creates and configures its own temporary registry instead
+of reading whichever persistent developer registry is active. This does not
+change production behavior and prevents local state from making the full suite
+order-dependent.
+
+No open review findings remain. PR #40 is approved for a normal merge commit
+after the required check passes on the final review/status head.
