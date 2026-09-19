@@ -71,6 +71,21 @@ def test_dotted_sb_combination_uses_primary_class_for_canonical_filename():
     assert proposal.proposed_filename == "2011-08-29_KKS_SB-1-19-31_Oslo-no.wma"
 
 
+def test_dotted_sb_following_date_produces_canonical_filename():
+    source = Path(
+        "/archive/From JVD (8.9.11)/"
+        "KKS_S.B. 1.19.30_28.8.11_Oslo_ .WMA"
+    )
+    result = RenamerParser().parse_file(source)
+    proposal = RenamePlanner(mode=RenameMode.FINALIZE).plan_rename(result)
+
+    assert result.when.selected_value == "2011-08-28"
+    assert result.what.selected_value == "SB-1-19-30"
+    assert result.where.place_location == "Oslo"
+    assert result.where.country_iso2 == "no"
+    assert proposal.proposed_filename == "2011-08-28_KKS_SB-1-19-30_Oslo-no.wma"
+
+
 def test_golden_case_4_recorder_unresolved(parser_and_planner):
     # R09_0004.MP3
     parser, planner = parser_and_planner

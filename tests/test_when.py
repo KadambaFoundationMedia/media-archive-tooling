@@ -59,3 +59,17 @@ def test_ambiguous_numeric_date():
     assert res.selected_value == "2010-09-10"
     assert "2010-10-09" in res.alternatives
     assert res.state == ResolutionState.PROVISIONAL
+
+
+def test_dotted_scripture_numbers_do_not_hide_later_explicit_date():
+    result, _ = parse_when(
+        "KKS_S.B. 1.19.30_28.8.11_Oslo_ .WMA",
+        parent_folder="From JVD (8.9.11)",
+    )
+
+    assert result.selected_value == "2011-08-28"
+    assert result.state == ResolutionState.STRONG
+    assert any(e.raw_value == "28.8.11" for e in result.evidence)
+    folder_evidence = [e for e in result.evidence if e.source == "folder_numeric_context"]
+    assert len(folder_evidence) == 1
+    assert folder_evidence[0].raw_value == "From JVD (8.9.11)"

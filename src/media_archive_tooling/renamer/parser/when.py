@@ -55,6 +55,38 @@ def is_valid_date(year: int, month: int, day: int) -> bool:
     return 1 <= day <= days_in_month[month - 1]
 
 
+def _folder_numeric_context_evidence(
+    parent_folder: str,
+    ancestors: List[str],
+    selected_date: str,
+) -> Optional[Evidence]:
+    """Return non-authoritative folder support for a selected filename date.
+
+    A folder token such as ``8.9.11`` is ambiguous as a day/month date, but it
+    can still corroborate that a file belongs to an August/September 2011
+    collection. It must never override the explicit date in the filename.
+    """
+    try:
+        selected_year, selected_month, _ = (int(part) for part in selected_date.split("-"))
+    except (TypeError, ValueError):
+        return None
+
+    for folder in [parent_folder] + ancestors:
+        for match in re.finditer(r"(?<!\d)(\d{1,2})[-._/](\d{1,2})[-._/](\d{2})(?!\d)", folder):
+            first, second, short_year = (int(group) for group in match.groups())
+            folder_year = expand_two_digit_year(short_year)
+            if folder_year == selected_year and selected_month in {first, second}:
+                return Evidence(
+                    source="folder_numeric_context",
+                    raw_value=folder,
+                    details=(
+                        f"supports year {selected_year} and includes month "
+                        f"{selected_month:02d}; folder date order remains ambiguous"
+                    ),
+                )
+    return None
+
+
 def parse_when(
     filename: str,
     parent_folder: str = "",
@@ -87,8 +119,9 @@ def parse_when(
 
     # 2. Scripture guard
     masked_filename = re.sub(
-        r"\b(?:SB|BG|CC)[- .:]+\d+[- .:]+\d+(?:[- .:]+\d+)?\b",
-        "___SCRIPTURE___",
+        r"(?<![A-Za-z0-9])(?:S\s*\.?\s*B\.?|B\s*\.?\s*G\.?|C\s*\.?\s*C\.?)"
+        r"[- .:]+\d+[- .:]+\d+(?:[- .:]+\d+)?(?=$|[^A-Za-z0-9])",
+        lambda match: "_" * len(match.group(0)),
         filename,
         flags=re.IGNORECASE
     )
@@ -122,11 +155,10 @@ def parse_when(
                 return res, cleaned.strip()
 
     # 4. 3-part numeric date: e.g. "10-9-10", "03-10-23", "27_8_15", "24/5/11", "24-5-11"
-    num_match = re.search(
-        r"(?:^|[\s_.-])(\d{1,4})[-._/](\d{1,2})[-._/](\d{1,4})(?=[_.\s-]|$)",
-        masked_filename
+    numeric_pattern = re.compile(
+        r"(?:^|[\s_.-])(\d{1,4})[-._/](\d{1,2})[-._/](\d{1,4})(?=[_.\s-]|$)"
     )
-    if num_match:
+    for num_match in numeric_pattern.finditer(masked_filename):
         p1, p2, p3 = num_match.group(1), num_match.group(2), num_match.group(3)
         span = num_match.span()
         
@@ -147,11 +179,15 @@ def parse_when(
             cleaned = filename[:span[0]] + " " + filename[span[1]:]
             if len(candidates) == 1:
                 cand, fmt = candidates[0]
+                evidence = [Evidence(source="numeric_date", raw_value=num_match.group(0).strip(" _.-"), details=fmt)]
+                folder_evidence = _folder_numeric_context_evidence(parent_folder, ancestors, cand)
+                if folder_evidence:
+                    evidence.append(folder_evidence)
                 return WhenResult(
                     selected_value=cand,
                     precision="day",
                     state=ResolutionState.STRONG,
-                    evidence=[Evidence(source="numeric_date", raw_value=num_match.group(0).strip(" _.-"), details=fmt)]
+                    evidence=evidence,
                 ), cleaned.strip()
             else:
                 selected = None
@@ -180,12 +216,16 @@ def parse_when(
                         selected = next((c for c, f in candidates if f == "D-M-Y"), candidates[0][0])
                     alternatives = [c for c, _ in candidates if c != selected]
                     
+                evidence = [Evidence(source="numeric_ambiguous", raw_value=num_match.group(0).strip(" _.-"), details=f"grammar:{getattr(collection_grammar, 'repeated_date_format', None)}" if collection_grammar else None)]
+                folder_evidence = _folder_numeric_context_evidence(parent_folder, ancestors, selected)
+                if folder_evidence:
+                    evidence.append(folder_evidence)
                 return WhenResult(
                     selected_value=selected,
                     precision="day",
                     state=ResolutionState.PROVISIONAL if not (collection_grammar and getattr(collection_grammar, "repeated_date_format", None)) else ResolutionState.STRONG,
                     alternatives=alternatives,
-                    evidence=[Evidence(source="numeric_ambiguous", raw_value=num_match.group(0).strip(" _.-"), details=f"grammar:{getattr(collection_grammar, 'repeated_date_format', None)}" if collection_grammar else None)]
+                    evidence=evidence,
                 ), cleaned.strip()
 
     # 5. Check folder context if filename has no date
