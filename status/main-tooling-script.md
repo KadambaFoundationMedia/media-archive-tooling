@@ -86,6 +86,11 @@ None.
 
 None.
 
+## Commit-review checkpoint
+
+Current implementation HEAD: `b08aa6d`
+Required GitHub status check: `Python 3.12 tests` passed (job: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35454629913/job/105927632423)
+
 ## Next milestone
 
 Planning and user review of Phase A on PR #40.
