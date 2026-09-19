@@ -334,7 +334,7 @@ If the field supports multiple values, add the new applicable tag without deleti
 
 ### Language
 
-Default to the existing live option representing **English** when no stronger language evidence exists.
+Default to the existing live option representing **English** when no stronger language evidence exists. For recordings with a trustworthy resolved country of Czech Republic (`cz`), include both existing live options **English** and **Czech** because these recordings have live Czech translation.
 
 Do not create a new Language option automatically.
 

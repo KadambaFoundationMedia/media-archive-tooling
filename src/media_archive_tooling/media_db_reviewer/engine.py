@@ -1,5 +1,7 @@
 """Media Database Reconciliation Engine for Tool 2 (Build Plan Sections 10-15)."""
 from datetime import datetime
+from functools import lru_cache
+import json
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -70,6 +72,26 @@ def _norm_token(text: Optional[str]) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "", ascii_val).lower()
 
 
+@lru_cache(maxsize=1)
+def _location_aliases() -> Dict[str, str]:
+    """Map known archive location spellings to one canonical comparison token."""
+    from ..renamer.parser.where import LOCATIONS_PATH
+
+    aliases: Dict[str, str] = {}
+    if LOCATIONS_PATH.exists():
+        with open(LOCATIONS_PATH, "r", encoding="utf-8") as location_file:
+            for location in json.load(location_file):
+                canonical = _norm_token(location.get("canonical_place"))
+                for alias in [location.get("canonical_place")] + location.get("aliases", []):
+                    aliases[_norm_token(alias)] = canonical
+    return aliases
+
+
+def _norm_place(place: Optional[str]) -> str:
+    normalized = _norm_token(place)
+    return _location_aliases().get(normalized, normalized)
+
+
 def _norm_country(country: Optional[str]) -> Optional[str]:
     """Normalize country string to uppercase ISO2 code if recognized."""
     if not country:
@@ -78,9 +100,8 @@ def _norm_country(country: Optional[str]) -> Optional[str]:
     if len(c_clean) == 2 and c_clean.isalpha():
         return c_clean.upper()
 
-    c_lower = c_clean.lower()
+    c_lower = re.sub(r"[-_]+", " ", c_clean.lower())
     from ..adapters.baserow import COUNTRIES_PATH
-    import json
     try:
         if COUNTRIES_PATH.exists():
             with open(COUNTRIES_PATH, "r", encoding="utf-8") as f:
@@ -345,8 +366,8 @@ def _compare_places(
     if not local_place and db_place:
         return FieldComparisonState.LOCAL_MISSING, "Local location is blank"
 
-    norm_lp = _norm_token(local_place)
-    norm_dp = _norm_token(db_place)
+    norm_lp = _norm_place(local_place)
+    norm_dp = _norm_place(db_place)
 
     if norm_lp == norm_dp:
         return FieldComparisonState.AGREES, None
@@ -877,11 +898,20 @@ class MediaDatabaseReconciliationEngine:
 
             where_val = None
             if db_row.get("place"):
-                p = db_row.get("place")
-                c = db_row.get("country") or ""
-                where_val = f"{p}-{c}".strip("-")
+                db_place = db_row.get("place")
+                db_country = db_row.get("country")
+                # Preserve Tool 1's canonical filename spelling when the live
+                # Baserow label is a known alias of the same location.
+                p = (
+                    local_place
+                    if local_place and _norm_place(local_place) == _norm_place(db_place)
+                    else db_place
+                )
+                country_iso = _norm_country(local_country or db_country)
+                where_val = f"{p}-{country_iso.lower() if country_iso else ''}".strip("-")
             elif local_place:
-                where_val = f"{local_place}-{local_country or ''}".strip("-")
+                country_iso = _norm_country(local_country)
+                where_val = f"{local_place}-{country_iso.lower() if country_iso else ''}".strip("-")
 
             renamer_enr = RenamerEnrichment(
                 confirmed=True,

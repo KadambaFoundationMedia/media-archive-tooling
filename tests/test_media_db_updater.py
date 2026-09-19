@@ -942,6 +942,94 @@ def test_25_b_language_defaults_support_live_multiple_select_schema(tmp_path):
     assert fake_db.rows[res.media_row_id]["Language"] == ["English"]
 
 
+def test_25_c_czech_recording_includes_live_translation_language(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(
+        registry,
+        tracking_id="trk0025c",
+        place="Krsna-Dvur",
+        country="Czech Republic",
+        country_iso="cz",
+    )
+    fake_db = FakeBaserowWriteAdapter()
+    for field in fake_db.fields:
+        if field["name"] == "Language":
+            field["type"] = "multiple_select"
+            field["select_options"].append(
+                {"id": 22, "value": "Czech", "color": "green"}
+            )
+        elif field["name"] == "Place, location":
+            field["select_options"].append(
+                {"id": 75, "value": "Farma-Krishna-Dvur", "color": "blue"}
+            )
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(tracking_id="trk0025c"),
+    )
+    req = service.build_sync_request("trk0025c")
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0025c", commit=True, request=req)
+
+    assert res.status == SyncStatus.SYNCED
+    assert fake_db.rows[res.media_row_id]["Language"] == ["English", "Czech"]
+
+
+def test_25_d_existing_czech_recording_adds_translation_without_removing_languages(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    proposal = save_test_file(
+        registry,
+        tracking_id="trk0025d",
+        place="Krsna-Dvur",
+        country="Czech Republic",
+        country_iso="cz",
+    )
+    live_fields = FakeBaserowWriteAdapter().fields
+    for field in live_fields:
+        if field["name"] == "Language":
+            field["type"] = "multiple_select"
+            field["select_options"].append(
+                {"id": 22, "value": "Czech", "color": "green"}
+            )
+        elif field["name"] == "Place, location":
+            field["select_options"].append(
+                {"id": 75, "value": "Farma-Krishna-Dvur", "color": "blue"}
+            )
+    fake_db = FakeBaserowWriteAdapter(
+        initial_fields=live_fields,
+        initial_rows=[{
+            "id": 125,
+            "Title": "BG 1.18",
+            "Date": "2014-08-04",
+            "Category": "Bhagavad-gita",
+            "Tag": ["1.18"],
+            "Language": ["English", "Russian"],
+            "Filename": proposal.current_filename,
+            "media_archive_path": proposal.proposed_path,
+            "Country": "Czech Republic",
+            "Place, location": "Farma-Krishna-Dvur",
+        }],
+    )
+    service = MediaDatabaseUpdaterService(
+        registry,
+        fake_db,
+        tool2_service=make_mock_tool2(
+            decision="EXISTING_MEDIA_MATCH",
+            row_id=125,
+            tracking_id="trk0025d",
+        ),
+    )
+    req = service.build_sync_request("trk0025d")
+    req.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req.selected_media_row_id = 125
+
+    res = service.synchronize("trk0025d", commit=True, request=req)
+
+    assert res.status == SyncStatus.SYNCED
+    assert fake_db.rows[125]["Language"] == ["English", "Russian", "Czech"]
+
+
 # ---------------------------------------------------------------------------
 # Test 26: Status Media, Status thumb, Status Transcript default to existing Not-started option
 # ---------------------------------------------------------------------------

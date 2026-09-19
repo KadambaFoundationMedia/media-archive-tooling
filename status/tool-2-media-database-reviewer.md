@@ -116,3 +116,7 @@ Merge accepted PR #19 into protected `main`, close implementation issue #2 as co
 The `KKS DUBEN 2008 MP3/02 KKS. SB. 3.1.20.mp3` test established Czech Republic / `cz` without a city. Tool 2 previously skipped country comparison whenever the local city was blank, so unrelated April rows in the United Kingdom and Netherlands remained false date-only candidates.
 
 Tool 2 now compares known countries independently of city availability. A foreign-country row supported only by a partial-date overlap is discarded as duplicate-search noise; direct identity or matching WHAT evidence still retains a contradictory row for review. This preserves the leading Baserow-country rule without requiring Tool 1 to invent a location.
+
+## Post-acceptance practical correction — Baserow location labels (2026-09-19)
+
+Builder notice: Tool 2 now treats hyphenated country labels such as `Czech-republic` as equivalent to ISO `cz`, and compares places through the shared archive location aliases. Thus `Krsna-Dvur` and the live Baserow label `Farma-Krishna-Dvur` identify the same location. When a confirmed Baserow match uses an equivalent select-option label, Tool 2 preserves Tool 1's canonical filename value (`Krsna-Dvur-cz`) rather than inserting the Baserow display label and country name into the filename.

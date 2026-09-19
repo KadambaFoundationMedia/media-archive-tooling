@@ -710,3 +710,7 @@ The structured Date and Place/location fields remain blank. The local review aud
 ### Location taxonomy approval correction (2026-09-19)
 
 Builder notice: genuinely new Place/location select options must now receive explicit human approval before Tool 4 creates them. Known aliases reuse an established live option without approval or schema growth. In particular, `Krsna-Dvur` and `Farma KD` reuse the existing `Farma-Krishna-Dvur` option (including the live `place_location` field alias); Tool 4 must not create another spelling variant. Country option behavior is unchanged.
+
+### Czech live-translation language rule (2026-09-19)
+
+Builder notice: the live Baserow `Language` field is multi-select and exposes both `English` and `Czech`. A new recording with trustworthy resolved country `cz` / Czech Republic must receive both values because Czech recordings have live Czech translation. Other new recordings continue to default to English, existing-row languages remain leading/preserved, and Tool 4 must not create missing Language options.
