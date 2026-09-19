@@ -35,6 +35,7 @@ from .write_adapter import (
     BaserowWriteError,
     FakeBaserowWriteAdapter,
     TaxonomyForbiddenError,
+    _matching_select_options,
     _normalize_option_text,
     index_fields_by_name,
     redact_secrets,
@@ -388,11 +389,25 @@ class MediaDatabaseUpdateEngine:
         options: List[Dict[str, Any]],
         value: str,
         is_category: bool = False,
+        is_location: bool = False,
     ) -> Tuple[Optional[str], bool]:
         """Find matching select option by normalized text. Returns (matched_value, is_ambiguous)."""
         if is_category:
             target_key = _normalize_category_key(value)
             matches = [opt["value"] for opt in options if _normalize_category_key(opt.get("value", "")) == target_key]
+        elif is_location:
+            literal_matches = [
+                opt["value"] for opt in options
+                if opt.get("value", "").strip() == value.strip()
+            ]
+            if len(literal_matches) == 1:
+                return literal_matches[0], False
+            if len(literal_matches) > 1:
+                return None, True
+            semantic_matches = _matching_select_options("Place, location", value, options)
+            if semantic_matches:
+                return semantic_matches[0]["value"], False
+            return None, False
         else:
             target = _normalize_option_text(value)
             matches = [opt["value"] for opt in options if _normalize_option_text(opt.get("value", "")) == target]
@@ -766,7 +781,13 @@ class MediaDatabaseUpdateEngine:
 
         # 10. Country & Place, location
         appr_country = request.get_approval("Country")
-        appr_place = request.get_approval("Place, location")
+        place_fld = fields_by_name.get("place, location") or fields_by_name.get("place_location") or fields_by_name.get("location")
+        place_field_name = place_fld["name"] if place_fld else "Place, location"
+        appr_place = (
+            request.get_approval(place_field_name)
+            or request.get_approval("Place, location")
+            or request.get_approval("place_location")
+        )
         target_country = None
         target_place = None
 
@@ -785,6 +806,13 @@ class MediaDatabaseUpdateEngine:
                 conflicts.append("Place, location approval missing required reviewed precondition value")
             elif appr_place.action == FieldApprovalAction.DEFER:
                 conflicts.append("Place, location review action is DEFER; manual resolution required")
+            elif appr_place.action not in (
+                FieldApprovalAction.CONFIRM_NEW,
+                FieldApprovalAction.APPLY_CORRECTION,
+            ):
+                conflicts.append(
+                    f"Place, location action '{appr_place.action.value}' does not approve creating a new option"
+                )
             else:
                 target_place = appr_place.approved_value or request.where_place
         elif is_semantic_state_eligible(request.where_state):
@@ -806,9 +834,27 @@ class MediaDatabaseUpdateEngine:
                     diagnostic_notes=["Intended field 'Country' missing from schema"],
                 )
         if target_place:
-            place_fld = fields_by_name.get("place, location") or fields_by_name.get("place_location") or fields_by_name.get("location")
             if place_fld:
-                diffs.append(FieldDiff(field_name=place_fld["name"], old_value=None, new_value=target_place, action=FieldAction.SET))
+                matched_place, ambiguous_place = self._match_select_option(
+                    place_fld.get("select_options", []),
+                    target_place,
+                    is_location=True,
+                )
+                if matched_place:
+                    diffs.append(FieldDiff(field_name=place_field_name, old_value=None, new_value=matched_place, action=FieldAction.SET))
+                elif ambiguous_place:
+                    conflicts.append(f"Ambiguous location option for '{target_place}'")
+                elif appr_place:
+                    diffs.append(FieldDiff(field_name=place_field_name, old_value=None, new_value=target_place, action=FieldAction.SET))
+                else:
+                    conflicts.append(f"New location option '{target_place}' requires explicit human approval")
+                    diffs.append(FieldDiff(
+                        field_name=place_field_name,
+                        old_value=None,
+                        new_value=target_place,
+                        action=FieldAction.CONFLICT,
+                        details="New Baserow location options require explicit human approval",
+                    ))
             else:
                 return MediaDbSyncResult(
                     tracking_id=request.tracking_id,
@@ -1113,42 +1159,77 @@ class MediaDatabaseUpdateEngine:
             if curr_country:
                 diffs.append(FieldDiff(field_name="Country", old_value=curr_country, new_value=curr_country, action=FieldAction.PRESERVED))
 
-        appr_place = request.get_approval("Place, location")
-        curr_place = _get_text("Place, location")
+        place_fld = fields_by_name.get("place, location") or fields_by_name.get("place_location") or fields_by_name.get("location")
+        place_field_name = place_fld["name"] if place_fld else "Place, location"
+        appr_place = (
+            request.get_approval(place_field_name)
+            or request.get_approval("Place, location")
+            or request.get_approval("place_location")
+        )
+        curr_place = _get_text(place_field_name)
         if appr_place:
             if not appr_place.has_reviewed_precondition:
                 conflicts.append("Place, location approval missing required reviewed precondition value")
-                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=appr_place.approved_value, action=FieldAction.CONFLICT))
+                diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=appr_place.approved_value, action=FieldAction.CONFLICT))
             else:
                 expected_pre = appr_place.reviewed_precondition_value
                 pre_matches = (not curr_place and not expected_pre) or (_normalize_option_text(curr_place) == _normalize_option_text(expected_pre))
                 if pre_matches:
                     if appr_place.action == FieldApprovalAction.KEEP_DATABASE:
-                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+                        diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
                     elif appr_place.action == FieldApprovalAction.DEFER:
                         conflicts.append("Place, location review action is DEFER; manual resolution required")
-                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.CONFLICT))
+                        diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=curr_place, action=FieldAction.CONFLICT))
                     else:
                         target_p = appr_place.approved_value or request.where_place
-                        diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=target_p, action=FieldAction.SET))
+                        matched_place, _ = self._match_select_option(
+                            place_fld.get("select_options", []) if place_fld else [],
+                            target_p,
+                            is_location=True,
+                        )
+                        diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=matched_place or target_p, action=FieldAction.SET))
                 else:
                     conflicts.append(f"Place approval precondition failed: DB has '{curr_place}', expected '{expected_pre}'")
-                    diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=appr_place.approved_value, action=FieldAction.CONFLICT))
+                    diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=appr_place.approved_value, action=FieldAction.CONFLICT))
         elif not is_semantic_state_eligible(request.where_state):
             diag_notes.append(f"WHERE state '{request.where_state}' not positively eligible ('exact'/'strong'); excluded from Place, location field")
             if curr_place:
-                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
-        elif request.where_place and "place, location" in fields_by_name:
+                diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+        elif request.where_place and place_fld:
             if not curr_place:
-                diffs.append(FieldDiff(field_name="Place, location", old_value=None, new_value=request.where_place, action=FieldAction.SET))
-            elif _normalize_option_text(curr_place) == _normalize_option_text(request.where_place):
-                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+                matched_place, ambiguous_place = self._match_select_option(
+                    place_fld.get("select_options", []),
+                    request.where_place,
+                    is_location=True,
+                )
+                if matched_place:
+                    diffs.append(FieldDiff(field_name=place_field_name, old_value=None, new_value=matched_place, action=FieldAction.SET))
+                elif ambiguous_place:
+                    conflicts.append(f"Ambiguous location option for '{request.where_place}'")
+                else:
+                    conflicts.append(f"New location option '{request.where_place}' requires explicit human approval")
+                    diffs.append(FieldDiff(
+                        field_name=place_field_name,
+                        old_value=None,
+                        new_value=request.where_place,
+                        action=FieldAction.CONFLICT,
+                        details="New Baserow location options require explicit human approval",
+                    ))
+            elif (
+                _normalize_option_text(curr_place) == _normalize_option_text(request.where_place)
+                or bool(_matching_select_options(
+                    place_field_name,
+                    request.where_place,
+                    [{"value": curr_place}],
+                ))
+            ):
+                diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
             else:
                 conflicts.append(f"Place conflict: DB has '{curr_place}', incoming is '{request.where_place}'")
-                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=request.where_place, action=FieldAction.CONFLICT))
+                diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=request.where_place, action=FieldAction.CONFLICT))
         else:
             if curr_place:
-                diffs.append(FieldDiff(field_name="Place, location", old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
+                diffs.append(FieldDiff(field_name=place_field_name, old_value=curr_place, new_value=curr_place, action=FieldAction.PRESERVED))
 
         # Tag (Additive / union)
         verse = _extract_scripture_verse(request.what_val, request.what_verse)
@@ -1475,12 +1556,31 @@ class MediaDatabaseUpdateEngine:
                     ), request)
                 payload[f_def["name"]] = diff.new_value
 
-        # 3. Ensure Country / Place, location select options only after full payload schema validation
-        for fld_name in ("Country", "Place, location"):
-            val = payload.get(fld_name)
-            if val and isinstance(val, str):
+        # 3. Ensure Country/location select options only after full payload schema validation.
+        # Live schemas may call the location field place_location rather than Place, location.
+        for fld_name, val in list(payload.items()):
+            norm_field_name = fld_name.strip().lower()
+            if norm_field_name in {"country", "place, location", "place_location", "location"} and val and isinstance(val, str):
                 try:
-                    canonical_opt = self.write_adapter.ensure_select_option(fld_name, val)
+                    place_approval = (
+                        request.get_approval(fld_name)
+                        or request.get_approval("Place, location")
+                        or request.get_approval("place_location")
+                    )
+                    allow_location_creation = bool(
+                        norm_field_name != "country"
+                        and place_approval
+                        and place_approval.has_reviewed_precondition
+                        and place_approval.action in (
+                            FieldApprovalAction.CONFIRM_NEW,
+                            FieldApprovalAction.APPLY_CORRECTION,
+                        )
+                    )
+                    canonical_opt = self.write_adapter.ensure_select_option(
+                        fld_name,
+                        val,
+                        allow_create=allow_location_creation,
+                    )
                     payload[fld_name] = canonical_opt
                 except AmbiguousOptionError as e:
                     return self._enrich_result(MediaDbSyncResult(
@@ -1786,12 +1886,30 @@ class MediaDatabaseUpdateEngine:
                     )
                 payload[f_def["name"]] = diff.new_value
 
-        # 4. Ensure select options if country / location are being set
-        for fld_name in ("Country", "Place, location"):
-            val = payload.get(fld_name)
-            if val and isinstance(val, str):
+        # 4. Ensure select options if country / location are being set.
+        for fld_name, val in list(payload.items()):
+            norm_field_name = fld_name.strip().lower()
+            if norm_field_name in {"country", "place, location", "place_location", "location"} and val and isinstance(val, str):
                 try:
-                    canonical_opt = self.write_adapter.ensure_select_option(fld_name, val)
+                    place_approval = (
+                        request.get_approval(fld_name)
+                        or request.get_approval("Place, location")
+                        or request.get_approval("place_location")
+                    )
+                    allow_location_creation = bool(
+                        norm_field_name != "country"
+                        and place_approval
+                        and place_approval.has_reviewed_precondition
+                        and place_approval.action in (
+                            FieldApprovalAction.CONFIRM_NEW,
+                            FieldApprovalAction.APPLY_CORRECTION,
+                        )
+                    )
+                    canonical_opt = self.write_adapter.ensure_select_option(
+                        fld_name,
+                        val,
+                        allow_create=allow_location_creation,
+                    )
                     payload[fld_name] = canonical_opt
                 except AmbiguousOptionError as e:
                     return MediaDbSyncResult(

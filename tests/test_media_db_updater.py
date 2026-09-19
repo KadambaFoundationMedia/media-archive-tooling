@@ -999,9 +999,9 @@ def test_28_new_legitimate_country_option_added_safely(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 29: New legitimate location option can be added safely and then assigned
+# Test 29: New location option requires approval before it can be added
 # ---------------------------------------------------------------------------
-def test_29_new_legitimate_location_option_added_safely(tmp_path):
+def test_29_new_location_option_requires_explicit_approval(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
     save_test_file(registry, tracking_id="trk0029")
     fake_db = FakeBaserowWriteAdapter()
@@ -1010,9 +1010,22 @@ def test_29_new_legitimate_location_option_added_safely(tmp_path):
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
     req.where_place = "Paris"
 
-    res = service.synchronize("trk0029", commit=True, request=req)
-    assert res.status == SyncStatus.SYNCED
-    assert fake_db.rows[res.media_row_id]["Place, location"] == "Paris"
+    blocked = service.synchronize("trk0029", commit=True, request=req)
+    assert blocked.status == SyncStatus.REVIEW_REQUIRED
+    assert any("requires explicit human approval" in conflict for conflict in blocked.conflicts)
+    assert fake_db.rows == {}
+
+    req.field_approvals["Place, location"] = {
+        "action": "confirm_new",
+        "approved_value": "Paris",
+        "has_reviewed_precondition": True,
+        "reviewed_precondition_value": None,
+        "reviewer": "test-reviewer",
+    }
+    approved = service.synchronize("trk0029", commit=True, request=req)
+
+    assert approved.status == SyncStatus.SYNCED
+    assert fake_db.rows[approved.media_row_id]["Place, location"] == "Paris"
 
 
 # ---------------------------------------------------------------------------
@@ -1037,10 +1050,20 @@ def test_30_equivalent_country_location_option_reused_rather_than_duplicated(tmp
 
 def test_30_b_create_uses_actual_live_location_alias_name(tmp_path):
     registry = LocalRegistry(tmp_path / "test.db")
-    save_test_file(registry, tracking_id="trk0030b")
+    save_test_file(
+        registry,
+        tracking_id="trk0030b",
+        place="Krsna-Dvur",
+        country="Czech Republic",
+        country_iso="cz",
+    )
     fake_db = FakeBaserowWriteAdapter()
     location_field = [field for field in fake_db.fields if field["name"] == "Place, location"][0]
     location_field["name"] = "place_location"
+    location_field["select_options"] = [
+        {"id": 10, "value": "Farma-Krishna-Dvur", "color": "blue"},
+        {"id": 20, "value": "Farma-Krishna-dvur", "color": "red"},
+    ]
     service = MediaDatabaseUpdaterService(
         registry,
         fake_db,
@@ -1048,13 +1071,14 @@ def test_30_b_create_uses_actual_live_location_alias_name(tmp_path):
     )
     req = service.build_sync_request("trk0030b")
     req.tool2_decision = "NEW_MEDIA_CANDIDATE"
-    req.where_place = "Leipzig"
+    req.where_place = "Krsna-Dvur"
 
     res = service.synchronize("trk0030b", commit=True, request=req)
 
     assert res.status == SyncStatus.SYNCED
-    assert fake_db.rows[res.media_row_id]["place_location"] == "Leipzig"
+    assert fake_db.rows[res.media_row_id]["place_location"] == "Farma-Krishna-Dvur"
     assert "Place, location" not in fake_db.rows[res.media_row_id]
+    assert len(location_field["select_options"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1086,6 +1110,21 @@ def test_31b_country_reuses_established_hyphenated_option_without_schema_write()
     assert are_countries_equivalent(matched, "cz") is True
 
 
+def test_known_location_alias_reuses_existing_live_option_without_schema_write():
+    live_fields = FakeBaserowWriteAdapter().fields
+    location = next(field for field in live_fields if field["name"] == "Place, location")
+    location["select_options"] = [
+        {"id": 10, "value": "Farma-Krishna-Dvur", "color": "blue"},
+        {"id": 20, "value": "Farma-Krishna-dvur", "color": "red"},
+    ]
+    fake_db = FakeBaserowWriteAdapter(initial_fields=live_fields)
+
+    matched = fake_db.ensure_select_option("Place, location", "Krsna-Dvur")
+
+    assert matched == "Farma-Krishna-Dvur"
+    assert len(location["select_options"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # Test 32: Select-option schema update preserves all existing options
 # ---------------------------------------------------------------------------
@@ -1093,7 +1132,10 @@ def test_32_select_option_schema_update_preserves_all_existing_options(tmp_path)
     fake_db = FakeBaserowWriteAdapter()
     orig_options = [opt["value"] for opt in fake_db.fields[-1]["select_options"]]
 
-    fake_db.ensure_select_option("Place, location", "New City")
+    with pytest.raises(TaxonomyForbiddenError, match="requires explicit human approval"):
+        fake_db.ensure_select_option("Place, location", "New City")
+
+    fake_db.ensure_select_option("Place, location", "New City", allow_create=True)
     new_options = [opt["value"] for opt in fake_db.fields[-1]["select_options"]]
 
     for o in orig_options:

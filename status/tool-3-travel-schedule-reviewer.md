@@ -45,3 +45,7 @@ The `KKS DUBEN 2008 MP3` collection demonstrated useful bounded-date evidence th
 - the morning-temple class pattern and other April Prague archive material make Prague temple a useful hypothesis, but not a confirmed structured location.
 
 For future processing, Tool 3 should emit such lower/upper date bounds and location hypotheses as contextual evidence for Tool 4 Notes. It must leave the exact Date and Place/location fields blank until stronger evidence confirms them.
+
+## Post-acceptance exact-location precedence correction (2026-09-19)
+
+Builder notice: an exact location stated directly in a filename now outranks a broader same-country travel-schedule place. The practical file `A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3` identifies `Krsna-Dvur-cz`; the schedule's `Prague, Czech Republic` entry corroborates the recording date and is retained as context rather than causing `SCHEDULE_CONFLICT`. A contradictory schedule country still produces a conflict. Focused regressions cover both cases.

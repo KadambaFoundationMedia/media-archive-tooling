@@ -34,6 +34,7 @@ from media_archive_tooling.renamer.models import (
     WhereResult,
 )
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
+from media_archive_tooling.renamer.parser.engine import RenamerParser
 from media_archive_tooling.renamer.service import RenamerApplicationService
 from media_archive_tooling.media_db_reviewer.models import (
     MediaCandidate,
@@ -341,6 +342,50 @@ def test_09_known_date_place_vs_different_scheduled_place_conflict(tmp_path):
     # Local value preserved
     stored = reg.get_file(tid)
     assert "Leipzig" in stored["where_val"]
+
+
+def test_exact_filename_location_outranks_same_country_schedule_context(tmp_path):
+    """A precise recording location in the filename must not be blocked by broader itinerary context."""
+    registry = LocalRegistry(tmp_path / "registry.sqlite3")
+    rows = [make_raw_schedule_row(480, "2003-10-25", place="Prague", country="Czech Republic")]
+    store = TravelReferenceStore(
+        reference_path=tmp_path / "travel_schedule.json",
+        provider=FakeBaserowProvider(rows=rows),
+    )
+    service = TravelScheduleReviewService(registry=registry, reference_store=store)
+    parser_result = RenamerParser().parse_file(Path(
+        "/archive/Prague-Oct-2003/Lekce/"
+        "A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3"
+    ))
+    tracking_id = register_file(registry, parser_result)
+
+    result = service.review_file(tracking_id)
+
+    assert result.decision == TravelReviewDecision.CORROBORATED
+    assert result.conflicts == []
+    assert result.selected_schedule_row_ids == [480]
+    assert any("retained exact filename location Krsna-Dvur" in note for note in result.diagnostic_notes)
+    assert registry.get_file(tracking_id)["where_val"] == "Krsna-Dvur-cz"
+
+
+def test_exact_filename_location_does_not_hide_country_contradiction(tmp_path):
+    registry = LocalRegistry(tmp_path / "registry.sqlite3")
+    rows = [make_raw_schedule_row(481, "2003-10-25", place="Berlin", country="Germany")]
+    store = TravelReferenceStore(
+        reference_path=tmp_path / "travel_schedule.json",
+        provider=FakeBaserowProvider(rows=rows),
+    )
+    service = TravelScheduleReviewService(registry=registry, reference_store=store)
+    parser_result = RenamerParser().parse_file(Path(
+        "/archive/Prague-Oct-2003/Lekce/"
+        "A022F 03-10-25 SB 4.9.11 Nezkracena Farma KD.mp3"
+    ))
+    tracking_id = register_file(registry, parser_result)
+
+    result = service.review_file(tracking_id)
+
+    assert result.decision == TravelReviewDecision.SCHEDULE_CONFLICT
+    assert any("Germany" in conflict or "de" in conflict for conflict in result.conflicts)
 
 
 def test_10_meaningful_query_no_schedule_row_no_support(tmp_path):
@@ -1804,5 +1849,4 @@ def test_r016_tool3_suffix_safety_independent_of_tool2_country_normalization_sem
     place, iso = parse_structured_where("Villa-Vrindavan-IT")
     assert place == "Villa-Vrindavan"
     assert iso == "it"
-
 

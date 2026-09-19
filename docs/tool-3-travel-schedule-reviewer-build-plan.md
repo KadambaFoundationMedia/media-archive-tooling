@@ -389,7 +389,8 @@ When Tool 1 already has meaningful date and location evidence:
 - if a schedule row/range supports the date and location, return `CORROBORATED`;
 - do not replace or re-render either field merely because the schedule agrees;
 - attach the matching schedule row IDs/text as supporting evidence;
-- if a relevant schedule row indicates a materially different location/date, return `SCHEDULE_CONFLICT` and preserve both values;
+- when an exact location is stated directly in the filename and a same-country schedule row names a broader or different place for the same date, retain the filename location and treat the schedule place as context; this is `CORROBORATED`, not a blocking conflict;
+- if a relevant schedule row indicates a materially different date or a contradictory country, return `SCHEDULE_CONFLICT` and preserve both values;
 - do not automatically rewrite the local values;
 - if no schedule row matches, return `NO_SCHEDULE_SUPPORT`, not conflict.
 
@@ -502,6 +503,8 @@ For `PROBABLE_EXISTING_MEDIA`, `MULTIPLE_CANDIDATES`, or conflict states:
 ## 22. Schedule conflict behavior
 
 A schedule conflict means the planned itinerary differs from stronger local/Media evidence.
+
+A same-country place difference is not by itself a schedule conflict when Tool 1 has an exact location directly from the filename. Travel schedules often record a city or travel base while the recording filename identifies the precise venue. Preserve the exact filename location, record the schedule place as context, and continue. A country contradiction remains material and conflict-producing.
 
 Example:
 
