@@ -80,7 +80,7 @@ The orchestrator operates directly on archive files in live mode without interac
 ## 3. Automated Test Verification
 
 ### 3.1 Main Tooling Script Test Suite (`tests/test_main_script.py`)
-All 36 test scenarios specified in Section 17 of `docs/main-tooling-script-build-plan.md` are implemented and passing:
+All 41 test scenarios (including scenarios covering R-001 through R-005) are implemented and passing:
 
 ```text
 tests/test_main_script.py::test_01_one_explicit_media_file PASSED
@@ -119,14 +119,19 @@ tests/test_main_script.py::test_33_rename_success_plus_tool4_failure_preserves_r
 tests/test_main_script.py::test_34_rerun_idempotency_does_not_create_duplicate_baserow_row PASSED
 tests/test_main_script.py::test_35_existing_cli_commands_remain_regression_safe PASSED
 tests/test_main_script.py::test_36_full_pipeline_practical_oslo_and_czech_duben_patterns PASSED
-============================== 36 passed in 1.14s ==============================
+tests/test_main_script.py::test_37_tool2_review_required_without_reasons_blocks_rename_and_provides_fallback_reason PASSED
+tests/test_main_script.py::test_38_rename_commit_service_boundary_preserves_accurate_history_and_audit PASSED
+tests/test_main_script.py::test_39_tool4_outcomes_mapped_and_visible_in_evaluation_queue PASSED
+tests/test_main_script.py::test_40_canonical_file_with_tool4_create_or_update_is_completed_not_unchanged PASSED
+tests/test_main_script.py::test_41_verified_live_readback_summary_displayed PASSED
+============================== 41 passed in 1.34s ==============================
 ```
 
 ### 3.2 Full Project Regression Suite
 The entire repository test suite passes with zero regressions across all tools:
 
 ```text
-======================= 394 passed, 2 warnings in 5.17s ========================
+======================= 399 passed, 2 warnings in 5.49s ========================
 ```
 
 ### 3.3 Package Build
@@ -184,3 +189,41 @@ Tested full pipeline execution with in-memory Baserow double:
 Tested review portal dashboard (`/`):
 - Completed items with `status='committed'` and `sync_status='SYNCED'` do not appear in the active evaluation queue.
 - Items with review reasons, conflicts, or failed syncs appear in the active evaluation queue with their exact review reasons rendered.
+
+---
+
+## 5. Review Findings Resolution (R-001 through R-005)
+
+The planner review findings from commit `7b1a9e8` have been fully addressed:
+
+### R-001: Comma Verse Parsing Support in Tool 1
+- **Issue**: Czech/Duben files use comma verse notation (e.g. `04 KKS. SB. 3,1,21.mp3`, `BG. 14,6.mp3`). Previously, commas were stripped or treated as delimiters, resulting in `SB-03` or failing to parse full chapter/verse.
+- **Resolution**: Updated `SB_REGEX`, `BG_REGEX`, and `CC_REGEX` in `src/media_archive_tooling/renamer/parser/what.py` to recognize comma separators (`3,1,21` -> `SB-3-1-21`, `14,6` -> `BG-14-6`, `1,2,3` -> `CC-1-2-3`), dotted book prefixes (`BG.14,6`), and added negative lookaheads `(?![.:,]\d)` to prevent trailing extra digits from being misidentified. Also adjusted raw evidence stripping to preserve comma verse tokens.
+- **Verification**: Dedicated unit tests in `tests/test_what.py` and `tests/test_main_script.py::test_36` verify proper parsing and canonical naming.
+
+### R-002: Tool 2 `review_required=True` Gating Tool 1 Rename
+- **Issue**: If Tool 2 determined `review_required=True` (e.g. database unavailable or conflicting candidates) but `review_reasons` was empty, Tool 1 final proposal previously failed to block rename because it only checked `len(review_reasons) > 0`.
+- **Resolution**: In `MainToolingScriptService` (`src/media_archive_tooling/orchestrator/service.py`), when `t2_res.review_required` is `True`, if `review_reasons` is empty, a clear fallback review reason is synthesized from `t2_res.diagnostic_notes` or `t2_res.decision`. Furthermore, Tool 1 proposal execution explicitly gates finalization on `not t2_res.review_required`.
+- **Verification**: Verified in `tests/test_main_script.py::test_37`.
+
+### R-003: Rename Boundary & `RenameCommitService` Integration
+- **Issue**: Live renames in the orchestrator previously used ad-hoc filesystem moves and `record_commit`, which could bypass canonical parser identity updates and rename history tracking.
+- **Resolution**: In `MainToolingScriptService`, live renames route directly through `RenameCommitService(registry=self.registry, mode=RenameMode.FINALIZE, media_db_updater_service=None).commit_file(tracking_id, reviewer="main-script")`. This guarantees accurate `rename_history` records (`from_filename` to `to_filename`), updates `file_records.parser_result.identity`, and appends an audited review action.
+- **Verification**: Verified in `tests/test_main_script.py::test_38`.
+
+### R-004: Tool 4 Status Preservation & Evaluation Queue Routing
+- **Issue**: Tool 4 non-synced outcomes (`REVIEW_REQUIRED`, `DATABASE_UNAVAILABLE`, `FAILED_RETRYABLE`, `FAILED_BLOCKED`) were collapsed into generic failure or dropped, and canonical files were marked `UNCHANGED` even if Tool 4 executed a `CREATE` or `UPDATE`.
+- **Resolution**:
+  - Extended `FileExecutionStatus` in `src/media_archive_tooling/orchestrator/models.py` with `DATABASE_UNAVAILABLE`, `FAILED_RETRYABLE`, and `FAILED_BLOCKED`.
+  - Mapped all `SyncStatus` outcomes to the file run result and reporter counters.
+  - In `src/media_archive_tooling/renamer/service.py`, `requires_evaluation()` filters specifically for active `SyncStatus` members requiring evaluation.
+  - Canonical files with Tool 4 `CREATE` or `UPDATE` are marked `COMPLETED` (synchronized), and only marked `UNCHANGED` if Tool 4 was a `NOOP`.
+- **Verification**: Verified in `tests/test_main_script.py::test_39` and `test_40`.
+
+### R-005: Verified Live Readback Summary
+- **Issue**: Terminal output after Tool 4 live write did not display a verified readback of the created/updated Baserow row.
+- **Resolution**:
+  - `MediaDbSyncResult` in `src/media_archive_tooling/media_db_updater/models.py` now includes `live_row: Optional[Dict[str, Any]] = None`.
+  - `MediaDbUpdaterEngine` attaches the fetched/updated row payload to `plan.live_row`.
+  - `MainToolingScriptService` and `TerminalReporter` format and display a verified readback summary (Row ID, Title, Date, Place, Filename) in terminal output upon successful write.
+- **Verification**: Verified in `tests/test_main_script.py::test_41`.

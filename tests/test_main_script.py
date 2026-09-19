@@ -921,26 +921,257 @@ def test_35_existing_cli_commands_remain_regression_safe():
 
 
 def test_36_full_pipeline_practical_oslo_and_czech_duben_patterns(env_setup):
-    """36. full pipeline practical Oslo and Czech/Duben filename patterns"""
+    """36. full pipeline practical Oslo and real Czech/Duben collection patterns (R-001)"""
     media_dir = env_setup["media_dir"]
     # Practical Oslo pattern
     f_oslo = media_dir / "KKS_S.B. 1.19.31_Oslo_29.8.11.mp3"
     f_oslo.write_text("oslo audio")
 
-    # Practical Czech Duben pattern
-    f_czech = media_dir / "04 Duben 2017 Krsna Dvur KKS.mp3"
-    f_czech.write_text("czech audio")
+    # Real Czech Duben folder & files (01, 02, 04, 06, 08)
+    duben_dir = media_dir / "KKS DUBEN 2008 MP3"
+    duben_dir.mkdir(parents=True, exist_ok=True)
+    f_01 = duben_dir / "01 KKS.BG.14,6.mp3"
+    f_02 = duben_dir / "02 KKS. SB. 3,1,20.mp3"
+    f_04 = duben_dir / "04 KKS. SB. 3,1,21.mp3"
+    f_06 = duben_dir / "06 KKS SB 3.1.25.mp3"
+    f_08 = duben_dir / "08 KKS SB 3.1.26.mp3"
+    for f in (f_01, f_02, f_04, f_06, f_08):
+        f.write_text("duben audio")
 
     svc = env_setup["service"]
     svc.dry_run = True
-    summary = svc.run([f_oslo, f_czech])
+    summary = svc.run([f_oslo, f_01, f_02, f_04, f_06, f_08])
     assert summary.exit_code == 0
-    assert summary.dry_run_previews == 2
+    assert summary.total_discovered == 6
+    assert summary.review_required == 5
+    assert summary.dry_run_previews == 1
 
-    # Check that both have clean proposed filenames
+    # Verify Oslo
     oslo_res = next(r for r in summary.file_results if "Oslo" in r.original_filename)
     assert "Oslo" in oslo_res.final_filename
-    czech_res = next(r for r in summary.file_results if "Duben" in r.original_filename)
-    assert "2017" in czech_res.final_filename
-    assert "Duben" in czech_res.final_filename
-    assert czech_res.stage_results[0].details.get("when") == "2017-04-DD"
+
+    # Verify exact Duben proposed filenames (R-001: comma scripture verses normalized)
+    res_01 = next(r for r in summary.file_results if "01 KKS.BG.14,6" in r.original_filename)
+    assert res_01.final_filename == "2008-04-DD_KKS_BG-14-6_cz.mp3"
+
+    res_02 = next(r for r in summary.file_results if "02 KKS. SB. 3,1,20" in r.original_filename)
+    assert res_02.final_filename == "2008-04-DD_KKS_SB-3-1-20_cz.mp3"
+
+    res_04 = next(r for r in summary.file_results if "04 KKS. SB. 3,1,21" in r.original_filename)
+    assert res_04.final_filename == "2008-04-DD_KKS_SB-3-1-21_cz.mp3"
+
+    res_06 = next(r for r in summary.file_results if "06 KKS SB 3.1.25" in r.original_filename)
+    assert res_06.final_filename == "2008-04-DD_KKS_SB-3-1-25_cz.mp3"
+
+    res_08 = next(r for r in summary.file_results if "08 KKS SB 3.1.26" in r.original_filename)
+    assert res_08.final_filename == "2008-04-DD_KKS_SB-3-1-26_cz.mp3"
+
+
+# ---------------------------------------------------------------------------
+# Tests 37-41: Review Findings R-002 through R-005 Regressions
+# ---------------------------------------------------------------------------
+
+def test_37_tool2_review_required_with_empty_reasons_blocks_rename_and_tool4_write(env_setup):
+    """37. Tool 2 review_required=True with empty review_reasons blocks rename and skips Tool 4 write (R-002)"""
+    from media_archive_tooling.media_db_reviewer.models import MediaDatabaseReviewResult, ReviewDecision, MediaCandidate
+
+    media_dir = env_setup["media_dir"]
+    orig_f = media_dir / "04 KKS. SB. 3,1,21.mp3"
+    orig_f.write_text("payload audio")
+
+    svc = env_setup["service"]
+    svc.dry_run = False  # Live mode
+
+    # Tool 2 returns MULTIPLE_CANDIDATES with review_required=True and empty review_reasons
+    mock_t2_res = MediaDatabaseReviewResult(
+        tracking_id="mocktid",
+        decision=ReviewDecision.MULTIPLE_CANDIDATES,
+        review_required=True,
+        review_reasons=[],  # Intentionally empty!
+        candidates=[MediaCandidate(media_row_id=10, candidate_filename="cand10.mp3", score=0.6)],
+        diagnostic_notes=["Found 140 candidate rows in media database"],
+    )
+
+    with patch.object(svc.tool2_service, "review_file", return_value=mock_t2_res):
+        summary = svc.run([orig_f])
+
+    assert summary.exit_code == 0
+    assert summary.review_required == 1
+    assert summary.completed == 0
+
+    res = summary.file_results[0]
+    assert res.status == FileExecutionStatus.REVIEW_REQUIRED
+    # File MUST remain untouched on disk
+    assert orig_f.exists()
+    assert orig_f.read_text() == "payload audio"
+    assert res.final_path == str(orig_f)
+
+    # Tool 1 finalize must report review required
+    t1_fin = next(s for s in res.stage_results if s.stage_name == StageName.TOOL_1_FINALIZE)
+    assert "review required" in t1_fin.summary
+
+    # Tool 4 write must be skipped
+    t4_stage = next(s for s in res.stage_results if s.stage_name == StageName.TOOL_4_SYNC)
+    assert "Skipped write" in t4_stage.summary
+    assert t4_stage.success is False
+
+    # Fake write adapter must have received 0 mutations
+    adapter = env_setup["fake_write_adapter"]
+    assert len(adapter.calls) == 0
+
+
+def test_38_rename_commit_service_boundary_preserves_accurate_history_and_audit(env_setup):
+    """38. Live commit routes through RenameCommitService, recording accurate history and audit (R-003)"""
+    media_dir = env_setup["media_dir"]
+    orig_f = media_dir / "2022-09-19_KKS_Oslo.mp3"
+    orig_f.write_text("oslo payload")
+
+    svc = env_setup["service"]
+    svc.dry_run = False
+    summary = svc.run([orig_f])
+    assert summary.completed == 1
+
+    res = summary.file_results[0]
+    assert res.status == FileExecutionStatus.COMPLETED
+    final_p = Path(res.final_path)
+    assert final_p.exists()
+    assert final_p.name == "2022-09-19_KKS_SB-1-2-19_Oslo-no.mp3"
+
+    reg = env_setup["registry"]
+    # 1. Check rename_history old-to-new accuracy
+    history = reg.get_rename_history(res.tracking_id)
+    assert len(history) >= 1
+    h = history[-1]
+    assert h["from_filename"] == "2022-09-19_KKS_Oslo.mp3"
+    assert h["to_filename"] == "2022-09-19_KKS_SB-1-2-19_Oslo-no.mp3"
+
+    # 2. Check updated parser identity
+    file_rec = reg.get_file(res.tracking_id)
+    assert file_rec is not None
+    pr = file_rec["parser_result"]
+    assert pr["identity"]["current_filename"] == "2022-09-19_KKS_SB-1-2-19_Oslo-no.mp3"
+
+    # 3. Check review action audit record
+    actions = reg.get_review_actions(res.tracking_id)
+    commit_act = next(a for a in actions if a["action"] == "commit")
+    assert commit_act["reviewer"] == "main-script"
+    assert commit_act["changes"]["filesystem_rename"] is True
+    assert commit_act["changes"]["from_path"] == str(orig_f)
+    assert commit_act["changes"]["to_path"] == str(final_p)
+
+
+def test_39_tool4_outcomes_mapped_and_visible_in_evaluation_queue(env_setup):
+    """39. Actual Tool 4 outcomes mapped and visible in review portal evaluation queue (R-004)"""
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncResult, SyncOperation, SyncStatus
+    from media_archive_tooling.renamer.service import RenamerApplicationService
+
+    media_dir = env_setup["media_dir"]
+    svc = env_setup["service"]
+    svc.dry_run = False
+    reg = env_setup["registry"]
+    renamer_app_svc = RenamerApplicationService(registry=reg)
+
+    outcomes_to_test = [
+        (SyncStatus.REVIEW_REQUIRED, FileExecutionStatus.REVIEW_REQUIRED),
+        (SyncStatus.DATABASE_UNAVAILABLE, FileExecutionStatus.DATABASE_UNAVAILABLE),
+        (SyncStatus.FAILED_RETRYABLE, FileExecutionStatus.FAILED_RETRYABLE),
+        (SyncStatus.FAILED_BLOCKED, FileExecutionStatus.FAILED_BLOCKED),
+    ]
+
+    for idx, (tool4_status, expected_exec_status) in enumerate(outcomes_to_test, start=1):
+        f = media_dir / f"2022-09-{20 + idx:02d}_KKS_Oslo.mp3"
+        f.write_text(f"audio {idx}")
+
+        mock_res = MediaDbSyncResult(
+            tracking_id="tid",
+            status=tool4_status,
+            operation=SyncOperation.BLOCKED,
+            error_message=f"Simulated error for {tool4_status.value}",
+        )
+
+        with patch.object(svc.tool4_service, "synchronize", return_value=mock_res):
+            summary = svc.run([f])
+
+        res = summary.file_results[0]
+        assert res.status == expected_exec_status
+        assert res.tool4_sync_status == tool4_status.value
+
+        # Must appear in active evaluation queue
+        queue = renamer_app_svc.list_files(filter_mode="evaluation")
+        found = any(q["tracking_id"] == res.tracking_id for q in queue["files"])
+        assert found, f"File with {tool4_status.value} not found in evaluation queue"
+
+        # Clean up any renamed target file so subsequent loop iterations don't collide
+        final_p = Path(res.final_path)
+        if final_p.exists():
+            final_p.unlink()
+
+
+def test_40_canonical_file_with_tool4_create_or_update_is_completed_not_unchanged(env_setup):
+    """40. Canonical file whose Tool 4 action is CREATE or UPDATE is completed/synchronized, not unchanged (R-004)"""
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncResult, SyncOperation, SyncStatus
+
+    media_dir = env_setup["media_dir"]
+    # File already has canonical name
+    f = media_dir / "2022-09-19_KKS_SB-1-2-19_Oslo-no.mp3"
+    f.write_text("canonical audio")
+
+    svc = env_setup["service"]
+    svc.dry_run = False
+
+    # Mock Tool 4 to return UPDATE
+    mock_res_update = MediaDbSyncResult(
+        tracking_id="tid",
+        status=SyncStatus.SYNCED,
+        operation=SyncOperation.UPDATE,
+        media_row_id=1234,
+        live_row={"id": 1234, "Title": "SB 1.2.19", "Filename": f.name},
+    )
+
+    with patch.object(svc.tool4_service, "synchronize", return_value=mock_res_update):
+        summary = svc.run([f])
+
+    assert summary.completed == 1
+    assert summary.unchanged == 0
+    res = summary.file_results[0]
+    assert res.status == FileExecutionStatus.COMPLETED
+
+    # When Tool 4 is NOOP, then it is UNCHANGED
+    mock_res_noop = MediaDbSyncResult(
+        tracking_id="tid",
+        status=SyncStatus.SYNCED,
+        operation=SyncOperation.NOOP,
+        media_row_id=1234,
+        live_row={"id": 1234, "Title": "SB 1.2.19", "Filename": f.name},
+    )
+    with patch.object(svc.tool4_service, "synchronize", return_value=mock_res_noop):
+        summary2 = svc.run([f])
+
+    assert summary2.completed == 0
+    assert summary2.unchanged == 1
+    res2 = summary2.file_results[0]
+    assert res2.status == FileExecutionStatus.UNCHANGED
+
+
+def test_41_verified_live_readback_summary_displayed(env_setup, capsys):
+    """41. Verified live readback summary is displayed in terminal and stored in result (R-005)"""
+    media_dir = env_setup["media_dir"]
+    orig_f = media_dir / "2022-09-19_KKS_Oslo.mp3"
+    orig_f.write_text("audio payload")
+
+    svc = env_setup["service"]
+    svc.dry_run = False
+    summary = svc.run([orig_f])
+    assert summary.completed == 1
+
+    res = summary.file_results[0]
+    assert res.tool4_live_row is not None
+    assert res.tool4_row_id is not None
+    assert "Title" in res.tool4_live_row
+
+    t4_stage = next(s for s in res.stage_results if s.stage_name == StageName.TOOL_4_SYNC)
+    assert f"Verified live row #{res.tool4_row_id}" in t4_stage.summary
+
+    captured = capsys.readouterr()
+    assert f"Verified live row #{res.tool4_row_id}" in captured.out
+

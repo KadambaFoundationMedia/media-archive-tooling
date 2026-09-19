@@ -53,6 +53,15 @@ class TerminalReporter:
             print(f"  Result: {status_label} — {reasons_str}")
         elif file_result.status == FileExecutionStatus.PENDING_SYNC:
             print(f"  Result: {status_label} (file renamed; Baserow sync pending/retryable)")
+        elif file_result.status == FileExecutionStatus.DATABASE_UNAVAILABLE:
+            reasons_str = "; ".join(file_result.review_reasons) if file_result.review_reasons else "Baserow database unavailable"
+            print(f"  Result: {status_label} (file processed; Baserow unavailable) — {reasons_str}")
+        elif file_result.status == FileExecutionStatus.FAILED_RETRYABLE:
+            reasons_str = "; ".join(file_result.review_reasons) if file_result.review_reasons else "Sync failed (retryable)"
+            print(f"  Result: {status_label} (file processed; sync retryable) — {reasons_str}")
+        elif file_result.status == FileExecutionStatus.FAILED_BLOCKED:
+            reasons_str = "; ".join(file_result.review_reasons) if file_result.review_reasons else "Sync failed (blocked)"
+            print(f"  Result: {status_label} (file processed; sync blocked) — {reasons_str}")
         elif file_result.status == FileExecutionStatus.FAILED:
             err_msg = file_result.error or "Unknown error"
             print(f"  Result: {status_label} — {err_msg}")
@@ -79,6 +88,12 @@ class TerminalReporter:
         print(f"Unchanged / No-Op:           {summary.unchanged}")
         print(f"Items Requiring Evaluation:  {summary.review_required}")
         print(f"Pending Baserow Sync:        {summary.pending_sync}")
+        if summary.database_unavailable > 0:
+            print(f"Database Unavailable:        {summary.database_unavailable}")
+        if summary.failed_retryable > 0:
+            print(f"Failed Retryable Sync:       {summary.failed_retryable}")
+        if summary.failed_blocked > 0:
+            print(f"Failed Blocked Sync:         {summary.failed_blocked}")
         print(f"Failed Files:                {summary.failed}")
         print(f"Skipped Unsupported Files:   {summary.skipped_unsupported}")
         print(f"Log File:                    {summary.log_path}")
@@ -87,7 +102,14 @@ class TerminalReporter:
         if summary.workflow == WorkflowType.ALL:
             print("Note:                        Processing workflow (Tools 5–11) is pending and not yet installed.")
 
-        if summary.review_required > 0 or summary.pending_sync > 0:
+        needs_eval = (
+            summary.review_required > 0
+            or summary.pending_sync > 0
+            or summary.database_unavailable > 0
+            or summary.failed_retryable > 0
+            or summary.failed_blocked > 0
+        )
+        if needs_eval:
             print("\nEvaluation required:")
             print("  Items have been routed to the local review portal queue.")
             print(f"  To review, run: media-archive review --registry-path \"{summary.registry_path}\"")

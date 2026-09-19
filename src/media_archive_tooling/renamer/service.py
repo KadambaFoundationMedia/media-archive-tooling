@@ -11,6 +11,7 @@ from .planner.planner import RenamePlanner
 from .validator import validate_calendar_date, validate_iso2_country, validate_canonical_filename
 from .parser.engine import has_class_evidence
 from ..common.ascii_latin import to_ascii_latin, sanitize_filename_token
+from ..media_db_updater.models import SyncStatus
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,16 @@ class RenamerApplicationService:
             if reasons and len(reasons) > 0:
                 return True
             sync_rec = self.registry.get_media_db_sync(f["tracking_id"])
-            if sync_rec and sync_rec.get("sync_status") in ("PENDING_SYNC", "FAILED_RETRYABLE", "FAILED_FATAL", "BLOCKED", "CONFLICT"):
-                return True
+            if sync_rec:
+                sync_st = sync_rec.get("sync_status")
+                if sync_st in (
+                    SyncStatus.PENDING_SYNC.value,
+                    SyncStatus.REVIEW_REQUIRED.value,
+                    SyncStatus.DATABASE_UNAVAILABLE.value,
+                    SyncStatus.FAILED_RETRYABLE.value,
+                    SyncStatus.FAILED_BLOCKED.value,
+                ):
+                    return True
             return False
 
         evaluation_files = [f for f in all_files if requires_evaluation(f)]

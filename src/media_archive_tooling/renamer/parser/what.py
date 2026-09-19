@@ -13,22 +13,22 @@ SPECIFIC_TITLES_PATH = ASSETS_DIR / "specific_titles.json"
 # Scripture patterns.
 #
 # Archive grammar is structural, not heuristic:
-# - BG: chapter.verse or chapter.verse-end (e.g. BG 1.1 or BG 1.1-3)
-# - SB: canto.chapter.verse or canto.chapter.verse-end (e.g. SB 1.1.2 or SB 1.1.2-4)
-# - CC: lila.chapter.verse or lila.chapter.verse-end (e.g. CC Adi 1.1 or CC Adi 1.1-3)
+# - BG: chapter.verse or chapter.verse-end (e.g. BG 1.1 or BG 1.1-3, or comma: BG 14,6)
+# - SB: canto.chapter.verse or canto.chapter.verse-end (e.g. SB 1.1.2 or SB 1.1.2-4, or comma: SB 3,1,21)
+# - CC: lila.chapter.verse or lila.chapter.verse-end (e.g. CC Adi 1.1 or CC Adi 1.1-3, or comma: CC Adi 1,1)
 #
-# The final range separator must therefore be a hyphen. A further dotted numeric
+# The final range separator must therefore be a hyphen. A further dotted or comma numeric
 # component is not silently reinterpreted as a range.
 SB_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:S\s*\.?\s*B\.?|Srimad[- ]?Bhagavatam)[- ]+(\d{1,2})[- .:]+(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s()\-]|$)",
+    r"(?:^|[\s_.-])(?:S\s*\.?\s*B\.?|Srimad[- ]?Bhagavatam)[- .:]+(\d{1,2})[- .,:]+(\d{1,2})[- .,:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:,]\d)(?=[_.\s()\-]|$)",
     re.IGNORECASE
 )
 BG_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:BG|Bhagavad[- ]?Gita)[- ]+(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s-]|$)",
+    r"(?:^|[\s_.-])(?:BG|Bhagavad[- ]?Gita)[- .:]+(\d{1,2})[- .,:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:,]\d)(?=[_.\s()\-]" + r"|$)",
     re.IGNORECASE
 )
 CC_REGEX = re.compile(
-    r"(?:^|[\s_.-])(?:CC|Caitanya[- ]?Caritamrta|Chaitanya[- ]?Charitamrita)[- ]+(?:(Adi|Madhya|Antya)[- ]+)?(\d{1,2})[- .:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:]\d)(?=[_.\s-]|$)",
+    r"(?:^|[\s_.-])(?:CC|Caitanya[- ]?Caritamrta|Chaitanya[- ]?Charitamrita)[- .:]+(?:(Adi|Madhya|Antya)[- .:]+)?(\d{1,2})[- .,:]+(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![.:,]\d)(?=[_.\s()\-]" + r"|$)",
     re.IGNORECASE
 )
 
@@ -121,7 +121,7 @@ def parse_what(
             category="Srimad Bhagavatam",
             state=state,
             candidates=candidates,
-            evidence=[Evidence(source="filename_scripture_sb", raw_value=sb_match.group(0).strip(" _.-"), details=ev_details)]
+            evidence=[Evidence(source="filename_scripture_sb", raw_value=sb_match.group(0).strip(" _.-,"), details=ev_details)]
         )
         return res, cleaned.strip(), conflict
 
@@ -158,7 +158,7 @@ def parse_what(
             category="Bhagavad Gita",
             state=state,
             candidates=candidates,
-            evidence=[Evidence(source="filename_scripture_bg", raw_value=bg_match.group(0).strip(" _.-"), details=ev_details)]
+            evidence=[Evidence(source="filename_scripture_bg", raw_value=bg_match.group(0).strip(" _.-,"), details=ev_details)]
         )
         return res, cleaned.strip(), conflict
 
@@ -193,7 +193,7 @@ def parse_what(
             category="Chaitanya Charitamrita",
             state=state,
             candidates=candidates,
-            evidence=[Evidence(source="filename_scripture_cc", raw_value=cc_match.group(0).strip(" _.-"), details=ev_details)]
+            evidence=[Evidence(source="filename_scripture_cc", raw_value=cc_match.group(0).strip(" _.-,"), details=ev_details)]
         )
         return res, cleaned.strip(), conflict
 

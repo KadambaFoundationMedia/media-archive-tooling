@@ -1326,6 +1326,7 @@ class MediaDatabaseUpdateEngine:
             return self._enrich_result(plan, request)
 
         if plan.operation == SyncOperation.NOOP:
+            plan.live_row = live_row
             return self._enrich_result(plan, request)
 
         # If preview / dry-run mode, return plan without mutating database
@@ -1513,6 +1514,7 @@ class MediaDatabaseUpdateEngine:
             created_row = self.write_adapter.create_row(payload)
             new_id = created_row.get("id")
             plan.media_row_id = new_id
+            plan.live_row = created_row
             plan.status = SyncStatus.SYNCED
             return self._enrich_result(plan, request)
         except BaserowUnavailableError as e:
@@ -1814,9 +1816,10 @@ class MediaDatabaseUpdateEngine:
 
         # 5. Send minimal PATCH
         try:
-            self.write_adapter.patch_row(row_id, payload)
+            patched_row = self.write_adapter.patch_row(row_id, payload)
+            plan.live_row = patched_row
             plan.status = SyncStatus.SYNCED
-            return plan
+            return self._enrich_result(plan, request)
         except BaserowUnavailableError as e:
             return self.reconcile_uncertain_update(request, plan, payload, error_message=str(e))
         except Exception as e:

@@ -24,6 +24,9 @@ class FileExecutionStatus(str, Enum):
     UNCHANGED = "unchanged"
     REVIEW_REQUIRED = "review_required"
     PENDING_SYNC = "pending_sync"
+    DATABASE_UNAVAILABLE = "database_unavailable"
+    FAILED_RETRYABLE = "failed_retryable"
+    FAILED_BLOCKED = "failed_blocked"
     FAILED = "failed"
 
 
@@ -48,6 +51,8 @@ class FileRunResult(BaseModel):
     tool4_row_id: Optional[int] = None
     tool4_operation: Optional[str] = None
     tool4_fields: Dict[str, Any] = Field(default_factory=dict)
+    tool4_sync_status: Optional[str] = None
+    tool4_live_row: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 
@@ -61,6 +66,9 @@ class RunSummary(BaseModel):
     unchanged: int = 0
     review_required: int = 0
     pending_sync: int = 0
+    database_unavailable: int = 0
+    failed_retryable: int = 0
+    failed_blocked: int = 0
     failed: int = 0
     skipped_unsupported: int = 0
     log_path: str = ""

@@ -20,6 +20,7 @@ from ..renamer.models import (
     RenameProposal,
     ResolutionState,
 )
+from ..renamer.commit_service import RenameCommitService
 from ..renamer.parser.collection import CollectionGrammar
 from ..renamer.parser.engine import RenamerParser
 from ..renamer.planner.planner import RenamePlanner
@@ -157,6 +158,12 @@ class MainToolingScriptService:
                 summary.review_required += 1
             elif file_result.status == FileExecutionStatus.PENDING_SYNC:
                 summary.pending_sync += 1
+            elif file_result.status == FileExecutionStatus.DATABASE_UNAVAILABLE:
+                summary.database_unavailable += 1
+            elif file_result.status == FileExecutionStatus.FAILED_RETRYABLE:
+                summary.failed_retryable += 1
+            elif file_result.status == FileExecutionStatus.FAILED_BLOCKED:
+                summary.failed_blocked += 1
             elif file_result.status == FileExecutionStatus.FAILED:
                 summary.failed += 1
                 has_unexpected_failure = True
@@ -174,6 +181,9 @@ class MainToolingScriptService:
                 "unchanged": summary.unchanged,
                 "review_required": summary.review_required,
                 "pending_sync": summary.pending_sync,
+                "database_unavailable": summary.database_unavailable,
+                "failed_retryable": summary.failed_retryable,
+                "failed_blocked": summary.failed_blocked,
                 "failed": summary.failed,
                 "skipped_unsupported": summary.skipped_unsupported,
                 "duration_secs": round(time.time() - start_time, 2),
@@ -286,9 +296,19 @@ class MainToolingScriptService:
                 if dec_str == "DATABASE_UNAVAILABLE":
                     review_reasons.append("Tool 2 reported DATABASE_UNAVAILABLE")
                 elif t2_res.review_required:
-                    for r in t2_res.review_reasons:
-                        if r not in review_reasons:
-                            review_reasons.append(r)
+                    if t2_res.review_reasons:
+                        for r in t2_res.review_reasons:
+                            if r not in review_reasons:
+                                review_reasons.append(r)
+                    else:
+                        # R-002: Surface diagnostic notes or concise reason when review_reasons is empty
+                        reason = None
+                        if t2_res.diagnostic_notes:
+                            reason = f"Tool 2 media review required: {'; '.join(t2_res.diagnostic_notes)}"
+                        else:
+                            reason = f"Tool 2 media review required: {dec_str} (candidates: {cand_count})"
+                        if reason not in review_reasons:
+                            review_reasons.append(reason)
 
             stage_results.append(t2_stage)
             self.reporter.report_stage_result(t2_stage)
@@ -371,13 +391,18 @@ class MainToolingScriptService:
             for r in review_reasons:
                 if r not in prop_final.review_reasons:
                     prop_final.review_reasons.append(r)
-            if review_reasons:
+            t2_requires_review = bool(t2_res and t2_res.review_required)
+            if review_reasons or t2_requires_review:
                 prop_final.needs_review = True
                 prop_final.status = "blocked"
 
             self.registry.save_proposal(prop_final)
 
-            can_commit = (not prop_final.needs_review) and (prop_final.status not in ("blocked", "deferred"))
+            can_commit = (
+                (not prop_final.needs_review)
+                and (prop_final.status not in ("blocked", "deferred"))
+                and not t2_requires_review
+            )
             t1_fin_summary = (
                 f"Tool 1 — Final Proposal: {prop_final.proposed_filename} "
                 f"({'can commit' if can_commit else 'review required'})"
@@ -486,7 +511,7 @@ class MainToolingScriptService:
 
             # Live Mode execution
             if not can_commit:
-                # File cannot be committed safely
+                # File cannot be committed safely (R-002: gated before rename)
                 status = FileExecutionStatus.REVIEW_REQUIRED
                 t4_stage = StageResult(
                     stage_name=StageName.TOOL_4_SYNC,
@@ -503,16 +528,33 @@ class MainToolingScriptService:
                     tracking_id=tracking_id,
                     original_filename=orig_filename,
                     final_filename=prop_final.proposed_filename,
-                    final_path=prop_final.proposed_path,
+                    final_path=str(file_path),
                     status=status,
                     review_reasons=prop_final.review_reasons,
                     stage_results=stage_results,
                 )
 
-            # Check for safety / destination collisions
-            if proposed_path.exists() and proposed_path != file_path:
-                err_msg = f"Safety error: target file already exists and will not be overwritten: {proposed_path}"
-                self.logger.error("COMMIT_COLLISION", tool="tool_1", file_path=file_path, details={"target": str(proposed_path)})
+            # Execute commit through accepted RenameCommitService boundary (R-003)
+            current_path = file_path
+            was_filesystem_renamed = False
+            try:
+                commit_service = RenameCommitService(
+                    registry=self.registry,
+                    mode=RenameMode.FINALIZE,
+                    media_db_updater_service=None,
+                )
+                committed_rec = commit_service.commit_file(tracking_id, reviewer="main-script")
+                current_path = Path(committed_rec.get("current_path") or prop_final.proposed_path)
+                was_filesystem_renamed = (current_path != file_path)
+                self.logger.info(
+                    "COMMIT_APPLIED",
+                    tool="tool_1",
+                    file_path=current_path,
+                    details={"from": str(file_path), "to": str(current_path)},
+                )
+            except Exception as e:
+                err_msg = f"Commit error: {e}"
+                self.logger.error("COMMIT_FAILED", tool="tool_1", file_path=file_path, details={"error": err_msg})
                 t1_fail_stage = StageResult(
                     stage_name=StageName.TOOL_1_FINALIZE,
                     success=False,
@@ -531,41 +573,7 @@ class MainToolingScriptService:
                     stage_results=stage_results,
                 )
 
-            # Execute filesystem rename
-            current_path = file_path
-            if file_path != proposed_path and prop_final.changes_detected:
-                try:
-                    file_path.rename(proposed_path)
-                    current_path = proposed_path
-                    prop_final.status = "committed"
-                    prop_final.current_filename = proposed_path.name
-                    self.registry.record_commit(prop_final, proposed_path)
-                    self.logger.info("COMMIT_APPLIED", tool="tool_1", file_path=proposed_path, details={"from": str(file_path), "to": str(proposed_path)})
-                except Exception as e:
-                    err_msg = f"Filesystem error during rename: {e}"
-                    self.logger.error("COMMIT_FAILED", tool="tool_1", file_path=file_path, details={"error": err_msg})
-                    return FileRunResult(
-                        target_path=str(file_path),
-                        tracking_id=tracking_id,
-                        original_filename=orig_filename,
-                        final_filename=orig_filename,
-                        final_path=str(file_path),
-                        status=FileExecutionStatus.FAILED,
-                        error=err_msg,
-                        stage_results=stage_results,
-                    )
-            else:
-                # File already had proposed name
-                status = FileExecutionStatus.UNCHANGED
-
             # Tool 4 synchronization in live mode
-            # Mark pending sync in registry
-            self.registry.save_media_db_sync(
-                tracking_id=tracking_id,
-                sync_status="PENDING_SYNC",
-                attempt_count=0,
-            )
-
             t4_res = None
             if self.tool4_service is not None:
                 try:
@@ -573,12 +581,16 @@ class MainToolingScriptService:
                 except Exception as e:
                     self.logger.error("TOOL_4_SYNC_EXCEPTION", tool="tool_4", tracking_id=tracking_id, details={"error": str(e)})
 
-            if t4_res is None or t4_res.status != SyncStatus.SYNCED:
-                # Rename succeeded, but Tool 4 sync failed/blocked: rename is PRESERVED, durable pending sync
-                sync_err = t4_res.error_message if t4_res else "Tool 4 service unavailable"
-                t4_summary = f"Tool 4 — Media DB: Sync failed ({sync_err}) — state preserved as PENDING_SYNC"
+            tool4_live_row: Optional[Dict[str, Any]] = None
+            tool4_sync_status: Optional[str] = None
+
+            if t4_res is None:
+                # Rename succeeded, but Tool 4 service unavailable: state preserved in outbox
+                sync_err = "Tool 4 service unavailable"
+                t4_summary = f"Tool 4 — Media DB: PENDING_SYNC ({sync_err}) — state preserved in outbox"
                 status = FileExecutionStatus.PENDING_SYNC
-                review_reasons.append(f"Baserow sync failed: {sync_err}")
+                tool4_sync_status = "PENDING_SYNC"
+                review_reasons.append(f"Baserow sync pending: {sync_err}")
 
                 t4_stage = StageResult(
                     stage_name=StageName.TOOL_4_SYNC,
@@ -586,10 +598,12 @@ class MainToolingScriptService:
                     summary=t4_summary,
                     error=sync_err,
                 )
-            else:
+            elif t4_res.status == SyncStatus.SYNCED:
+                tool4_sync_status = t4_res.status.value
                 tool4_row_id = t4_res.media_row_id
                 tool4_operation = t4_res.operation.value if hasattr(t4_res.operation, "value") else str(t4_res.operation)
                 tool4_fields = {d.field_name: d.new_value for d in (t4_res.field_diffs or [])}
+                tool4_live_row = t4_res.live_row
 
                 if t4_res.operation == SyncOperation.CREATE:
                     op_str = f"CREATED row #{tool4_row_id}"
@@ -606,6 +620,19 @@ class MainToolingScriptService:
                     if diff_summary:
                         t4_summary += f" [{diff_summary}]"
 
+                # R-005: Show verified live readback summary
+                if tool4_live_row:
+                    verified_items = []
+                    for k in ("Title", "Filename", "Path", "Date", "Country", "Place, location"):
+                        if k in tool4_live_row and tool4_live_row[k]:
+                            v = tool4_live_row[k]
+                            if isinstance(v, dict) and "value" in v:
+                                v = v["value"]
+                            verified_items.append(f"{k}='{v}'")
+                    if verified_items:
+                        readback_str = ", ".join(verified_items)
+                        t4_summary += f"\n    Verified live row #{tool4_row_id}: {readback_str}"
+
                 t4_stage = StageResult(
                     stage_name=StageName.TOOL_4_SYNC,
                     success=True,
@@ -614,10 +641,58 @@ class MainToolingScriptService:
                         "operation": tool4_operation,
                         "media_row_id": tool4_row_id,
                         "fields": tool4_fields,
+                        "live_row": tool4_live_row,
                     },
                 )
-                if status != FileExecutionStatus.UNCHANGED:
+
+                # R-004: If filename was already canonical, but Tool 4 performed CREATE or UPDATE,
+                # the item is COMPLETED (synchronized), NOT UNCHANGED!
+                # Only if Tool 4 was NOOP and the filename was unchanged is it UNCHANGED.
+                if not was_filesystem_renamed and t4_res.operation == SyncOperation.NOOP:
+                    status = FileExecutionStatus.UNCHANGED
+                else:
                     status = FileExecutionStatus.COMPLETED
+            else:
+                # Specific non-SYNCED Tool 4 outcome (R-004)
+                tool4_sync_status = t4_res.status.value
+                tool4_row_id = t4_res.media_row_id
+                tool4_operation = t4_res.operation.value if hasattr(t4_res.operation, "value") else str(t4_res.operation)
+                sync_err = t4_res.error_message or f"Tool 4 status: {t4_res.status.value}"
+
+                if t4_res.status == SyncStatus.REVIEW_REQUIRED:
+                    status = FileExecutionStatus.REVIEW_REQUIRED
+                    for c in (t4_res.conflicts or []):
+                        if c not in review_reasons:
+                            review_reasons.append(c)
+                    if sync_err and sync_err not in review_reasons:
+                        review_reasons.append(sync_err)
+                elif t4_res.status == SyncStatus.DATABASE_UNAVAILABLE:
+                    status = FileExecutionStatus.DATABASE_UNAVAILABLE
+                    review_reasons.append(f"Baserow database unavailable: {sync_err}")
+                elif t4_res.status == SyncStatus.FAILED_RETRYABLE:
+                    status = FileExecutionStatus.FAILED_RETRYABLE
+                    review_reasons.append(f"Baserow sync retryable failure: {sync_err}")
+                elif t4_res.status == SyncStatus.FAILED_BLOCKED:
+                    status = FileExecutionStatus.FAILED_BLOCKED
+                    review_reasons.append(f"Baserow sync blocked: {sync_err}")
+                else:
+                    status = FileExecutionStatus.PENDING_SYNC
+                    review_reasons.append(f"Baserow sync pending: {sync_err}")
+
+                t4_summary = f"Tool 4 — Media DB: {t4_res.status.value} ({sync_err}) — state preserved in outbox"
+                t4_stage = StageResult(
+                    stage_name=StageName.TOOL_4_SYNC,
+                    success=False,
+                    summary=t4_summary,
+                    error=sync_err,
+                    details={
+                        "status": t4_res.status.value,
+                        "operation": tool4_operation,
+                        "media_row_id": tool4_row_id,
+                        "conflicts": t4_res.conflicts,
+                        "diagnostic_notes": t4_res.diagnostic_notes,
+                    },
+                )
 
             stage_results.append(t4_stage)
             self.reporter.report_stage_result(t4_stage)
@@ -635,6 +710,8 @@ class MainToolingScriptService:
                 tool4_row_id=tool4_row_id,
                 tool4_operation=tool4_operation,
                 tool4_fields=tool4_fields,
+                tool4_sync_status=tool4_sync_status,
+                tool4_live_row=tool4_live_row,
             )
 
         except Exception as e:
