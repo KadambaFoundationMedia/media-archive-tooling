@@ -4,7 +4,7 @@ Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
 Authoritative live-data amendment: `docs/tool-2-media-database-reviewer-live-data-amendment.md`  
 Project-wide Baserow policy: `docs/baserow-live-data-policy.md`  
 Implementation issue: #2  
-Implementation PR: #19  
+Implementation PR: #49 (post-acceptance correction; original: #19)  
 Protocol: `docs/implementation-protocol.md`
 
 ## Current state
@@ -49,7 +49,8 @@ reachable branch HEAD and passing/pending CI as applicable.
 Post-acceptance architecture note (2026-09-17): `docs/baserow-access-boundary-amendment.md` confirms Tool 2's accepted read-only Baserow lookup/reconciliation role. Tool 1 uses it while producing the final filename, and Tool 4 uses it for the fresh existing-item/candidate gate before synchronization. Tool 2 remains technically incapable of mutations.
 
 Implementation branch: `tool-2-implementation`  
-Implementation PR: #19  
+Active correction PR: #49 (original implementation PR: #19)  
+Active correction commit: `6be1804c47718e22686c3b78f11e70aa63847225`  
 Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`  
 Builder handoff/status head independently reviewed: `305b2e1d22ccbf04625b4b0b4d50db1500bc0e2e`  
 Planning acceptance recorded: 2026-09-14
