@@ -31,6 +31,7 @@ Implemented the Main Tooling Script portion of
   - Preserved Tool 4 as the sole deleter/writer of Baserow rows. Main Script and Portal invoke Tool 4's `purge_test_rows`.
 
 Implementation branch: `main-tooling-script-implementation`
+Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/52
 Last planning update: 2026-09-22
 
 ## Implemented Phase A Pipeline
