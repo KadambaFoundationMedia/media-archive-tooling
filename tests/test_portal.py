@@ -87,6 +87,9 @@ def test_portal_file_detail_and_update(tmp_path):
     tid = f["tracking_id"]
     res = client.get(f"/file/{tid}")
     assert res.status_code == 200
+    assert 'id="theme-toggle"' in res.text
+    assert "media-archive-theme" in res.text
+    assert 'data-theme="dark"' in res.text
 
     res_post = client.post(f"/file/{tid}/update", data={
         "action": "approve",
