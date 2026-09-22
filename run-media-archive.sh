@@ -10,12 +10,18 @@ show_usage() {
 Usage:
   ./run-media-archive.sh <file-or-folder> [more targets] [options]
   ./run-media-archive.sh --review-only [portal options]
+  ./run-media-archive.sh --purge
+  ./run-media-archive.sh --purge --dry-run
 
 Safe preview:
   ./run-media-archive.sh "/path/to/media" --dry-run
 
 Live processing (renames eligible files and may update Baserow):
   ./run-media-archive.sh "/path/to/media"
+
+Clean test state:
+  ./run-media-archive.sh --purge
+  ./run-media-archive.sh --purge --dry-run
 
 The first run prepares the required private Python environment automatically.
 EOF

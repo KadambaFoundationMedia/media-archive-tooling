@@ -565,6 +565,7 @@ class FakeBaserowWriteAdapter:
         self.next_row_id: int = max(self.rows.keys(), default=1000) + 1
         self.next_option_id: int = 500
         self.calls: List[Dict[str, Any]] = []
+        self.media_table_id: str = "12345"
 
         # Fault injection toggles
         self.simulate_network_failure: bool = False

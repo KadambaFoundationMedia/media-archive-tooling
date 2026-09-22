@@ -28,6 +28,7 @@ from ..renamer.registry.registry import LocalRegistry
 from ..travel_reviewer.models import TravelReviewDecision, TravelReviewResult
 from ..travel_reviewer.service import TravelScheduleReviewService
 from .discovery import DiscoveryResult, discover_media_targets
+from .fingerprint import compute_review_data_fingerprint
 from .logger import UnifiedArchiveLogger
 from .models import (
     FileExecutionStatus,
@@ -38,6 +39,67 @@ from .models import (
     WorkflowType,
 )
 from .reporter import TerminalReporter
+
+
+def check_and_enforce_fingerprint(
+    registry: LocalRegistry,
+    tool4_service: Optional[MediaDatabaseUpdaterService],
+    logger: Optional[UnifiedArchiveLogger] = None,
+    reporter: Optional[TerminalReporter] = None,
+) -> Tuple[bool, Optional[str]]:
+    """Verify runtime code fingerprint; trigger automatic fresh slate if code changed (Section 6)."""
+    curr_fp = compute_review_data_fingerprint()
+    stored_fp = registry.get_metadata("review_data_fingerprint")
+    blocked_state = registry.get_metadata("purge_blocked")
+
+    if blocked_state:
+        return False, blocked_state
+
+    if stored_fp is None:
+        # First run: initialize fingerprint
+        registry.set_metadata("review_data_fingerprint", curr_fp)
+        return True, None
+
+    if stored_fp == curr_fp:
+        return True, None
+
+    # Code has changed!
+    if tool4_service is None:
+        return False, "Code change detected but Tool 4 updater is unavailable to purge test data"
+
+    purge_summary = tool4_service.purge_test_rows(dry_run=False)
+    if purge_summary.blocked == 0:
+        registry.clear_review_state()
+        registry.set_metadata("review_data_fingerprint", curr_fp)
+        registry.delete_metadata("purge_blocked")
+        if logger:
+            logger.info(
+                "AUTOMATIC_FRESH_SLATE",
+                details={
+                    "prior_fingerprint": stored_fp,
+                    "new_fingerprint": curr_fp,
+                    "deleted": purge_summary.deleted,
+                    "already_absent": purge_summary.already_absent,
+                },
+            )
+        if reporter:
+            print("Automatic fresh slate: runtime code change detected, test data purged.")
+        return True, None
+    else:
+        reasons = "; ".join(f"Row {it.row_id}: {it.reason}" for it in purge_summary.items if it.status.value == "PURGE_BLOCKED")
+        blocked_msg = f"Cleanup blocked: {purge_summary.blocked} Baserow row(s) retained. Reason: {reasons}"
+        registry.set_metadata("purge_blocked", blocked_msg)
+        if logger:
+            logger.error(
+                "AUTOMATIC_PURGE_BLOCKED",
+                details={
+                    "prior_fingerprint": stored_fp,
+                    "new_fingerprint": curr_fp,
+                    "blocked": purge_summary.blocked,
+                    "reasons": reasons,
+                },
+            )
+        return False, blocked_msg
 
 
 class MainToolingScriptService:
@@ -70,6 +132,70 @@ class MainToolingScriptService:
         self.planner_initial = RenamePlanner(mode=RenameMode.INITIAL)
         self.planner_finalize = RenamePlanner(mode=RenameMode.FINALIZE)
 
+    def purge(self, dry_run: bool = False) -> Tuple[int, Any]:
+        """Perform standalone alpha/beta test data cleanup (Section 5 of purge plan)."""
+        with self.registry.acquire_lock():
+            if self.tool4_service is None:
+                err_msg = "Tool 4 media database updater service is not configured; purge unavailable."
+                self.logger.error("PURGE_SERVICE_UNAVAILABLE", details={"error": err_msg})
+                print(f"Error: {err_msg}", file=sys.stderr)
+                return 1, None
+
+            purge_summary = self.tool4_service.purge_test_rows(dry_run=dry_run)
+
+            if dry_run:
+                print("Alpha/beta test data purge preview (dry-run):")
+                print(f"Baserow test rows: {purge_summary.deleted} would delete, {purge_summary.already_absent} already absent, {purge_summary.blocked} blocked")
+                if purge_summary.items:
+                    for it in purge_summary.items:
+                        print(f"  - Row #{it.row_id} (table {it.table_id}): {it.action} ({it.reason or it.status.value})")
+                print("Local review registry: would clear all files, proposals, reviews, and test ledger")
+                print("No filesystem, registry, Baserow, schema, or select-option mutation performed.")
+                return 0, purge_summary
+
+            if purge_summary.blocked == 0:
+                self.registry.clear_review_state()
+                current_fp = compute_review_data_fingerprint()
+                self.registry.set_metadata("review_data_fingerprint", current_fp)
+                self.registry.delete_metadata("purge_blocked")
+
+                self.logger.info(
+                    "ALPHA_BETA_PURGE_COMPLETE",
+                    details={
+                        "deleted": purge_summary.deleted,
+                        "already_absent": purge_summary.already_absent,
+                        "blocked": purge_summary.blocked,
+                        "cleared_registry": True,
+                    },
+                )
+
+                print("Alpha/beta purge complete")
+                print(f"Baserow test rows: {purge_summary.deleted} deleted, {purge_summary.already_absent} already absent, {purge_summary.blocked} blocked")
+                print("Local review registry: cleared")
+                return 0, purge_summary
+            else:
+                reasons = "; ".join(f"Row {it.row_id}: {it.reason}" for it in purge_summary.items if it.status.value == "PURGE_BLOCKED")
+                blocked_msg = f"Cleanup blocked: {purge_summary.blocked} row(s) retained. Reason: {reasons}"
+                self.registry.set_metadata("purge_blocked", blocked_msg)
+
+                self.logger.error(
+                    "ALPHA_BETA_PURGE_BLOCKED",
+                    details={
+                        "blocked": purge_summary.blocked,
+                        "deleted": purge_summary.deleted,
+                        "already_absent": purge_summary.already_absent,
+                        "reasons": reasons,
+                    },
+                )
+
+                print(f"Alpha/beta purge blocked: {purge_summary.blocked} row(s) retained.", file=sys.stderr)
+                for it in purge_summary.items:
+                    if it.status.value == "PURGE_BLOCKED":
+                        print(f"  - Row #{it.row_id}: {it.reason}", file=sys.stderr)
+                print("Local review registry: preserved", file=sys.stderr)
+                print("Run './run-media-archive.sh --purge' to retry.", file=sys.stderr)
+                return 1, purge_summary
+
     def run(self, targets: List[Union[str, Path]]) -> RunSummary:
         """Execute the configured workflow over the target paths."""
         start_time = time.time()
@@ -82,6 +208,27 @@ class MainToolingScriptService:
                 "targets": [str(t) for t in targets],
             },
         )
+
+        # 0. Check code fingerprint & enforce fresh slate
+        with self.registry.acquire_lock():
+            ok, blocked_msg = check_and_enforce_fingerprint(
+                registry=self.registry,
+                tool4_service=self.tool4_service,
+                logger=self.logger,
+                reporter=self.reporter,
+            )
+            if not ok:
+                err_msg = f"Error: {blocked_msg}. Please run './run-media-archive.sh --purge' to retry."
+                print(err_msg, file=sys.stderr)
+                self.logger.error("PURGE_BLOCKED_EXECUTION_HALTED", details={"error": blocked_msg})
+                return RunSummary(
+                    run_id=self.logger.run_id,
+                    workflow=self.workflow,
+                    is_dry_run=self.dry_run,
+                    log_path=str(self.logger.log_path),
+                    registry_path=str(self.registry.db_path),
+                    exit_code=1,
+                )
 
         # 1. Validate workflow availability
         if self.workflow == WorkflowType.PROCESSING:

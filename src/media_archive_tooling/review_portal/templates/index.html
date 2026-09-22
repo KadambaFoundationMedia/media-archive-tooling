@@ -110,6 +110,20 @@
         <div class="stat-card"><div class="stat-val" style="color: #16a34a;">{{ committed_count }}</div><div class="stat-lbl">Committed Renames</div></div>
     </div>
 
+    {% if purge_blocked %}
+    <div class="feedback feedback-error" style="font-size: 15px; font-weight: 600; padding: 16px; margin-bottom: 20px;">
+        Warning: {{ blocked_reason }}. Run <code>./run-media-archive.sh --purge</code> to retry.
+    </div>
+    {% endif %}
+
+    {% if fresh_slate and not purge_blocked %}
+    <div style="padding: 16px 20px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 20px;">
+        <span class="badge badge-exact" style="font-size: 13px; padding: 4px 10px;">Fresh test slate</span>
+        <span style="margin-left: 10px; color: var(--muted-color); font-size: 14px;">0 total tracked files &middot; 0 requires human review</span>
+    </div>
+    {% endif %}
+
+    {% if not purge_blocked %}
     <div class="controls">
         <a href="/?filter=evaluation" class="btn {% if current_filter in ('evaluation', 'review', 'active') %}active{% endif %}">Active Evaluation Queue ({{ review_count }})</a>
         <a href="/?filter=all" class="btn {% if current_filter == 'all' %}active{% endif %}">All Files ({{ total_count }})</a>
@@ -158,6 +172,7 @@
             {% endfor %}
         </tbody>
     </table>
+    {% endif %}
 
     <script>
         (function () {

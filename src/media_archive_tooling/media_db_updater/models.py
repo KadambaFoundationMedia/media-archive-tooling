@@ -68,6 +68,22 @@ class PurgeSummary(BaseModel):
     total_processed: int = 0
     results: List[PurgeItemResult] = Field(default_factory=list)
 
+    @property
+    def deleted(self) -> int:
+        return self.deleted_count
+
+    @property
+    def already_absent(self) -> int:
+        return self.already_absent_count
+
+    @property
+    def blocked(self) -> int:
+        return self.blocked_count
+
+    @property
+    def items(self) -> List[PurgeItemResult]:
+        return self.results
+
 
 class FieldAction(str, Enum):
     """Disposition of an individual field during synchronization."""

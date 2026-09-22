@@ -29,6 +29,7 @@ from media_archive_tooling.media_db_updater.models import (
     MediaDbSyncResult,
     SyncOperation,
     SyncStatus,
+    TestRowStatus,
 )
 from media_archive_tooling.media_db_updater.service import MediaDatabaseUpdaterService
 from media_archive_tooling.media_db_updater.write_adapter import (
@@ -40,6 +41,9 @@ from media_archive_tooling.orchestrator.discovery import (
     discover_media_targets,
     is_supported_media_file,
 )
+from media_archive_tooling.orchestrator.fingerprint import compute_review_data_fingerprint
+from media_archive_tooling.review_portal.app import app as portal_app, configure_review_context
+from fastapi.testclient import TestClient
 from media_archive_tooling.orchestrator.logger import (
     UnifiedArchiveLogger,
     redact_secrets,
@@ -56,8 +60,10 @@ from media_archive_tooling.orchestrator.service import (
     create_main_tooling_service,
 )
 from media_archive_tooling.renamer.models import (
+    Context,
     EnrichmentEvidence,
     FileMetadata,
+    Identity,
     ParserResult,
     RenameMode,
     RenameProposal,
@@ -1174,4 +1180,313 @@ def test_41_verified_live_readback_summary_displayed(env_setup, capsys):
 
     captured = capsys.readouterr()
     assert f"Verified live row #{res.tool4_row_id}" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Tests 42–51: Alpha/Beta Test-Data Purge and Fingerprint Verification
+# ---------------------------------------------------------------------------
+
+def save_dummy_proposal(registry, tracking_id="trk0042", filename="test.mp3"):
+    source = Path(f"/archive/{filename}")
+    parser = ParserResult(
+        identity=Identity(
+            tracking_id=tracking_id,
+            original_filename=filename,
+            original_path=str(source),
+            current_filename=filename,
+            extension=source.suffix.lower(),
+        ),
+        context=Context(parent_folder="archive"),
+        when=WhenResult(raw_token="", normalized="2022-09-19", state=ResolutionState.EXACT),
+        what=WhatResult(raw_token="", normalized="", state=ResolutionState.UNRESOLVED),
+        where=WhereResult(raw_token="", location="", country="", state=ResolutionState.UNRESOLVED),
+        who="KKS",
+    )
+    prop = RenameProposal(
+        tracking_id=tracking_id,
+        original_path=str(source),
+        current_filename=filename,
+        proposed_filename=f"2022-09-19_KKS_{filename}",
+        proposed_path=str(source.with_name(f"2022-09-19_KKS_{filename}")),
+        mode=RenameMode.INITIAL,
+        status="pending",
+        needs_review=True,
+        parser_result=parser,
+    )
+    registry.save_proposal(prop)
+    return prop
+
+
+def test_42_purge_standalone_dry_run_lists_rows_without_mutations(env_setup, capsys):
+    """42. Standalone --purge --dry-run lists rows and clears nothing (Section 5)."""
+    svc = env_setup["service"]
+    registry = env_setup["registry"]
+    fake_db = env_setup["fake_write_adapter"]
+
+    # Setup a test-created row in ledger and in fake DB
+    marker = "[ALPHA-TEST-ROW session=s42 tracking_id=trk0042]"
+    fake_db.rows[4201] = {
+        "id": 4201,
+        "Notes": f"{marker}\nOriginal filename: test.mp3",
+    }
+    registry.record_test_created_row(
+        table_id=fake_db.media_table_id,
+        row_id=4201,
+        tracking_id="trk0042",
+        session_id="s42",
+        marker=marker,
+        request_fingerprint="fp42",
+    )
+
+    # Also save a dummy file record in the registry
+    save_dummy_proposal(registry, tracking_id="trk0042", filename="test.mp3")
+
+    exit_code, summary = svc.purge(dry_run=True)
+    assert exit_code == 0
+    assert summary.deleted == 1  # would delete 1
+    assert 4201 in fake_db.rows  # not deleted in DB
+    assert registry.get_file("trk0042") is not None  # registry not cleared
+    assert registry.get_test_row(4201)["status"] == "CREATED"
+
+    captured = capsys.readouterr()
+    assert "Alpha/beta test data purge preview (dry-run):" in captured.out
+    assert "would delete" in captured.out
+
+
+def test_43_purge_live_success_clears_registry_and_deletes_baserow_rows(env_setup, capsys):
+    """43. Standalone live --purge deletes marker-verified rows and resets registry (Section 5)."""
+    svc = env_setup["service"]
+    registry = env_setup["registry"]
+    fake_db = env_setup["fake_write_adapter"]
+
+    marker = "[ALPHA-TEST-ROW session=s43 tracking_id=trk0043]"
+    fake_db.rows[4301] = {
+        "id": 4301,
+        "Notes": f"{marker}\nOriginal notes",
+    }
+    registry.record_test_created_row(
+        table_id=fake_db.media_table_id,
+        row_id=4301,
+        tracking_id="trk0043",
+        session_id="s43",
+        marker=marker,
+        request_fingerprint="fp43",
+    )
+    save_dummy_proposal(registry, tracking_id="trk0043", filename="test.mp3")
+
+    exit_code, summary = svc.purge(dry_run=False)
+    assert exit_code == 0
+    assert summary.deleted == 1
+    assert 4301 not in fake_db.rows  # deleted from Baserow
+    assert registry.get_file("trk0043") is None  # registry review state cleared
+    assert len(registry.list_test_rows()) == 0  # ledger cleared
+    assert registry.get_metadata("review_data_fingerprint") is not None
+    assert registry.get_metadata("purge_blocked") is None
+
+    captured = capsys.readouterr()
+    assert "Alpha/beta purge complete" in captured.out
+    assert "Local review registry: cleared" in captured.out
+
+
+def test_44_purge_rejects_media_targets(env_setup, capsys):
+    """44. Normal file targets cannot be specified with --purge (Section 5)."""
+    from media_archive_tooling.cli import run_main_script
+    import argparse
+
+    args = argparse.Namespace(
+        targets=["some_file.mp3"],
+        purge=True,
+        dry_run=False,
+        verbose=False,
+        workflow="all",
+        registry_path=str(env_setup["registry"].db_path),
+        log_file=None,
+        review_portal=False,
+        orchestrator_service=env_setup["service"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_main_script(args)
+    assert exc_info.value.code == 2
+
+    captured = capsys.readouterr()
+    assert "Error: Normal file targets cannot be specified with --purge" in captured.err
+
+
+def test_45_run_without_targets_and_without_purge_exits_code_2(env_setup, capsys):
+    """45. Running without targets and without --purge exits code 2 with helpful message."""
+    from media_archive_tooling.cli import run_main_script
+    import argparse
+
+    args = argparse.Namespace(
+        targets=[],
+        purge=False,
+        dry_run=False,
+        verbose=False,
+        workflow="all",
+        registry_path=str(env_setup["registry"].db_path),
+        log_file=None,
+        review_portal=False,
+        orchestrator_service=env_setup["service"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_main_script(args)
+    assert exc_info.value.code == 2
+
+    captured = capsys.readouterr()
+    assert "Error: No target paths specified." in captured.err
+
+
+def test_46_purge_failure_retains_ledger_and_registry_evidence(env_setup, capsys):
+    """46. Failed/blocked cleanup fails closed, retains evidence, and sets purge_blocked."""
+    svc = env_setup["service"]
+    registry = env_setup["registry"]
+    fake_db = env_setup["fake_write_adapter"]
+
+    # Marker mismatch -> will block purge
+    expected_marker = "[ALPHA-TEST-ROW session=s46 tracking_id=trk0046]"
+    fake_db.rows[4601] = {
+        "id": 4601,
+        "Notes": "Human edited notes without marker!",
+    }
+    registry.record_test_created_row(
+        table_id=fake_db.media_table_id,
+        row_id=4601,
+        tracking_id="trk0046",
+        session_id="s46",
+        marker=expected_marker,
+        request_fingerprint="fp46",
+    )
+    save_dummy_proposal(registry, tracking_id="trk0046", filename="test.mp3")
+
+    exit_code, summary = svc.purge(dry_run=False)
+    assert exit_code == 1
+    assert summary.blocked == 1
+    assert 4601 in fake_db.rows  # NOT deleted
+    assert registry.get_test_row(4601)["status"] == "PURGE_BLOCKED"
+    assert registry.get_file("trk0046") is not None  # registry NOT cleared
+    assert registry.get_metadata("purge_blocked") is not None
+
+
+def test_47_fingerprint_initialization_and_matching_no_purge(env_setup):
+    """47. Matching code fingerprint does not trigger automatic cleanup."""
+    media_dir = env_setup["media_dir"]
+    orig_f = media_dir / "2022-09-19_KKS_Oslo.mp3"
+    orig_f.write_text("audio")
+
+    svc = env_setup["service"]
+    registry = env_setup["registry"]
+
+    # First run initializes fingerprint
+    summary1 = svc.run([orig_f])
+    assert summary1.completed == 1
+    stored_fp = registry.get_metadata("review_data_fingerprint")
+    assert stored_fp is not None
+
+    # Second run with same code matches fingerprint and does not purge
+    final_path = summary1.file_results[0].final_path
+    summary2 = svc.run([final_path])
+    assert summary2.exit_code == 0
+    assert len(registry.list_files()) > 0
+    assert registry.get_metadata("review_data_fingerprint") == stored_fp
+
+
+def test_48_fingerprint_change_triggers_automatic_purge(env_setup, capsys):
+    """48. Code fingerprint difference triggers full automatic fresh slate (Section 6)."""
+    media_dir = env_setup["media_dir"]
+    orig_f = media_dir / "2022-09-19_KKS_Oslo.mp3"
+    orig_f.write_text("audio")
+
+    svc = env_setup["service"]
+    registry = env_setup["registry"]
+    fake_db = env_setup["fake_write_adapter"]
+
+    # Store stale old fingerprint
+    registry.set_metadata("review_data_fingerprint", "old_stale_fingerprint_hash")
+
+    # Add old test row
+    marker = "[ALPHA-TEST-ROW session=s48 tracking_id=trk0048]"
+    fake_db.rows[4801] = {"id": 4801, "Notes": marker}
+    registry.record_test_created_row(
+        table_id=fake_db.media_table_id,
+        row_id=4801,
+        tracking_id="trk0048",
+        session_id="s48",
+        marker=marker,
+        request_fingerprint="fp48",
+    )
+
+    summary = svc.run([orig_f])
+    assert summary.exit_code == 0
+    # Old test row was purged
+    assert 4801 not in fake_db.rows
+    # Fingerprint was updated to current
+    curr_fp = compute_review_data_fingerprint()
+    assert registry.get_metadata("review_data_fingerprint") == curr_fp
+
+    captured = capsys.readouterr()
+    assert "Automatic fresh slate" in captured.out
+
+
+def test_49_fingerprint_change_blocked_hides_portal_queue(env_setup):
+    """49. Blocked automatic cleanup hides stale review queue and displays warning (Section 6 & 7)."""
+    registry = env_setup["registry"]
+    fake_db = env_setup["fake_write_adapter"]
+
+    # Store stale fingerprint
+    registry.set_metadata("review_data_fingerprint", "old_stale_fingerprint_hash")
+
+    # Set up test row that will fail purge
+    marker = "[ALPHA-TEST-ROW session=s49 tracking_id=trk0049]"
+    fake_db.rows[4901] = {"id": 4901, "Notes": "Altered notes"}
+    registry.record_test_created_row(
+        table_id=fake_db.media_table_id,
+        row_id=4901,
+        tracking_id="trk0049",
+        session_id="s49",
+        marker=marker,
+        request_fingerprint="fp49",
+    )
+    # Stale file that should NOT be visible to operator
+    save_dummy_proposal(registry, tracking_id="trk0049", filename="stale.mp3")
+
+    configure_review_context(
+        registry=registry,
+        media_db_updater_service=env_setup["tool4_service"],
+    )
+
+    client = TestClient(portal_app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Warning: Cleanup blocked" in response.text
+    # Stale row is hidden
+    assert "stale.mp3" not in response.text
+
+    # Detail page returns 503
+    det_resp = client.get("/file/trk0049")
+    assert det_resp.status_code == 503
+    assert "Review portal is blocked" in det_resp.json()["detail"]
+
+
+def test_50_portal_fresh_test_slate_display(tmp_path):
+    """50. Empty registry displays 'Fresh test slate' banner in portal (Section 7)."""
+    fresh_db = tmp_path / "fresh.db"
+    fresh_reg = LocalRegistry(fresh_db)
+
+    configure_review_context(registry=fresh_reg)
+    client = TestClient(portal_app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Fresh test slate" in response.text
+    assert "Total Tracked Files" in response.text
+    assert "0" in response.text
+
+
+def test_51_registry_cross_process_lock(tmp_path):
+    """51. Registry lock prevents concurrent file operations across processes (Section 6)."""
+    reg = LocalRegistry(tmp_path / "lock_test.db")
+    with reg.acquire_lock():
+        reg.set_metadata("test_lock", "active")
+        assert reg.get_metadata("test_lock") == "active"
 

@@ -1,14 +1,19 @@
 """SQLite local operational registry for Tool 1 processing state and audit trail."""
+from contextlib import contextmanager
+import fcntl
 import json
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
+import threading
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 from ..models import ParserResult, RenameProposal
 
 
 class LocalRegistry:
+    _memory_lock = threading.Lock()
+
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -22,6 +27,13 @@ class LocalRegistry:
     def _init_db(self):
         with self._get_conn() as conn:
             cursor = conn.cursor()
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS registry_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """)
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 tracking_id TEXT PRIMARY KEY,
@@ -796,3 +808,64 @@ class LocalRegistry:
                 WHERE row_id = ?
                 """, (status, redacted_err, now, row_id))
             conn.commit()
+
+    def get_metadata(self, key: str) -> Optional[str]:
+        """Retrieve a metadata string value by key."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM registry_metadata WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else None
+
+    def set_metadata(self, key: str, value: str):
+        """Set or replace a metadata string value by key."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO registry_metadata (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """, (key, value, now))
+            conn.commit()
+
+    def delete_metadata(self, key: str):
+        """Remove a metadata key if present."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM registry_metadata WHERE key = ?", (key,))
+            conn.commit()
+
+    def clear_review_state(self):
+        """Atomically clear all local review/run/proposal/sync and ledger state for a fresh test slate."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM review_actions")
+            cursor.execute("DELETE FROM rename_history")
+            cursor.execute("DELETE FROM media_db_reviews")
+            cursor.execute("DELETE FROM travel_reviews")
+            cursor.execute("DELETE FROM media_db_syncs")
+            cursor.execute("DELETE FROM files")
+            cursor.execute("DELETE FROM test_row_ledger")
+            conn.commit()
+
+    @contextmanager
+    def acquire_lock(self, timeout: float = 30.0):
+        """Cross-process/thread file lock on the registry database."""
+        db_str = str(self.db_path)
+        if db_str == ":memory:":
+            with self._memory_lock:
+                yield
+            return
+
+        lock_path = Path(f"{db_str}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(lock_path, "a+")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            f.close()
