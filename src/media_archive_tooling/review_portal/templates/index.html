@@ -4,6 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Media Archive Tooling — Review Portal</title>
+    <script>
+        (function () {
+            const storedTheme = localStorage.getItem('media-archive-theme');
+            const theme = storedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            if (theme === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
     <style>
         :root {
             --bg-color: #f8fafc;
@@ -22,6 +31,7 @@
             --unresolved: #64748b;
             --shadow: rgba(15, 23, 42, 0.08);
         }
+        :root[data-theme="dark"],
         body[data-theme="dark"] {
             --bg-color: #0f172a;
             --text-color: #e2e8f0;
@@ -151,20 +161,31 @@
 
     <script>
         (function () {
+            const root = document.documentElement;
             const body = document.body;
             const themeButton = document.getElementById('theme-toggle');
             const storedTheme = localStorage.getItem('media-archive-theme');
             const initialTheme = storedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
             function applyTheme(theme) {
-                if (theme === 'dark') { body.setAttribute('data-theme', 'dark'); themeButton.textContent = 'Light mode'; }
-                else { body.removeAttribute('data-theme'); themeButton.textContent = 'Dark mode'; }
+                if (theme === 'dark') {
+                    root.setAttribute('data-theme', 'dark');
+                    body.setAttribute('data-theme', 'dark');
+                    if (themeButton) themeButton.textContent = 'Light mode';
+                } else {
+                    root.removeAttribute('data-theme');
+                    body.removeAttribute('data-theme');
+                    if (themeButton) themeButton.textContent = 'Dark mode';
+                }
             }
             applyTheme(initialTheme);
-            themeButton.addEventListener('click', function () {
-                const next = body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-                localStorage.setItem('media-archive-theme', next);
-                applyTheme(next);
-            });
+            if (themeButton) {
+                themeButton.addEventListener('click', function () {
+                    const currentTheme = body.getAttribute('data-theme') === 'dark' || root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+                    const next = currentTheme === 'dark' ? 'light' : 'dark';
+                    localStorage.setItem('media-archive-theme', next);
+                    applyTheme(next);
+                });
+            }
 
             const selectAll = document.getElementById('select-all');
             const rows = Array.from(document.querySelectorAll('.row-select'));
