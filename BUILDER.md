@@ -26,6 +26,29 @@ Example:
 ./scripts/builder-start.sh 2
 ```
 
+### Required Builder GitHub transport
+
+The Builder sandbox must use the project-owned HTTPS/token path; it must
+**never** attempt GitHub SSH, direct `gh` authentication, or manually inspect,
+source, print, or repeatedly reread `.env`.
+
+`builder-start.sh` configures the path automatically. For every Git command
+after the briefing, use the wrapper (not bare `git`):
+
+```sh
+./scripts/builder-git.sh status
+./scripts/builder-git.sh add <paths>
+./scripts/builder-git.sh commit -m "..."
+./scripts/builder-git.sh push
+```
+
+For pull-request operations, use `./scripts/builder-gh.sh` instead of bare
+`gh`. These wrappers retain no token in Git configuration or logs. The token is
+read only in a short-lived credential subprocess when an authenticated remote
+operation needs it. Do not retry a failed operation by trying SSH, changing
+remotes, or parsing `.env`; report the one error and stop as required by
+`docs/builder-git-sandbox-policy.md`.
+
 The helper synchronizes the local checkout with GitHub before it reads the tool status or build plan. It fetches the remote, safely fast-forwards when possible, and refuses to continue when local work is dirty, unpushed, or divergent. This prevents the builder from missing new review findings or planning/status commits.
 
 For implementation states, the helper also enforces the protected-main workflow. When started on `main`, it automatically creates or resumes the standard tool branch:
@@ -73,7 +96,7 @@ The numeric `builder-start.sh` helper does not select the unnumbered Main Toolin
 Before reading the status file or deciding that no work is required, the builder must:
 
 1. verify it is in the intended Git repository and branch;
-2. run `git fetch --prune origin`;
+2. run `./scripts/builder-git.sh fetch --prune origin`;
 3. verify the working tree is clean;
 4. compare local HEAD with the branch upstream;
 5. fast-forward to the upstream when the local branch is merely behind;

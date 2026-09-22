@@ -4,6 +4,30 @@ Status: **ACTIVE — project-wide Builder execution rule**
 
 This policy exists because the Builder's command sandbox can have different permissions from the repository owner's normal terminal. In particular, the Builder has encountered both outbound SSH denial and denial of writes inside `.git/` even though the same repository is healthy and ordinary Git commands work from the owner's terminal.
 
+The repository owner has explicitly selected the supported GitHub transport:
+HTTPS plus the project-local `GITHUB_TOKEN` through the Builder wrappers. This
+supersedes the earlier SSH transport for Builder work.
+
+## Required transport: one wrapper path
+
+Start a numbered build with `./scripts/builder-start.sh <number>`. It configures
+the remote as `https://github.com/KadambaFoundationMedia/media-archive-tooling.git`
+and installs a credential helper that contains no token.
+
+Thereafter, the Builder must use only:
+
+```sh
+./scripts/builder-git.sh <git arguments>
+./scripts/builder-gh.sh <gh arguments>
+```
+
+Do not use bare `git` for a remote/mutating Builder operation, bare `gh`, SSH,
+`git@github.com:...`, `gh auth login`, `gh auth token`, `source .env`, `set -a`,
+or a command that prints `GITHUB_TOKEN`. The wrappers never put the token in
+Git config, terminal output, commit messages, or status files. They read it
+only in a short-lived credential subprocess when an authenticated GitHub call
+actually needs it.
+
 ## Recognized sandbox symptoms
 
 Treat any of the following as an execution-environment restriction, not as repository corruption:
@@ -49,7 +73,9 @@ GIT_SANDBOX_BLOCKED
 
 and stop Git operations. The repository owner/orchestrator can then synchronize from a normal terminal or another Git-capable environment.
 
-Do not change the repository remote from SSH to HTTPS merely to bypass the first error unless the repository owner explicitly chooses to do so. SSH port 22 denial and `.git` lock denial are separate sandbox restrictions; changing transport does not solve the latter.
+The repository owner has already chosen HTTPS for Builder work. Do not change
+the remote again. SSH port 22 denial and `.git` lock denial are separate
+sandbox restrictions; HTTPS solves only the former.
 
 ## Safe owner-side synchronization
 

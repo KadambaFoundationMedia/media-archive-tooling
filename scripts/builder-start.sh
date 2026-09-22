@@ -20,6 +20,11 @@ fi
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
 
+# The repository owner selected the Builder's HTTPS/token transport. This
+# installs a secret-free credential helper; the token is read only if Git
+# actually needs it for a remote operation.
+. "$ROOT/scripts/builder-github-auth.sh"
+
 BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 if [ -z "$BRANCH" ]; then
   echo "ERROR: Builder checkout is in detached HEAD state. Check out the documented implementation branch before building."

@@ -9,7 +9,42 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `ACCEPTED`
+Status: `CHANGES_REQUESTED`
+
+## Active post-acceptance correction — generic WHAT must not create Baserow candidates (2026-09-22)
+
+**R-016 — Generic content labels are non-discriminating.** The practical
+portal test for tracking ID `26f17dfa` (`05 SOKENDA LEKCE STEREO JET.mp3`)
+showed **94** Tool 2 Baserow candidate media rows. Tool 3 was correctly
+`INSUFFICIENT_EVIDENCE`; its schedule-reference count is separate. The Tool 2
+defect is that local `WHAT: Class` receives the normal 35-point WHAT match
+score, even though `is_specific_what("Class")` correctly returns false.
+
+Builder must correct the reconciliation/candidate-selection path, without
+changing Tool 2's read-only Baserow boundary:
+
+1. Gate WHAT scoring, `what_match`, and any duplicate-candidate identity
+   evidence on `is_specific_what(local_what)`.
+2. For a generic local WHAT such as `Class`, record `NOT_COMPARABLE` with a
+   diagnostic that generic local WHAT is excluded from duplicate matching; it
+   must not be shown as an agreeing/matching media identity.
+3. Keep generic class classification available to later processing (Tools 5/7),
+   but never use it to retrieve, score, or multiply Baserow media candidates.
+4. Add a regression that models the 94-row class-only scenario: incompatible
+   date/place rows must not be retained as Baserow candidates merely because
+   both sides say `Class`; the result must not be `MULTIPLE_CANDIDATES`, must
+   make no automatic Baserow mutation, and Tool 3 remains
+   `INSUFFICIENT_EVIDENCE`. Preserve coverage showing specific WHAT matching
+   still works.
+5. If candidate/schedule counts are rendered together in the portal, label
+   them unambiguously as Tool 2 **Baserow candidate media rows** and Tool 3
+   **travel-schedule rows**.
+
+Before starting, use the Builder GitHub wrapper protocol in `BUILDER.md` and
+`docs/builder-git-sandbox-policy.md`. In particular, do not retry via SSH or
+direct `.env` reads. Commit, push, update the existing Tool 2 PR, run the
+targeted and full test suites, and return `READY_FOR_REVIEW` only with a real
+reachable branch HEAD and passing/pending CI as applicable.
 
 Post-acceptance architecture note (2026-09-17): `docs/baserow-access-boundary-amendment.md` confirms Tool 2's accepted read-only Baserow lookup/reconciliation role. Tool 1 uses it while producing the final filename, and Tool 4 uses it for the fresh existing-item/candidate gate before synchronization. Tool 2 remains technically incapable of mutations.
 
