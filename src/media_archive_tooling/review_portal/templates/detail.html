@@ -431,7 +431,7 @@
         </div>
 
         {% if media_db_review.result.candidates %}
-        <h3>Candidate Media Rows</h3>
+        <h3>Baserow Candidate Media Rows ({{ media_db_review.result.candidates|length }})</h3>
         <table>
             <thead>
                 <tr>
@@ -524,7 +524,7 @@
         </div>
 
         {% if travel_review.result.candidates %}
-        <h3>Schedule Candidates</h3>
+        <h3>Travel-Schedule Rows ({{ travel_review.result.candidates|length }})</h3>
         <table>
             <thead>
                 <tr>

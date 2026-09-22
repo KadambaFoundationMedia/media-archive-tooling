@@ -4,12 +4,12 @@ Build plan: `docs/tool-2-media-database-reviewer-build-plan.md`
 Authoritative live-data amendment: `docs/tool-2-media-database-reviewer-live-data-amendment.md`  
 Project-wide Baserow policy: `docs/baserow-live-data-policy.md`  
 Implementation issue: #2  
-Implementation PR: #19  
+Implementation PR: #49 (post-acceptance correction; original: #19)  
 Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 ## Active post-acceptance correction — generic WHAT must not create Baserow candidates (2026-09-22)
 
@@ -49,7 +49,8 @@ reachable branch HEAD and passing/pending CI as applicable.
 Post-acceptance architecture note (2026-09-17): `docs/baserow-access-boundary-amendment.md` confirms Tool 2's accepted read-only Baserow lookup/reconciliation role. Tool 1 uses it while producing the final filename, and Tool 4 uses it for the fresh existing-item/candidate gate before synchronization. Tool 2 remains technically incapable of mutations.
 
 Implementation branch: `tool-2-implementation`  
-Implementation PR: #19  
+Active correction PR: #49 (original implementation PR: #19)  
+Active correction commit: `6be1804c47718e22686c3b78f11e70aa63847225`  
 Accepted implementation code/docs commit: `fb43685b529e69d10a1642498abe3c7d3775290e`  
 Builder handoff/status head independently reviewed: `305b2e1d22ccbf04625b4b0b4d50db1500bc0e2e`  
 Planning acceptance recorded: 2026-09-14
@@ -96,6 +97,7 @@ Acceptance specifically verifies that:
 - **R-013** — normal Tool 2 review/CLI/batch path automatically hands safe confirmed/completed evidence to Renamer Enrich; confirmed title rendering, no-match `_edited` lifecycle, unconfirmed isolation, CLI bridge, and filename idempotency are covered by regressions 56–60 and the live smoke test.
 - **R-014** — portal single-owner enrichment handoff established; contradictory deferral of confirmed associations is prohibited; deferral on unconfirmed records resets `renamer_enrichment`/selection state; defense-in-depth prevents deferred or unavailable records from being enriched. Regressions 61–63.
 - **R-015** — committed Tool 2 walkthrough added and root walkthrough updated while preserving Tool 1 history.
+- **R-016** — generic content labels (e.g. Class, Seminar) gated on `is_specific_what`; generic local WHAT yields `NOT_COMPARABLE` with diagnostic note and is excluded from duplicate candidate retrieval and scoring; portal distinguishes Baserow candidate media rows and travel-schedule rows; regression 64 models 94-row class-only scenario.
 
 ## Final verified tests / CI
 
