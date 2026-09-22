@@ -1370,7 +1370,7 @@ def test_33_negative_test_high_score_without_explicit_predicates_does_not_auto_c
     engine = MediaDatabaseReconciliationEngine()
     parser_res = make_parser_result(
         date_val="2014-08-04",
-        what_val="Seminar",  # Generic topic, not specific scripture reference
+        what_val="Bhakti",  # Specific topic, not scripture reference
         place="London",
     )
     # Candidate with partial overlap (place match, topic overlap) but missing date -> unconfirmed
@@ -2879,3 +2879,159 @@ def test_adjacent_daily_verse_is_related_series_not_conflicting_duplicate():
         "relationship": "next_class",
     }]
     assert "related_series_row:3231" in result.evidence
+
+
+# ---------------------------------------------------------------------------
+# Test 64: Regression R-016: Generic WHAT (e.g. Class) excluded from Baserow duplicate matching
+# ---------------------------------------------------------------------------
+def test_64_r016_generic_what_class_does_not_create_baserow_candidates_nor_multiple_candidates():
+    """Models the 94-row class-only scenario for tracking ID 26f17dfa (05 SOKENDA LEKCE STEREO JET.mp3).
+
+    1. Incompatible date/place rows must not be retained as Baserow candidates merely because both sides say 'Class'.
+    2. The result must not be MULTIPLE_CANDIDATES.
+    3. Generic local WHAT returns NOT_COMPARABLE with diagnostic note and never shows as agreeing.
+    4. Makes no automatic Baserow mutation (tool4_action == NO_WRITE, renamer_enrichment unconfirmed).
+    5. Tool 3 remains INSUFFICIENT_EVIDENCE when travel schedule context is sparse.
+    6. Targeted querying does not search Baserow for generic 'Class'.
+    7. Specific WHAT matching still works.
+    """
+    from media_archive_tooling.media_db_reviewer.engine import _compare_what, is_specific_what
+    from media_archive_tooling.media_db_reviewer.baserow_provider import BaserowSnapshotProvider
+    from media_archive_tooling.travel_reviewer.engine import TravelScheduleEngine
+    from media_archive_tooling.travel_reviewer.models import TravelScheduleManifest, TravelReviewDecision
+
+    # 1. Verify is_specific_what classification
+    assert is_specific_what("Class") is False
+    assert is_specific_what("LEKCE") is False
+    assert is_specific_what("SB 3.6.6") is True
+
+    # 2. Verify _compare_what returns NOT_COMPARABLE for generic local WHAT
+    w_st, w_det = _compare_what("Class", "Class", "Class", "Daily Class", "Class")
+    assert w_st == FieldComparisonState.NOT_COMPARABLE
+    assert "Generic local WHAT 'Class' excluded from duplicate matching" in (w_det or "")
+
+    # 3. Model the 94-row class-only scenario: 94 Baserow rows with category/title "Class" and mismatched dates/places
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        tracking_id="26f17dfa",
+        orig_filename="05 SOKENDA LEKCE STEREO JET.mp3",
+        date_val="2008-04-DD",
+        what_val="Class",
+        what_category="Class",
+        place=None,
+        country="cz",
+    )
+
+    rows_94 = []
+    countries = ["Sweden", "Germany", "United Kingdom", "India", "Netherlands", "Poland"]
+    for i in range(1, 95):
+        rows_94.append({
+            "id": 1000 + i,
+            "Date": f"2015-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}",
+            "Place": f"City_{i}",
+            "Country": countries[i % len(countries)],
+            "What": "Class" if i % 2 == 0 else "",
+            "Title": f"Class {i}" if i % 2 == 1 else "Morning Class",
+            "Category": "Class",
+        })
+
+    snapshot_94 = BaserowSnapshot(
+        snapshot_at="2026-09-22T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=rows_94,
+    )
+
+    res = engine.reconcile(parser_res, snapshot_94)
+
+    # Incompatible date/place rows must NOT become candidates
+    assert len(res.candidates) == 0, f"Expected 0 candidates, got {len(res.candidates)}"
+    assert res.decision != ReviewDecision.MULTIPLE_CANDIDATES
+    assert res.decision == ReviewDecision.INSUFFICIENT_EVIDENCE
+    assert res.proposed_tool4_action == Tool4Action.NO_WRITE
+    assert res.renamer_enrichment.confirmed is False
+
+    # Also test full date 2008-04-05 without place: remains INSUFFICIENT_EVIDENCE, 0 candidates
+    parser_res_fulldt = make_parser_result(
+        tracking_id="26f17dfa",
+        orig_filename="05 SOKENDA LEKCE STEREO JET.mp3",
+        date_val="2008-04-05",
+        what_val="Class",
+        what_category="Class",
+        place=None,
+        country="cz",
+    )
+    res_fulldt = engine.reconcile(parser_res_fulldt, snapshot_94)
+    assert len(res_fulldt.candidates) == 0
+    assert res_fulldt.decision != ReviewDecision.MULTIPLE_CANDIDATES
+    assert res_fulldt.decision == ReviewDecision.INSUFFICIENT_EVIDENCE
+    assert res_fulldt.proposed_tool4_action == Tool4Action.NO_WRITE
+
+    # 4. Verify targeted Baserow querying does NOT query for generic "Class"
+    captured_urls = []
+
+    def mock_get(url, **kwargs):
+        captured_urls.append(url)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"next": None, "results": []}
+        return resp
+
+    provider = BaserowSnapshotProvider(
+        api_url="https://api.baserow.io",
+        api_token="test_tok",
+        media_table_id="111",
+    )
+    with patch("httpx.Client.get", side_effect=mock_get):
+        with httpx.Client() as client:
+            provider._fetch_targeted_media_rows(client, parser_res)
+
+    assert not any("search=Class" in u or "search=class" in u for u in captured_urls), (
+        f"Generic WHAT 'Class' must not be queried in Baserow: {captured_urls}"
+    )
+
+    # 5. Verify Tool 3 remains INSUFFICIENT_EVIDENCE for this sparse file
+    manifest = TravelScheduleManifest(
+        format_version="1.0",
+        source_table_id="123",
+        retrieved_at="2026-09-14T00:00:00Z",
+        complete=True,
+        row_count=0,
+        canonical_sha256="",
+        normalized_rows=[],
+    )
+    travel_engine = TravelScheduleEngine(manifest)
+    travel_res = travel_engine.evaluate(parser_res, tool2_context=res)
+    assert travel_res.decision == TravelReviewDecision.INSUFFICIENT_EVIDENCE
+    assert len(travel_res.candidates) == 0
+
+    # 6. Verify specific WHAT matching still works
+    specific_parser_res = make_parser_result(
+        tracking_id="spec01",
+        orig_filename="2015-08-27_SB-3-6-6_Sweden.mp3",
+        date_val="2015-08-27",
+        what_val="SB 3.6.6",
+        what_category="Srimad Bhagavatam",
+        place="Sweden",
+        country="se",
+    )
+    specific_snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-22T00:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[{
+            "id": 2335,
+            "Date": "2015-08-27",
+            "Place": "Sweden",
+            "Country": "Sweden",
+            "What": "SB 3.6.6",
+            "Title": "SB 3.6.6 class",
+            "Category": "Srimad Bhagavatam",
+        }],
+    )
+    spec_res = engine.reconcile(specific_parser_res, specific_snapshot)
+    assert spec_res.decision == ReviewDecision.EXISTING_MEDIA_MATCH
+    assert spec_res.selected_media_row_id == 2335
+    assert spec_res.renamer_enrichment.confirmed is True
+    assert len(spec_res.candidates) == 1
+    assert spec_res.candidates[0].field_comparisons["what"].state == FieldComparisonState.AGREES

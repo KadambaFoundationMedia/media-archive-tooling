@@ -308,10 +308,13 @@ class BaserowSnapshotProvider:
             else:
                 queries.append(clean_dt)
 
-        # 3. WHAT
+        # 3. WHAT (R-016: gate on is_specific_what to exclude generic tokens like Class)
         what = getattr(getattr(parser_result, "what", None), "selected_value", None)
         if what and str(what) != "UNRESOLVED":
-            queries.append(str(what))
+            from .engine import is_specific_what
+
+            if is_specific_what(str(what)):
+                queries.append(str(what))
 
         # 4. Place (R-012)
         place = getattr(getattr(parser_result, "where", None), "place_location", None)

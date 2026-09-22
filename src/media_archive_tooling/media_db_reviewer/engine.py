@@ -393,10 +393,15 @@ def _compare_what(
     """Compare local WHAT with Baserow what/title using structural scripture matching."""
     if not local_what and not db_what and not db_title:
         return FieldComparisonState.NOT_COMPARABLE, "Both WHAT and title missing"
-    if local_what and not db_what and not db_title:
-        return FieldComparisonState.DATABASE_MISSING, "Database what/title is blank"
     if not local_what and (db_what or db_title):
         return FieldComparisonState.LOCAL_MISSING, "Local what is blank"
+    if local_what and not is_specific_what(local_what):
+        return (
+            FieldComparisonState.NOT_COMPARABLE,
+            f"Generic local WHAT '{local_what}' excluded from duplicate matching",
+        )
+    if local_what and not db_what and not db_title:
+        return FieldComparisonState.DATABASE_MISSING, "Database what/title is blank"
 
     local_scrip = parse_scripture_reference(local_what)
     db_scrip = parse_scripture_reference(db_what) or parse_scripture_reference(db_title)
@@ -565,9 +570,9 @@ class MediaDatabaseReconciliationEngine:
                     score += 30.0
                     date_match = True
 
-            # C. Specific WHAT match
+            # C. Specific WHAT match (R-016: gate on is_specific_what)
             what_match = False
-            if local_what and (row["what"] or row["title"]):
+            if is_specific_what(local_what) and (row["what"] or row["title"]):
                 what_state, what_detail = _compare_what(
                     local_what, local_what_category, row["what"], row["title"], row["category"]
                 )

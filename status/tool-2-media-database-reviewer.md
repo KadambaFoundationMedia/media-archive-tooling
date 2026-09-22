@@ -9,7 +9,7 @@ Protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 ## Active post-acceptance correction — generic WHAT must not create Baserow candidates (2026-09-22)
 
@@ -96,6 +96,7 @@ Acceptance specifically verifies that:
 - **R-013** — normal Tool 2 review/CLI/batch path automatically hands safe confirmed/completed evidence to Renamer Enrich; confirmed title rendering, no-match `_edited` lifecycle, unconfirmed isolation, CLI bridge, and filename idempotency are covered by regressions 56–60 and the live smoke test.
 - **R-014** — portal single-owner enrichment handoff established; contradictory deferral of confirmed associations is prohibited; deferral on unconfirmed records resets `renamer_enrichment`/selection state; defense-in-depth prevents deferred or unavailable records from being enriched. Regressions 61–63.
 - **R-015** — committed Tool 2 walkthrough added and root walkthrough updated while preserving Tool 1 history.
+- **R-016** — generic content labels (e.g. Class, Seminar) gated on `is_specific_what`; generic local WHAT yields `NOT_COMPARABLE` with diagnostic note and is excluded from duplicate candidate retrieval and scoring; portal distinguishes Baserow candidate media rows and travel-schedule rows; regression 64 models 94-row class-only scenario.
 
 ## Final verified tests / CI
 
