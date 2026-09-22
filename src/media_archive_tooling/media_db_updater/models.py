@@ -25,6 +25,50 @@ class SyncOperation(str, Enum):
     BLOCKED = "BLOCKED"
 
 
+class TestRowStatus(str, Enum):
+    """Lifecycle status of a test-created row in the alpha/beta test row ledger."""
+    __test__ = False
+    CREATED = "CREATED"
+    PURGING = "PURGING"
+    PURGED = "PURGED"
+    PURGE_BLOCKED = "PURGE_BLOCKED"
+
+
+class TestRowLedgerEntry(BaseModel):
+    """Durable record of a Baserow row created during alpha/beta testing."""
+    __test__ = False
+    table_id: str
+    row_id: int
+    tracking_id: str
+    run_id: Optional[str] = None
+    created_at: str
+    request_fingerprint: str
+    session_id: str
+    marker: str
+    status: TestRowStatus = TestRowStatus.CREATED
+    error_message: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    updated_at: str
+
+
+class PurgeItemResult(BaseModel):
+    """Outcome of purging an individual test row."""
+    row_id: int
+    table_id: str
+    status: TestRowStatus
+    action: str  # "DELETED", "ALREADY_ABSENT", "BLOCKED", "WOULD_DELETE"
+    reason: Optional[str] = None
+
+
+class PurgeSummary(BaseModel):
+    """Aggregate summary of a test row purge operation."""
+    deleted_count: int = 0
+    already_absent_count: int = 0
+    blocked_count: int = 0
+    total_processed: int = 0
+    results: List[PurgeItemResult] = Field(default_factory=list)
+
+
 class FieldAction(str, Enum):
     """Disposition of an individual field during synchronization."""
     SET = "SET"
@@ -117,6 +161,12 @@ class MediaDbSyncRequest(BaseModel):
     request_id: Optional[str] = None
     request_fingerprint: Optional[str] = None
     table_id: Optional[str] = None
+
+    # Alpha/Beta test tracking and cleanup provenance
+    session_id: Optional[str] = None
+    run_id: Optional[str] = None
+    test_marker: Optional[str] = None
+    is_test_row: bool = True
 
     # Tool 1 metadata & resolution states
     when_val: Optional[str] = None

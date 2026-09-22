@@ -10,7 +10,7 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 ## Active alpha/beta cleanup amendment — 2026-09-22
 
@@ -26,13 +26,60 @@ The Main Tooling Script/portal work waits for this PR to merge. Run the
 required focused/full tests and controlled live create-then-purge smoke test
 without committing live row IDs or secrets to the repository.
 
+### Amendment resolution
+
+Implemented the Tool 4 portion of `docs/alpha-beta-test-data-purge-build-plan.md`:
+
+1. **Durable SQLite Test-Row Ledger**:
+   - Added `test_row_ledger` table and indexes to `LocalRegistry` (`registry.db`).
+   - Tracks `table_id`, `row_id`, `tracking_id`, `run_id`, `created_at`, `request_fingerprint`, `session_id`, `marker`, `status` (`CREATED`, `PURGING`, `PURGED`, `PURGE_BLOCKED`), `error_message`, `details`, `updated_at`.
+   - Records verified live `CREATE` results upon successful synchronization (`commit=True`).
+   - Ensures sensitive values/tokens are redacted via `redact_secrets()`.
+
+2. **Machine-Readable Test Marker**:
+   - `build_test_marker(session_id, tracking_id)` generates `[ALPHA-TEST-ROW session=... tracking_id=...]`.
+   - Prepend test marker to `Notes` on new row creation in `ALPHA_BETA_TEST_MODE`.
+   - Existing matched or updated rows are never tagged or modified with test markers.
+   - `merge_notes` guarantees complete idempotency: existing markers are preserved without duplication.
+
+3. **Narrowly Scoped Typed Cleanup Service & Adapter**:
+   - `BaserowWriteAdapter.delete_media_row(row_id: int) -> bool` (HTTP DELETE `/api/database/rows/table/{media_table_id}/{row_id}/`).
+   - `MediaDatabaseUpdaterService.purge_test_rows(dry_run=False, session_id=None) -> PurgeSummary` verifies live row state before deletion:
+     - Verifies table ID match.
+     - Fetches live row from Baserow. If 404 (already deleted), records `PURGED` (`ALREADY_ABSENT`) idempotently.
+     - Verifies exact `row_id` and presence of the recorded `marker` in live row `Notes`.
+     - Fails closed on any unexpected or altered marker, table mismatch, or network error: marks `PURGE_BLOCKED` and never deletes.
+     - Supports `dry_run=True` (`WOULD_DELETE`).
+
+4. **Access Boundaries Preserved**:
+   - Tool 4 remains the sole writer/deleter for Baserow.
+   - Tools 1–3, Main Tooling Script, Review Portal, and `LocalRegistry` expose zero generic delete methods.
+
+5. **CLI Integration**:
+   - Added `--purge-test-rows` option with `--session-id` and `--dry-run` to `media-db-update` command.
+
+6. **Test Suite Verification**:
+   - Test 82 suite (`test_82_a` through `test_82_j`) in `tests/test_media_db_updater.py` covering:
+     - Test marker and ledger recording on CREATE (`commit=True`).
+     - NOOP, UPDATE, and preview never recorded in test ledger; existing row Notes never tagged.
+     - Marker-verified deletion transitions row to `PURGED`.
+     - Marker mismatch fails closed -> `PURGE_BLOCKED`.
+     - Table ID mismatch fails closed -> `PURGE_BLOCKED`.
+     - Network errors during delete fail closed -> `PURGE_BLOCKED`.
+     - 404 remote row handled idempotently -> `PURGED` (`ALREADY_ABSENT`).
+     - Dry-run cleanup leaves ledger and live row untouched.
+     - Secrets redacted from ledger and purge error messages.
+     - Strict access boundary: Tools 1-3, Main Tooling Script, and Registry have no delete methods.
+   - 420/420 tests passing in full test suite.
+   - 136/136 tests passing in Tool 4 test suite.
+   - `uv build --offline`: PASS.
+   - `git diff --check`: PASS.
+   - `sh -n scripts/builder-start.sh scripts/review-tool-1.sh`: PASS.
+
 Implementation branch: `tool-4-implementation`
-Builder implementation commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
-Evaluated clean commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
-Evaluation evidence commit: `b2cfd4304c5a932b7042a3cfc623910c2fc08f90`
-Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: PASS (Run 35252570279: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252570279)
-Last planning/review update: 2026-09-17
+Alpha/Beta amendment PR: #51 — https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/51
+Alpha/Beta amendment PR CI status: PASS (Run 35784992838: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35784992838)
+Last planning/review update: 2026-09-22
 
 Latest independently reviewed PR head: `fd55ea6080e4d9f2bd579dcb8e9afceb3bd7b949`
 Exact-head required CI: PASS (Run 35252570279: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252570279)
