@@ -77,12 +77,9 @@ Implemented the Tool 4 portion of `docs/alpha-beta-test-data-purge-build-plan.md
    - `sh -n scripts/builder-start.sh scripts/review-tool-1.sh`: PASS.
 
 Implementation branch: `tool-4-implementation`
-Builder implementation commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
-Evaluated clean commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
-Evaluation evidence commit: `b2cfd4304c5a932b7042a3cfc623910c2fc08f90`
-Base commit (`main`): `8ab7d81237e1b5c21976fe78ce55f284c7e61f96`
-PR #27 CI status: PASS (Run 35252570279: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252570279)
-Last planning/review update: 2026-09-17
+Alpha/Beta amendment PR: #51 — https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/51
+Alpha/Beta amendment PR CI status: PASS (Run 35784992838: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35784992838)
+Last planning/review update: 2026-09-22
 
 Latest independently reviewed PR head: `fd55ea6080e4d9f2bd579dcb8e9afceb3bd7b949`
 Exact-head required CI: PASS (Run 35252570279: https://github.com/KadambaFoundationMedia/media-archive-tooling/actions/runs/35252570279)
