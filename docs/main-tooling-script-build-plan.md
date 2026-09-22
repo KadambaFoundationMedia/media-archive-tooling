@@ -2,6 +2,10 @@
 
 Status: **FINALIZED — implementation-ready**
 
+Alpha/beta cleanup amendment: `docs/alpha-beta-test-data-purge-build-plan.md`
+is authoritative for review-state invalidation and the standalone `--purge`
+workflow.
+
 This document is the authoritative implementation specification for the unnumbered **Main Tooling Script**. It is an orchestration entry point, not Tool 12 and not a replacement for any existing tool.
 
 Implementation progress, questions, review findings, and commit checkpoints belong in `status/main-tooling-script.md`. The Builder must not rewrite this finalized plan to fit an implementation.

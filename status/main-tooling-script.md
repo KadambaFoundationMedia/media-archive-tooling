@@ -7,7 +7,21 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `ACCEPTED`
+Status: `CHANGES_REQUESTED`
+
+## Active alpha/beta cleanup amendment — 2026-09-22
+
+Implement the Main Tooling Script portion of
+`docs/alpha-beta-test-data-purge-build-plan.md` **after** its Tool 4 cleanup
+service is accepted and merged. Required outcome: standalone `--purge` and
+`--purge --dry-run`, automatic review-data fingerprint invalidation at runner
+and independent portal startup, a blocked-cleanup state that hides stale
+results, and concise fresh-slate reporting. The Main Tooling Script must call
+Tool 4's typed cleanup service; it must not delete Baserow rows itself.
+
+This is an alpha/beta-only test-data policy. Preserve normal file handling,
+dry-run guarantees, the independent `--review-only` portal launcher, and all
+Tool 4 ownership boundaries.
 
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/40

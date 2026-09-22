@@ -10,7 +10,21 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `ACCEPTED`
+Status: `CHANGES_REQUESTED`
+
+## Active alpha/beta cleanup amendment — 2026-09-22
+
+Implement the Tool 4 portion of
+`docs/alpha-beta-test-data-purge-build-plan.md` first. Tool 4 must record
+verified live CREATE results in a durable test-row ledger, add a test marker to
+new-row Notes, and expose the narrowly scoped typed cleanup service that
+deletes only marker-verified ledger rows. It must fail closed on any uncertain
+remote state and must not expose generic Baserow deletion to Tools 1–3, the
+Main Tooling Script, or the portal.
+
+The Main Tooling Script/portal work waits for this PR to merge. Run the
+required focused/full tests and controlled live create-then-purge smoke test
+without committing live row IDs or secrets to the repository.
 
 Implementation branch: `tool-4-implementation`
 Builder implementation commit: `b858e40fb430bbad2d62fc7fc966dd70a940f774`
