@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 import media_archive_tooling.review_portal.app as portal_app
@@ -44,6 +45,16 @@ def test_portal_dashboard():
     assert "Proposed filename" in response.text
     assert "<th>Path</th>" in response.text
     assert "<th>ID</th>" not in response.text
+
+
+def test_portal_recovers_when_registry_was_deleted_while_running(tmp_path):
+    registry_path = tmp_path / "deleted-registry.db"
+    registry = LocalRegistry(registry_path)
+    os.unlink(registry_path)
+
+    # Simulates an already-running portal whose next SQLite connection creates
+    # a new empty file without the schema.
+    assert registry.list_files() == []
 
 
 def test_dashboard_hides_tracking_token_from_proposed_filename():
