@@ -196,16 +196,29 @@ class LocalRegistry:
             params.append(1 if needs_review else 0)
         query += " ORDER BY updated_at DESC"
 
-        results = []
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            for row in cursor.fetchall():
-                d = dict(row)
-                d["parser_result"] = json.loads(d["parser_result_json"])
-                d["review_reasons"] = json.loads(d["review_reasons"]) if d["review_reasons"] else []
-                results.append(d)
-        return results
+        def _read_rows() -> List[Dict[str, Any]]:
+            results = []
+            with self._get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                for row in cursor.fetchall():
+                    d = dict(row)
+                    d["parser_result"] = json.loads(d["parser_result_json"])
+                    d["review_reasons"] = json.loads(d["review_reasons"]) if d["review_reasons"] else []
+                    results.append(d)
+            return results
+
+        try:
+            return _read_rows()
+        except sqlite3.OperationalError as exc:
+            # A registry can be deliberately deleted while a portal process is
+            # still alive. SQLite then recreates an empty file on the next
+            # connection, without its tables. Initialize that empty registry
+            # and present an empty portal rather than returning HTTP 500.
+            if "no such table: files" not in str(exc).lower():
+                raise
+            self._init_db()
+            return _read_rows()
 
     def save_proposal(self, proposal: RenameProposal):
         now = datetime.now(timezone.utc).isoformat()
