@@ -558,6 +558,21 @@ def run_media_db_update(args):
     commit = getattr(args, "commit", False)
     is_json = getattr(args, "json", False)
 
+    if getattr(args, "purge_test_rows", False):
+        dry_run = not commit
+        summary = updater_service.purge_test_rows(dry_run=dry_run)
+        if is_json:
+            print(summary.model_dump_json(indent=2))
+        else:
+            mode_str = "DRY-RUN" if dry_run else "COMMIT"
+            print(f"=== Purge Test Rows ({mode_str}) ===")
+            print(f"Total processed: {summary.total_processed}")
+            print(f"Deleted: {summary.deleted_count}, Already absent: {summary.already_absent_count}, Blocked: {summary.blocked_count}")
+            for res in summary.results:
+                reason_str = f" - {res.reason}" if res.reason else ""
+                print(f"  Row {res.row_id} (Table {res.table_id}): {res.action}{reason_str}")
+        return
+
     if getattr(args, "retry_pending", False):
         results = updater_service.retry_pending()
         if is_json:
@@ -670,6 +685,7 @@ def main():
     media_update_parser.add_argument("--commit", dest="commit", action="store_true", default=False, help="Apply mutations to Baserow")
     media_update_parser.add_argument("--dry-run", dest="commit", action="store_false", help="Perform dry-run preview without mutating database (default)")
     media_update_parser.add_argument("--retry-pending", action="store_true", default=False, help="Retry all pending or retryable sync records")
+    media_update_parser.add_argument("--purge-test-rows", action="store_true", default=False, help="Purge alpha/beta test rows recorded in ledger")
     media_update_parser.add_argument("--registry-path", help="Custom SQLite registry path")
     media_update_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
     media_update_parser.set_defaults(func=run_media_db_update)

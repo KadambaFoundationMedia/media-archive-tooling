@@ -110,6 +110,22 @@ class LocalRegistry:
                 FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS test_row_ledger (
+                row_id INTEGER PRIMARY KEY,
+                table_id TEXT NOT NULL,
+                tracking_id TEXT NOT NULL,
+                run_id TEXT,
+                created_at TEXT NOT NULL,
+                request_fingerprint TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                marker TEXT NOT NULL,
+                status TEXT NOT NULL, -- CREATED, PURGING, PURGED, PURGE_BLOCKED
+                error_message TEXT,
+                details_json TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """)
             try:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
@@ -123,6 +139,9 @@ class LocalRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_decision ON media_db_reviews(decision)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_travel_reviews_decision ON travel_reviews(decision)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_db_syncs_status ON media_db_syncs(sync_status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_test_row_ledger_status ON test_row_ledger(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_test_row_ledger_tracking_id ON test_row_ledger(tracking_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_test_row_ledger_session_id ON test_row_ledger(session_id)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -648,3 +667,132 @@ class LocalRegistry:
                 d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
                 results.append(d)
             return results
+
+    def record_test_created_row(
+        self,
+        table_id: str,
+        row_id: int,
+        tracking_id: str,
+        request_fingerprint: str,
+        session_id: str,
+        marker: str,
+        run_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        status: str = "CREATED",
+        error_message: Optional[str] = None,
+    ):
+        """Record or update a test-created row in the durable test_row_ledger."""
+        from ...media_db_updater.write_adapter import redact_secrets
+
+        now = datetime.now(timezone.utc).isoformat()
+        redacted_err = redact_secrets(error_message) if error_message else None
+        details_json = json.dumps(redact_secrets(details)) if details else None
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO test_row_ledger (
+                row_id, table_id, tracking_id, run_id, created_at,
+                request_fingerprint, session_id, marker, status,
+                error_message, details_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(row_id) DO UPDATE SET
+                table_id = excluded.table_id,
+                tracking_id = excluded.tracking_id,
+                run_id = COALESCE(excluded.run_id, test_row_ledger.run_id),
+                request_fingerprint = excluded.request_fingerprint,
+                session_id = excluded.session_id,
+                marker = excluded.marker,
+                status = excluded.status,
+                error_message = excluded.error_message,
+                details_json = COALESCE(excluded.details_json, test_row_ledger.details_json),
+                updated_at = excluded.updated_at
+            """, (
+                row_id,
+                str(table_id),
+                tracking_id,
+                run_id,
+                now,
+                request_fingerprint,
+                session_id,
+                marker,
+                status,
+                redacted_err,
+                details_json,
+                now,
+            ))
+            conn.commit()
+
+    def get_test_row(self, row_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve a single test row ledger record by row_id."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM test_row_ledger WHERE row_id = ?", (row_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["details"] = json.loads(d["details_json"]) if d.get("details_json") else None
+                return d
+        return None
+
+    def list_test_rows(
+        self,
+        status: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List test row ledger records with optional status or session_id filter."""
+        query = "SELECT * FROM test_row_ledger WHERE 1=1"
+        params = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        query += " ORDER BY row_id ASC"
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["details"] = json.loads(d["details_json"]) if d.get("details_json") else None
+                results.append(d)
+            return results
+
+    def update_test_row_status(
+        self,
+        row_id: int,
+        status: str,
+        error_message: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """Update lifecycle status and error/details for a test row ledger record."""
+        from ...media_db_updater.write_adapter import redact_secrets
+
+        now = datetime.now(timezone.utc).isoformat()
+        redacted_err = redact_secrets(error_message) if error_message else None
+        details_json = json.dumps(redact_secrets(details)) if details else None
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if details_json is not None:
+                cursor.execute("""
+                UPDATE test_row_ledger SET
+                    status = ?,
+                    error_message = ?,
+                    details_json = ?,
+                    updated_at = ?
+                WHERE row_id = ?
+                """, (status, redacted_err, details_json, now, row_id))
+            else:
+                cursor.execute("""
+                UPDATE test_row_ledger SET
+                    status = ?,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE row_id = ?
+                """, (status, redacted_err, now, row_id))
+            conn.commit()

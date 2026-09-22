@@ -327,6 +327,32 @@ class BaserowWriteAdapter:
         except Exception as e:
             raise BaserowUnavailableError(redact_secrets(f"Network error patching row {row_id}: {e}")) from e
 
+    def delete_media_row(self, row_id: int) -> bool:
+        """Delete a single verified row from the Media table.
+
+        Returns True if deleted (HTTP 200/204), or False if already absent (HTTP 404).
+        Raises BaserowWriteError or BaserowUnavailableError on failure.
+        """
+        if not (self.api_token and self.media_table_id):
+            raise BaserowUnavailableError("Baserow credentials or media_table_id not configured")
+
+        url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/{row_id}/"
+        try:
+            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                resp = client.delete(url, headers=self._headers())
+                if resp.status_code in (200, 204):
+                    return True
+                elif resp.status_code == 404:
+                    return False
+                else:
+                    raise BaserowWriteError(
+                        redact_secrets(f"Failed to delete row {row_id}: HTTP {resp.status_code} - {resp.text}")
+                    )
+        except BaserowWriteError:
+            raise
+        except Exception as e:
+            raise BaserowUnavailableError(redact_secrets(f"Network error deleting row {row_id}: {e}")) from e
+
     def ensure_select_option(self, field_name: str, option_name: str, allow_create: bool = False) -> str:
         """Ensure a select option exists, creating it if permitted.
 
@@ -545,6 +571,7 @@ class FakeBaserowWriteAdapter:
         self.simulate_timeout_on_create: bool = False
         self.simulate_timeout_on_patch: bool = False
         self.simulate_schema_error: bool = False
+        self.simulate_network_failure_on_delete: bool = False
 
     def __repr__(self) -> str:
         return f"<FakeBaserowWriteAdapter rows={len(self.rows)} fields={len(self.fields)}>"
@@ -665,3 +692,13 @@ class FakeBaserowWriteAdapter:
         self.next_option_id += 1
         existing_options.append(new_opt)
         return new_opt["value"]
+
+    def delete_media_row(self, row_id: int) -> bool:
+        """Delete a single row from the fake in-memory store."""
+        self.calls.append({"action": "delete_media_row", "row_id": row_id})
+        if self.simulate_network_failure or getattr(self, "simulate_network_failure_on_delete", False):
+            raise BaserowUnavailableError("Simulated network failure deleting row")
+        if row_id in self.rows:
+            del self.rows[row_id]
+            return True
+        return False

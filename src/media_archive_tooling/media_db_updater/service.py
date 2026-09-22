@@ -22,13 +22,17 @@ from .models import (
     FieldApprovalAction,
     MediaDbSyncRequest,
     MediaDbSyncResult,
+    PurgeItemResult,
+    PurgeSummary,
     SyncOperation,
     SyncStatus,
+    TestRowStatus,
 )
 from .write_adapter import (
     BaserowUnavailableError,
     BaserowWriteAdapter,
     FakeBaserowWriteAdapter,
+    redact_secrets,
 )
 
 logger = logging.getLogger(__name__)
@@ -393,6 +397,28 @@ class MediaDatabaseUpdaterService:
             result_json=result.model_dump_json(),
         )
 
+        # Record in test-row ledger on verified live CREATE (alpha/beta cleanup amendment)
+        if (
+            commit
+            and result.operation == SyncOperation.CREATE
+            and result.status == SyncStatus.SYNCED
+            and result.media_row_id
+        ):
+            table_id = result.table_id or str(getattr(self.write_adapter, "media_table_id", "") or "")
+            sess_id = req.session_id or "alpha_test_session"
+            marker_val = req.test_marker or f"[ALPHA-TEST-ROW session={sess_id} tracking_id={tracking_id}]"
+            self.registry.record_test_created_row(
+                table_id=table_id,
+                row_id=result.media_row_id,
+                tracking_id=tracking_id,
+                request_fingerprint=req.request_fingerprint or "",
+                session_id=sess_id,
+                marker=marker_val,
+                run_id=req.run_id,
+                details={"live_row": result.live_row},
+                status=TestRowStatus.CREATED.value,
+            )
+
         return result
 
     def retry_pending(self, tracking_ids: Optional[List[str]] = None) -> List[MediaDbSyncResult]:
@@ -412,3 +438,198 @@ class MediaDatabaseUpdaterService:
                 results.append(res)
 
         return results
+
+    def purge_test_rows(
+        self,
+        dry_run: bool = False,
+        session_id: Optional[str] = None,
+    ) -> PurgeSummary:
+        """Purge test-created Baserow rows recorded in the local test-row ledger.
+
+        Enforces:
+        - Only marker-verified rows recorded in the durable ledger are eligible.
+        - Compares table ID, row ID, and remote marker in live row Notes before deletion.
+        - Fails closed on table mismatch, marker mismatch, wrong row, or network error.
+        - Idempotent: 404 (already absent) is marked PURGED.
+        - In dry_run mode, verifies remote preconditions and reports without mutating Baserow or ledger.
+        """
+        summary = PurgeSummary()
+        configured_table_id = str(getattr(self.write_adapter, "media_table_id", "") or "")
+
+        all_entries = self.registry.list_test_rows(session_id=session_id)
+        # Filter to actionable rows: CREATED, PURGING, or PURGE_BLOCKED
+        target_statuses = {
+            TestRowStatus.CREATED.value,
+            TestRowStatus.PURGING.value,
+            TestRowStatus.PURGE_BLOCKED.value,
+        }
+        actionable_entries = [e for e in all_entries if e.get("status") in target_statuses]
+        summary.total_processed = len(actionable_entries)
+
+        for entry in actionable_entries:
+            row_id = entry["row_id"]
+            entry_table_id = str(entry.get("table_id") or "")
+            expected_marker = entry.get("marker") or ""
+
+            # 1. Verify Table ID
+            if configured_table_id and entry_table_id and entry_table_id != configured_table_id:
+                reason = f"Table mismatch: ledger has table {entry_table_id}, adapter configured for {configured_table_id}"
+                if not dry_run:
+                    self.registry.update_test_row_status(
+                        row_id=row_id,
+                        status=TestRowStatus.PURGE_BLOCKED.value,
+                        error_message=reason,
+                    )
+                summary.blocked_count += 1
+                summary.results.append(PurgeItemResult(
+                    row_id=row_id,
+                    table_id=entry_table_id,
+                    status=TestRowStatus.PURGE_BLOCKED,
+                    action="BLOCKED",
+                    reason=reason,
+                ))
+                continue
+
+            # 2. Fetch live row from Baserow
+            try:
+                live_row = self.write_adapter.fetch_row_raw(row_id)
+            except Exception as e:
+                err_msg = redact_secrets(str(e))
+                reason = f"Network or database error fetching live row {row_id}: {err_msg}"
+                if not dry_run:
+                    self.registry.update_test_row_status(
+                        row_id=row_id,
+                        status=TestRowStatus.PURGE_BLOCKED.value,
+                        error_message=reason,
+                    )
+                summary.blocked_count += 1
+                summary.results.append(PurgeItemResult(
+                    row_id=row_id,
+                    table_id=entry_table_id,
+                    status=TestRowStatus.PURGE_BLOCKED,
+                    action="BLOCKED",
+                    reason=reason,
+                ))
+                continue
+
+            # 3. Handle 404 (already absent)
+            if live_row is None:
+                if not dry_run:
+                    self.registry.update_test_row_status(
+                        row_id=row_id,
+                        status=TestRowStatus.PURGED.value,
+                        details={"outcome": "already_absent"},
+                    )
+                summary.already_absent_count += 1
+                summary.results.append(PurgeItemResult(
+                    row_id=row_id,
+                    table_id=entry_table_id,
+                    status=TestRowStatus.PURGED,
+                    action="ALREADY_ABSENT",
+                    reason="Row not found in Baserow (already absent)",
+                ))
+                continue
+
+            # 4. Verify Row ID match
+            live_id = live_row.get("id")
+            if live_id != row_id:
+                reason = f"Row ID mismatch: fetched row has ID {live_id}, expected {row_id}"
+                if not dry_run:
+                    self.registry.update_test_row_status(
+                        row_id=row_id,
+                        status=TestRowStatus.PURGE_BLOCKED.value,
+                        error_message=reason,
+                    )
+                summary.blocked_count += 1
+                summary.results.append(PurgeItemResult(
+                    row_id=row_id,
+                    table_id=entry_table_id,
+                    status=TestRowStatus.PURGE_BLOCKED,
+                    action="BLOCKED",
+                    reason=reason,
+                ))
+                continue
+
+            # 5. Verify Marker in Notes
+            live_notes = str(live_row.get("Notes") or "")
+            if not expected_marker or expected_marker not in live_notes:
+                reason = f"Remote marker mismatch: expected marker '{expected_marker}' not found in live row Notes"
+                if not dry_run:
+                    self.registry.update_test_row_status(
+                        row_id=row_id,
+                        status=TestRowStatus.PURGE_BLOCKED.value,
+                        error_message=reason,
+                    )
+                summary.blocked_count += 1
+                summary.results.append(PurgeItemResult(
+                    row_id=row_id,
+                    table_id=entry_table_id,
+                    status=TestRowStatus.PURGE_BLOCKED,
+                    action="BLOCKED",
+                    reason=reason,
+                ))
+                continue
+
+            # 6. Execute Deletion (or report in dry-run)
+            if dry_run:
+                summary.deleted_count += 1
+                summary.results.append(PurgeItemResult(
+                    row_id=row_id,
+                    table_id=entry_table_id,
+                    status=TestRowStatus.CREATED,
+                    action="WOULD_DELETE",
+                    reason="Marker verified; row would be deleted",
+                ))
+            else:
+                self.registry.update_test_row_status(
+                    row_id=row_id,
+                    status=TestRowStatus.PURGING.value,
+                )
+                try:
+                    deleted = self.write_adapter.delete_media_row(row_id)
+                    if deleted:
+                        self.registry.update_test_row_status(
+                            row_id=row_id,
+                            status=TestRowStatus.PURGED.value,
+                            details={"outcome": "deleted"},
+                        )
+                        summary.deleted_count += 1
+                        summary.results.append(PurgeItemResult(
+                            row_id=row_id,
+                            table_id=entry_table_id,
+                            status=TestRowStatus.PURGED,
+                            action="DELETED",
+                        ))
+                    else:
+                        # 404 between fetch and delete
+                        self.registry.update_test_row_status(
+                            row_id=row_id,
+                            status=TestRowStatus.PURGED.value,
+                            details={"outcome": "already_absent"},
+                        )
+                        summary.already_absent_count += 1
+                        summary.results.append(PurgeItemResult(
+                            row_id=row_id,
+                            table_id=entry_table_id,
+                            status=TestRowStatus.PURGED,
+                            action="ALREADY_ABSENT",
+                            reason="Row was absent during deletion call",
+                        ))
+                except Exception as e:
+                    err_msg = redact_secrets(str(e))
+                    reason = f"Error deleting row {row_id}: {err_msg}"
+                    self.registry.update_test_row_status(
+                        row_id=row_id,
+                        status=TestRowStatus.PURGE_BLOCKED.value,
+                        error_message=reason,
+                    )
+                    summary.blocked_count += 1
+                    summary.results.append(PurgeItemResult(
+                        row_id=row_id,
+                        table_id=entry_table_id,
+                        status=TestRowStatus.PURGE_BLOCKED,
+                        action="BLOCKED",
+                        reason=reason,
+                    ))
+
+        return summary

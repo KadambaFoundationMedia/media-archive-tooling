@@ -106,6 +106,19 @@ def validate_tool2_review_result(
 
     return result_model, None
 
+# Project Alpha/Beta Policy Flag:
+# During the alpha/beta testing phase, all rows created by Tool 4 are treated
+# as test-created rows: they are tagged with a machine-readable test marker
+# and recorded in the durable test_row_ledger for safe cleanup.
+# This policy must be explicitly disabled before production release.
+ALPHA_BETA_TEST_MODE: bool = True
+
+
+def build_test_marker(session_id: str, tracking_id: str) -> str:
+    """Build an unambiguous, machine-readable test marker identifying the test session and tracking ID."""
+    return f"[ALPHA-TEST-ROW session={session_id} tracking_id={tracking_id}]"
+
+
 # Section 7 positive eligibility: automatic semantic writes require exact/strong (R-014)
 TRUSTED_SEMANTIC_STATES = {"exact", "strong"}
 
@@ -282,8 +295,10 @@ def merge_notes(
     full_date_resolved: bool = False,
     original_filename: Optional[str] = None,
     original_path: Optional[str] = None,
+    test_marker: Optional[str] = None,
 ) -> str:
     """Merge notes idempotently in accordance with Section 13:
+    - Test marker (if present on CREATE) begins Notes before archive linkage.
     - 'Added from archive' begins Notes exactly once when archive linkage is established.
     - Incomplete recording date marker is idempotent.
     - Full date removes/replaces only the incomplete-date marker, preserving all human text.
@@ -291,10 +306,14 @@ def merge_notes(
     """
     marker_prefix = "Incomplete recording date:"
     lines: List[str] = []
+    existing_marker = None
     if existing_notes:
         for l in existing_notes.splitlines():
             clean_l = l.strip()
-            # Remove managed lines before rebuilding them to ensure idempotency.
+            # Extract and remove managed lines before rebuilding them to ensure idempotency.
+            if clean_l.startswith("[ALPHA-TEST-ROW"):
+                existing_marker = clean_l
+                continue
             if (
                 clean_l == "Added from archive"
                 or clean_l.startswith("Original filename:")
@@ -312,7 +331,11 @@ def merge_notes(
         lines.append(marker_line)
 
     # 2. Build managed provenance header, then preserve remaining human text.
-    managed_lines = ["Added from archive"]
+    marker_to_use = test_marker or existing_marker
+    managed_lines = []
+    if marker_to_use:
+        managed_lines.append(marker_to_use)
+    managed_lines.append("Added from archive")
     if original_filename:
         managed_lines.append(f"Original filename: {original_filename}")
     if original_path:
@@ -782,12 +805,20 @@ class MediaDatabaseUpdateEngine:
             )
 
         # 8. Notes
+        test_marker = None
+        if ALPHA_BETA_TEST_MODE and getattr(request, "is_test_row", True):
+            session_id = request.session_id or "alpha_test_session"
+            test_marker = request.test_marker or build_test_marker(session_id, request.tracking_id)
+            request.test_marker = test_marker
+            request.session_id = session_id
+
         notes_val = merge_notes(
             existing_notes=None,
             incomplete_date=incomplete_marker,
             full_date_resolved=bool(date_written),
             original_filename=request.original_filename,
             original_path=request.original_path,
+            test_marker=test_marker,
         )
         if "notes" in fields_by_name:
             diffs.append(FieldDiff(field_name="Notes", old_value=None, new_value=notes_val, action=FieldAction.SET))

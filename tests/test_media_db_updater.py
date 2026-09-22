@@ -19,8 +19,11 @@ from media_archive_tooling.media_db_updater.models import (
     FieldDiff,
     MediaDbSyncRequest,
     MediaDbSyncResult,
+    PurgeItemResult,
+    PurgeSummary,
     SyncOperation,
     SyncStatus,
+    TestRowStatus,
 )
 from media_archive_tooling.media_db_updater.write_adapter import (
     AmbiguousOptionError,
@@ -495,7 +498,8 @@ def test_09_current_new_media_candidate_creates_one_row_with_required_defaults(t
     assert created["Status Transcript"] == "Not-started"
     assert created["Language"] == "English"
     assert created["Filename"] == "2014-08-04_KKS_BG-01-18_Leipzig-de.mp3"
-    assert created["Notes"].startswith("Added from archive")
+    assert created["Notes"].startswith("[ALPHA-TEST-ROW")
+    assert "Added from archive" in created["Notes"]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     assert created["Created_on"] == today
     assert created["imported_on"] == today
@@ -847,11 +851,12 @@ def test_21_sample_scripture_maps_to_live_schema_and_original_provenance(tmp_pat
     assert row["Language"] == ["English"]
     assert row["Filename"] == final_name
     assert row["media_archive_path"] == final_path
-    assert row["Notes"] == (
+    assert row["Notes"].startswith("[ALPHA-TEST-ROW")
+    assert (
         "Added from archive\n"
         f"Original filename: {original_name}\n"
         f"Original path: {original_path}"
-    )
+    ) in row["Notes"]
 
 
 # ---------------------------------------------------------------------------
@@ -3714,3 +3719,386 @@ def test_81_r040_validate_tool3_review_result_contract():
         pass
     m, err = validate_tool3_review_result(NonModel(), "trk01")
     assert m is None
+
+
+# ---------------------------------------------------------------------------
+# Test 82: Alpha/Beta Test Data Purge (Tool 4 amendment)
+# ---------------------------------------------------------------------------
+def test_82_a_successful_create_records_in_test_row_ledger_with_marker(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0082_create", filename="2014-08-04_KKS_BG-01-18_Leipzig-de.mp3")
+    fake_db = FakeBaserowWriteAdapter()
+    fake_db.media_table_id = "12345"
+    mock_t2 = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", tracking_id="trk0082_create")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    req = service.build_sync_request("trk0082_create")
+    req.session_id = "test_session_82"
+    req.tool2_decision = "NEW_MEDIA_CANDIDATE"
+
+    res = service.synchronize("trk0082_create", commit=True, request=req)
+    assert res.status == SyncStatus.SYNCED
+    assert res.operation == SyncOperation.CREATE
+    row_id = res.media_row_id
+    assert row_id is not None
+
+    # Verify live row Notes contains marker at the beginning
+    live_row = fake_db.rows[row_id]
+    expected_marker = "[ALPHA-TEST-ROW session=test_session_82 tracking_id=trk0082_create]"
+    assert live_row["Notes"].startswith(expected_marker)
+    assert "Added from archive" in live_row["Notes"]
+
+    # Verify durable ledger entry in SQLite
+    ledger_entry = registry.get_test_row(row_id)
+    assert ledger_entry is not None
+    assert ledger_entry["row_id"] == row_id
+    assert ledger_entry["table_id"] == "12345"
+    assert ledger_entry["tracking_id"] == "trk0082_create"
+    assert ledger_entry["session_id"] == "test_session_82"
+    assert ledger_entry["marker"] == expected_marker
+    assert ledger_entry["status"] == "CREATED"
+    assert ledger_entry["request_fingerprint"] == req.request_fingerprint
+
+
+def test_82_b_update_noop_preview_never_recorded_in_test_row_ledger(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(
+        registry,
+        tracking_id="trk0082_ops",
+        filename="test.mp3",
+        date_val=None,
+        when_state="unknown",
+        what_val=None,
+        what_category=None,
+        what_verse=None,
+        place=None,
+        country=None,
+        country_iso=None,
+    )
+    fake_db = FakeBaserowWriteAdapter(
+        initial_rows=[{
+            "id": 8201,
+            "Filename": "test.mp3",
+            "media_archive_path": "/archive/test.mp3",
+            "Notes": "Added from archive\nOriginal filename: test.mp3\nOriginal path: /archive/test.mp3\nOriginal notes",
+        }]
+    )
+    fake_db.media_table_id = "12345"
+
+    mock_t2_match = make_mock_tool2(decision="EXISTING_MEDIA_MATCH", row_id=8201, tracking_id="trk0082_ops")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_match)
+
+    # 1. Preview CREATE (dry run) - never in ledger
+    mock_t2_cand = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", tracking_id="trk0082_ops")
+    service_preview = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2_cand)
+    req_prev = service_preview.build_sync_request("trk0082_ops")
+    req_prev.tool2_decision = "NEW_MEDIA_CANDIDATE"
+    res_prev = service_preview.synchronize("trk0082_ops", commit=False, request=req_prev)
+    assert res_prev.operation == SyncOperation.CREATE
+    assert len(registry.list_test_rows()) == 0
+
+    # 2. NOOP (commit=True on matching existing row) - never in ledger
+    req_noop = service.build_sync_request("trk0082_ops")
+    req_noop.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_noop.selected_media_row_id = 8201
+    res_noop = service.synchronize("trk0082_ops", commit=True, request=req_noop)
+    assert res_noop.operation == SyncOperation.NOOP
+    assert len(registry.list_test_rows()) == 0
+
+    # 3. UPDATE (commit=True modifying existing row) - never in ledger
+    req_update = service.build_sync_request("trk0082_ops")
+    req_update.tool2_decision = "EXISTING_MEDIA_MATCH"
+    req_update.selected_media_row_id = 8201
+    req_update.field_approvals = {
+        "Title": {
+            "action": "apply_correction",
+            "has_reviewed_precondition": True,
+            "approved_value": "Updated Title",
+            "reviewed_precondition_value": None,
+        }
+    }
+    res_update = service.synchronize("trk0082_ops", commit=True, request=req_update)
+    assert res_update.operation == SyncOperation.UPDATE
+    assert len(registry.list_test_rows()) == 0
+    # Also verify existing row Notes was NOT altered with any test marker
+    assert "[ALPHA-TEST-ROW" not in fake_db.rows[8201]["Notes"]
+
+
+def test_82_c_purge_deletes_marker_verified_row_and_marks_purged(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0082_purge")
+    fake_db = FakeBaserowWriteAdapter()
+    fake_db.media_table_id = "12345"
+    mock_t2 = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", tracking_id="trk0082_purge")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    # 1. Create a row through verified live CREATE
+    req = service.build_sync_request("trk0082_purge")
+    req.session_id = "session_purge_test"
+    res = service.synchronize("trk0082_purge", commit=True, request=req)
+    row_id = res.media_row_id
+    assert row_id in fake_db.rows
+    assert registry.get_test_row(row_id)["status"] == "CREATED"
+
+    # 2. Run purge
+    summary = service.purge_test_rows(dry_run=False)
+    assert summary.total_processed == 1
+    assert summary.deleted_count == 1
+    assert summary.already_absent_count == 0
+    assert summary.blocked_count == 0
+
+    # 3. Verify row is deleted from Baserow and ledger is PURGED
+    assert row_id not in fake_db.rows
+    ledger_entry = registry.get_test_row(row_id)
+    assert ledger_entry["status"] == "PURGED"
+    assert any(c["action"] == "delete_media_row" and c["row_id"] == row_id for c in fake_db.calls)
+
+
+def test_82_d_purge_dry_run_lists_rows_without_mutating_baserow_or_ledger(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0082_dryrun")
+    fake_db = FakeBaserowWriteAdapter()
+    fake_db.media_table_id = "12345"
+    mock_t2 = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", tracking_id="trk0082_dryrun")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    # Create row
+    req = service.build_sync_request("trk0082_dryrun")
+    res = service.synchronize("trk0082_dryrun", commit=True, request=req)
+    row_id = res.media_row_id
+    calls_before = len(fake_db.calls)
+
+    # Run dry-run purge
+    summary = service.purge_test_rows(dry_run=True)
+    assert summary.total_processed == 1
+    assert summary.deleted_count == 1
+    assert summary.blocked_count == 0
+    assert summary.results[0].action == "WOULD_DELETE"
+
+    # Assert ZERO deletions in Baserow and ledger unchanged
+    assert row_id in fake_db.rows
+    assert not any(c["action"] == "delete_media_row" for c in fake_db.calls[calls_before:])
+    assert registry.get_test_row(row_id)["status"] == "CREATED"
+
+
+def test_82_e_missing_or_modified_marker_blocks_deletion_and_retains_evidence(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    save_test_file(registry, tracking_id="trk0082_marker_mismatch")
+    fake_db = FakeBaserowWriteAdapter()
+    fake_db.media_table_id = "12345"
+    mock_t2 = make_mock_tool2(decision="NEW_MEDIA_CANDIDATE", tracking_id="trk0082_marker_mismatch")
+    service = MediaDatabaseUpdaterService(registry, fake_db, tool2_service=mock_t2)
+
+    # Create row
+    req = service.build_sync_request("trk0082_marker_mismatch")
+    res = service.synchronize("trk0082_marker_mismatch", commit=True, request=req)
+    row_id = res.media_row_id
+
+    # Simulate human operator modifying Notes to remove or alter the test marker
+    fake_db.rows[row_id]["Notes"] = "Human modified notes without test marker"
+
+    # Run purge -> MUST FAIL CLOSED and retain row
+    summary = service.purge_test_rows(dry_run=False)
+    assert summary.total_processed == 1
+    assert summary.deleted_count == 0
+    assert summary.blocked_count == 1
+    assert summary.results[0].action == "BLOCKED"
+    assert "marker mismatch" in summary.results[0].reason.lower()
+
+    # Verify row was NOT deleted from Baserow and ledger is PURGE_BLOCKED
+    assert row_id in fake_db.rows
+    ledger_entry = registry.get_test_row(row_id)
+    assert ledger_entry["status"] == "PURGE_BLOCKED"
+    assert "marker mismatch" in ledger_entry["error_message"].lower()
+
+
+def test_82_f_wrong_table_or_wrong_row_blocks_deletion_and_retains_evidence(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 8206,
+        "Filename": "test.mp3",
+        "Notes": "[ALPHA-TEST-ROW session=sess1 tracking_id=trk8206]\nAdded from archive",
+    }])
+    fake_db.media_table_id = "target_table_correct"
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    # 1. Table mismatch: recorded with wrong table_id
+    registry.record_test_created_row(
+        table_id="wrong_table_id",
+        row_id=8206,
+        tracking_id="trk8206",
+        request_fingerprint="fp1",
+        session_id="sess1",
+        marker="[ALPHA-TEST-ROW session=sess1 tracking_id=trk8206]",
+    )
+
+    summary = service.purge_test_rows(dry_run=False)
+    assert summary.blocked_count == 1
+    assert "Table mismatch" in summary.results[0].reason
+    assert 8206 in fake_db.rows
+    assert registry.get_test_row(8206)["status"] == "PURGE_BLOCKED"
+
+    # 2. Row ID mismatch (corrupted response where returned row id != requested)
+    # Reset table_id to match
+    registry.update_test_row_status(8206, "CREATED")
+    registry.record_test_created_row(
+        table_id="target_table_correct",
+        row_id=8206,
+        tracking_id="trk8206",
+        request_fingerprint="fp1",
+        session_id="sess1",
+        marker="[ALPHA-TEST-ROW session=sess1 tracking_id=trk8206]",
+    )
+    with patch.object(fake_db, "fetch_row_raw", return_value={"id": 99999, "Notes": "[ALPHA-TEST-ROW session=sess1 tracking_id=trk8206]"}):
+        summary2 = service.purge_test_rows(dry_run=False)
+        assert summary2.blocked_count == 1
+        assert "Row ID mismatch" in summary2.results[0].reason
+        assert registry.get_test_row(8206)["status"] == "PURGE_BLOCKED"
+
+
+def test_82_g_network_failure_blocks_deletion_and_redacts_secrets(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 8207,
+        "Filename": "test.mp3",
+        "Notes": "[ALPHA-TEST-ROW session=sess1 tracking_id=trk8207]\nAdded from archive",
+    }])
+    fake_db.media_table_id = "123"
+    registry.record_test_created_row(
+        table_id="123",
+        row_id=8207,
+        tracking_id="trk8207",
+        request_fingerprint="fp1",
+        session_id="sess1",
+        marker="[ALPHA-TEST-ROW session=sess1 tracking_id=trk8207]",
+    )
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    # 1. Network failure on fetch with secret in exception
+    with patch.object(fake_db, "fetch_row_raw", side_effect=RuntimeError("Connection failed with Token secret_token_xyz987")):
+        summary = service.purge_test_rows(dry_run=False)
+        assert summary.blocked_count == 1
+        assert summary.deleted_count == 0
+        assert 8207 in fake_db.rows
+        # Verify secret is redacted in ledger and result reason
+        assert "secret_token_xyz987" not in summary.results[0].reason
+        assert "[REDACTED]" in summary.results[0].reason
+        ledger_entry = registry.get_test_row(8207)
+        assert ledger_entry["status"] == "PURGE_BLOCKED"
+        assert "secret_token_xyz987" not in ledger_entry["error_message"]
+        assert "[REDACTED]" in ledger_entry["error_message"]
+
+    # 2. Network failure on delete with secret
+    registry.update_test_row_status(8207, "CREATED")
+    fake_db.simulate_network_failure_on_delete = True
+    summary2 = service.purge_test_rows(dry_run=False)
+    assert summary2.blocked_count == 1
+    assert 8207 in fake_db.rows
+    assert registry.get_test_row(8207)["status"] == "PURGE_BLOCKED"
+
+
+def test_82_h_404_already_absent_is_idempotent(tmp_path):
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[])  # Empty: row does not exist in Baserow
+    fake_db.media_table_id = "123"
+    registry.record_test_created_row(
+        table_id="123",
+        row_id=8208,
+        tracking_id="trk8208",
+        request_fingerprint="fp1",
+        session_id="sess1",
+        marker="[ALPHA-TEST-ROW session=sess1 tracking_id=trk8208]",
+    )
+    service = MediaDatabaseUpdaterService(registry, fake_db)
+
+    # Purge absent row
+    summary = service.purge_test_rows(dry_run=False)
+    assert summary.total_processed == 1
+    assert summary.already_absent_count == 1
+    assert summary.deleted_count == 0
+    assert summary.blocked_count == 0
+    assert summary.results[0].action == "ALREADY_ABSENT"
+
+    # Status in ledger is PURGED
+    assert registry.get_test_row(8208)["status"] == "PURGED"
+
+    # Subsequent run skips already PURGED rows (idempotent, 0 processed)
+    summary2 = service.purge_test_rows(dry_run=False)
+    assert summary2.total_processed == 0
+    assert summary2.already_absent_count == 0
+
+
+def test_82_i_cli_purge_test_rows(tmp_path, capsys):
+    from media_archive_tooling.cli import run_media_db_update
+    from argparse import Namespace
+
+    registry = LocalRegistry(tmp_path / "test.db")
+    fake_db = FakeBaserowWriteAdapter(initial_rows=[{
+        "id": 8209,
+        "Filename": "test.mp3",
+        "Notes": "[ALPHA-TEST-ROW session=s9 tracking_id=trk8209]\nAdded from archive",
+    }])
+    fake_db.media_table_id = "123"
+    registry.record_test_created_row(
+        table_id="123",
+        row_id=8209,
+        tracking_id="trk8209",
+        request_fingerprint="fp9",
+        session_id="s9",
+        marker="[ALPHA-TEST-ROW session=s9 tracking_id=trk8209]",
+    )
+
+    with patch("media_archive_tooling.cli.create_media_db_updater_service") as mock_create_service:
+        service = MediaDatabaseUpdaterService(registry, fake_db)
+        mock_create_service.return_value = service
+
+        # 1. Dry-run CLI
+        args_dry = Namespace(
+            registry_path=str(tmp_path / "test.db"),
+            purge_test_rows=True,
+            commit=False,
+            json=False,
+        )
+        run_media_db_update(args_dry)
+        out = capsys.readouterr().out
+        assert "Purge Test Rows (DRY-RUN)" in out
+        assert "Deleted: 1" in out
+        assert 8209 in fake_db.rows  # Not deleted
+
+        # 2. Commit CLI
+        args_commit = Namespace(
+            registry_path=str(tmp_path / "test.db"),
+            purge_test_rows=True,
+            commit=True,
+            json=False,
+        )
+        run_media_db_update(args_commit)
+        out2 = capsys.readouterr().out
+        assert "Purge Test Rows (COMMIT)" in out2
+        assert "Deleted: 1" in out2
+        assert 8209 not in fake_db.rows  # Deleted
+
+
+def test_82_j_no_generic_delete_api_available_to_other_tools_or_portal():
+    """Verify that Tools 1-3, portal, and registry have no generic Baserow deletion API."""
+    from media_archive_tooling.adapters.baserow import BaserowReferenceProvider
+    from media_archive_tooling.media_db_reviewer.service import MediaDatabaseReviewService
+    from media_archive_tooling.travel_reviewer.reference_store import TravelReferenceStore
+
+    forbidden_delete_methods = ["delete_row", "delete_media_row", "delete", "destroy_row", "purge"]
+
+    # Tool 1
+    for m in forbidden_delete_methods:
+        assert not hasattr(BaserowReferenceProvider, m)
+
+    # Tool 2
+    for m in forbidden_delete_methods:
+        assert not hasattr(MediaDatabaseReviewService, m)
+
+    # Tool 3
+    for m in forbidden_delete_methods:
+        assert not hasattr(TravelReferenceStore, m)
+
+    # LocalRegistry has test row ledger tracking, but NO generic Baserow deletion method
+    for m in ["delete_media_row", "delete_row", "destroy_row"]:
+        assert not hasattr(LocalRegistry, m)
