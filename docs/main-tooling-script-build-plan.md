@@ -678,11 +678,15 @@ For current Tools 1–5, the Builder must:
 For future integration, the Main Script must route a confirmed combination
 through Tool 6, Tool 4 singing-row creation, class-only Tools 7–10 as
 applicable, final Tool 1 rename, Tool 11 move, and final Tool 4 updates in the
-order fixed by the amendment. The class keeps its existing row identity and
-the singing part has a distinct row. The original full-length working file
-does not remain after a successful Tool 6 split. Do not implement pending tool
-logic in the Main Script merely to satisfy this future sequence; route only
-through accepted tool services when their finalized plans exist.
+dependency order fixed by the amendment. This is not a fixed Tool 1/Tool 4
+call count: every later trustworthy metadata event must re-evaluate whether
+Tool 1 should rename and whether Tool 4 should synchronize the matching row,
+including metadata-only changes that leave the filename unchanged. The class
+keeps its existing row identity and the singing part has a distinct row. The
+original full-length working file does not remain after a successful Tool 6
+split. Do not implement pending tool logic in the Main Script merely to
+satisfy this future sequence; route only through accepted tool services when
+their finalized plans exist.
 
 Acceptance for this amendment requires hermetic interruption/retry and
 scratch-cleanup tests, a bounded evaluation-helper test proving no full

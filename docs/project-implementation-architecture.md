@@ -25,8 +25,11 @@ Tool 1 finds/interprets the file and may make an initial rename
 For later audio processing, the user-confirmed sequence is in
 `docs/full-pipeline-workflow-amendment.md`. In particular, a successful Tool 6
 combination cut replaces one working input with singing and class outputs;
-final Tool 1 naming precedes Tool 11 moving, and Tool 4 follows committed
-metadata/path changes while preserving the existing class row identity.
+the latest Tool 1 naming precedes Tool 11 destination selection, and Tool 4
+follows Baserow-relevant metadata/path changes while preserving the existing
+class row identity. The sequence is illustrative: Tool 1 and Tool 4 may be
+re-invoked whenever later trustworthy metadata warrants it, even if the
+filename does not change for a Tool 4-only update.
 
 ## 1. Application shape
 

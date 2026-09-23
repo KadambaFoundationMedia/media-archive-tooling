@@ -17,6 +17,9 @@ fixes the later order as Tool 1 final naming **before** Tool 11 moving and Tool
 item updates that existing Tool 4 row; it must not create a duplicate. After
 a successful Tool 6 combination split, final Tool 1 naming applies to both
 resulting files, not to a retained full-length working original.
+This is an event-driven role: any tool's later trustworthy metadata can
+prompt another Tool 1 filename evaluation; a no-op filename does not suppress
+Tool 4's separate metadata update when Baserow-relevant information changed.
 
 ## Planner-authored maintenance / coordination — 2026-09-23
 

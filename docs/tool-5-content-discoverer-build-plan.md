@@ -94,15 +94,20 @@ does not create Baserow test rows and must not bypass Tool 4's purge service.
 
 ## 3. Pipeline position and routing contract
 
-The intended whole project sequence is:
+The illustrative whole-project dependencies are:
 
 ```text
 Phase 1: Tool 1 -> Tool 2 -> Tool 3 -> Tool 1 final proposal -> Tool 4
 Phase 2: Tool 5 -> Tool 6 when a confirmed combination needs cutting
           -> Tool 4 creates/updates the singing item after a cut
-          -> applicable Tools 7-10 -> Tool 1 enrichment/final rename
-          -> Tool 11 final move -> Tool 4 final synchronization
+          -> applicable Tools 7-10 -> latest Tool 1 naming
+          -> Tool 11 move -> Tool 4 path synchronization
 ```
+
+This is not a fixed invocation schedule: any accepted metadata discovered by
+Tool 5 or a later tool may re-trigger Tool 1 filename evaluation and Tool 4
+metadata synchronization, including when no filename changes. Tool 1 and Tool
+4 may recur before or after the illustrated positions as evidence evolves.
 
 The later Tool 6 replacement of a combination input with two outputs does not
 change Tool 5's obligation to leave its input untouched. The exact Tool 6

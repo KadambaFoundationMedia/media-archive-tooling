@@ -18,7 +18,11 @@ working input with class and singing outputs; no permanent original remains.
 The class retains its existing Baserow row and Tool 4 creates a separate
 singing row after the cut. Final Tool 1 renaming precedes Tool 11's move;
 Tool 4 updates final paths/metadata afterward. These are future integration
-contracts, not permission to invent Tools 6–11.
+contracts, not a fixed invocation schedule or permission to invent Tools 6–11.
+Any tool's newly accepted metadata must prompt Tool 1 to re-evaluate whether
+the filename needs changing and Tool 4 to synchronize any database-relevant
+change, even when no rename occurs. Repeat calls must be idempotent and retain
+the matched row identities.
 
 Active correction findings for `BUILD MAIN SCRIPT`:
 

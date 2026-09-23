@@ -8,7 +8,18 @@ retains an extra full-length working copy after Tool 6 successfully splits a
 combination. It does not authorize implementing Tools 6–11 without their own
 finalized build plans.
 
-## End-to-end order
+## Dependency sequence, not a fixed call schedule
+
+The list below is the owner's **suggested workflow** and identifies the
+dependencies between operations. It is not a rule that Tool 1 or Tool 4 may
+run only at the positions shown. Whenever any tool or approved human review
+discovers trustworthy new metadata, the orchestrator must persist its evidence,
+ask Tool 1 to re-evaluate the canonical filename (and commit a change only
+when warranted), and ask Tool 4 to synchronize any Baserow-relevant change
+under its existing review/write gates. Tool 4 may update the matched row even
+when the filename is unchanged. Both actions must be idempotent and must
+preserve row identity; uncertain evidence goes to review rather than becoming
+an automatic rename or database write.
 
 1. Tool 1 initially interprets and renames in place when evidence permits. It
    uses Tool 2's read-only Media review and Tool 3's travel-schedule review.
@@ -16,8 +27,9 @@ finalized build plans.
    final filename, subject to its existing review, duplicate, and write gates.
    Files that cannot yet be safely renamed or synchronized may still proceed
    in place to audio discovery.
-3. Tool 1 may enrich a committed filename when new approved evidence appears;
-   Tool 4 updates the **same** matched item when committed metadata changes.
+3. Tool 1 and Tool 4 recur whenever later accepted evidence changes a
+   filename-relevant or database-relevant field, respectively. A Tool 1
+   rename is not a precondition for every Tool 4 metadata-only update.
 4. Tool 5 transcribes and classifies the file as class, singing, combination,
    or another supported content type. Uncertain results remain in place for
    review; they must not trigger a destructive downstream step.
@@ -42,17 +54,19 @@ finalized build plans.
    singing part does not pass through class-only processing merely because it
    originated in the same recording. Exact applicability and processing rules
    belong to each later tool's build plan.
-8. Tool 1 performs final enrichment and canonical naming for each resulting
-   file. Tool 11 then moves each processed file and its applicable transcript
-   to the destination determined by final WHAT/category metadata. Tool 4
-   finally updates the existing class row and the singing row with their
-   committed final metadata and paths. Tool 4 alone writes Baserow and must
-   preserve confirmed existing fields and unrelated online links.
+8. Tool 1 performs the latest canonical naming for each resulting file before
+   Tool 11 chooses a destination from the latest WHAT/category metadata. Tool
+   11 moves each processed file and its applicable transcript. Tool 4 then
+   updates the class and singing rows with committed paths/metadata. If new
+   trustworthy metadata arrives even after this point, the appropriate Tool
+   1, Tool 11, and/or Tool 4 actions can recur. Tool 4 alone writes Baserow
+   and must preserve confirmed existing fields and unrelated online links.
 
-Tool 4 may be invoked more than once for one logical item as trustworthy
-metadata and committed paths change; those are updates to its existing row,
-not duplicate creates. A failed or uncertain Baserow operation remains in a
-durable pending/review state and does not undo a successful local file change.
+The class and singing items can therefore receive many Tool 1/Tool 4 passes
+over their lifetimes. A metadata-only update must not be omitted merely
+because no filename changed, and a repeated synchronization must not create
+a duplicate row. A failed or uncertain Baserow operation remains in a durable
+pending/review state and does not undo a successful local file change.
 
 ## Archive-scale operating constraints
 

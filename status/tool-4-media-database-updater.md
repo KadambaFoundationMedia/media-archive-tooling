@@ -22,7 +22,9 @@ no matching singing item exists. After final Tool 1 naming and Tool 11 moving,
 Tool 4 updates both rows' final metadata/paths while preserving confirmed
 existing fields and unrelated URLs. No third row is created for the removed
 full-length working input. This is a future integration contract; do not
-implement Tool 6 inside Tool 4.
+implement Tool 6 inside Tool 4. Tool 4 must also accept trustworthy metadata
+updates from any later tool when the filename does not change; the suggested
+sequence is not a limit on Tool 4 invocation frequency.
 
 ## Active alpha/beta cleanup amendment — 2026-09-22
 

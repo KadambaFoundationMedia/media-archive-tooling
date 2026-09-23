@@ -19,6 +19,9 @@ after a successful split. The singing output gets a distinct Tool 4 Media row;
 the class output keeps the existing class row. Final Tool 1 renaming precedes
 Tool 11 moving and Tool 4 final updates. The exact cutting rules still need
 a separate Tool 6 plan.
+Tool 5's trustworthy content metadata can trigger Tool 1 re-evaluation and
+Tool 4 synchronization even if Tool 6 is not needed or the filename stays the
+same; the listed stages are dependencies, not a fixed call count.
 
 Implementation branch: `tool-5-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55

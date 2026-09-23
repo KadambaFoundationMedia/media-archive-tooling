@@ -31,7 +31,8 @@ Example:
 Before changing the Main Tooling Script or integrating Tools 4–11, read
 `docs/full-pipeline-workflow-amendment.md` after the relevant tool status and
 build plan. It records the latest user-confirmed split, row-identity,
-downstream ordering, and archive-scale constraints. Do not treat it as a
+event-driven Tool 1/Tool 4 synchronization, downstream dependencies, and
+archive-scale constraints. Do not treat it as a
 complete Tool 6–11 build plan.
 
 ### Required Builder GitHub transport
