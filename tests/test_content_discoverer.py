@@ -14,6 +14,7 @@ from media_archive_tooling.content_discoverer.audio_extractor import (
     AudioExtractionCollisionError,
     AudioExtractionError,
     FakeAudioExtractionAdapter,
+    _atomic_no_clobber_finalize,
     compute_file_sha256,
 )
 from media_archive_tooling.content_discoverer.classifier import ContentClassifier
@@ -38,6 +39,7 @@ from media_archive_tooling.content_discoverer.transcriber import (
 from media_archive_tooling.orchestrator.discovery import discover_media_targets
 from media_archive_tooling.orchestrator.models import FileExecutionStatus, StageName, WorkflowType
 from media_archive_tooling.orchestrator.service import MainToolingScriptService
+from media_archive_tooling.renamer.models import Context, Identity, ParserResult, RenameMode, RenameProposal
 from media_archive_tooling.renamer.parser.engine import RenamerParser
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.review_portal.app import app as portal_app, configure_review_context
@@ -714,18 +716,43 @@ def test_21b_phase1_dry_run_with_valid_pipeline_context_allowed(env):
     untracked = env["media_dir"] / "dry_run_candidate_with_ctx.mp3"
     untracked.write_text("dry run audio with ctx")
 
-    context = {"tracking_id": "trk_contextual_dry_01"}
+    tracking_id = "trk_contextual_dry_01"
+    identity = Identity(
+        tracking_id=tracking_id,
+        original_filename=untracked.name,
+        original_path=str(untracked.resolve()),
+        current_filename=untracked.name,
+        extension=".mp3",
+    )
+    context = RenameProposal(
+        tracking_id=tracking_id,
+        original_path=str(untracked.resolve()),
+        current_filename=untracked.name,
+        proposed_filename=untracked.name,
+        proposed_path=str(untracked.resolve()),
+        mode=RenameMode.FINALIZE,
+        parser_result=ParserResult(identity=identity, context=Context()),
+    )
     res = env["service"].discover_content(
         untracked,
-        tracking_id="trk_contextual_dry_01",
+        tracking_id=tracking_id,
         dry_run=True,
         root_dir=env["tmp_path"],
         phase1_context=context,
     )
-    assert res.tracking_id == "trk_contextual_dry_01"
+    assert res.tracking_id == tracking_id
     # Zero disk or registry mutations
     assert not (env["tmp_path"] / ".renamer" / "transcripts").exists()
-    assert env["registry"].get_content_review("trk_contextual_dry_01") is None
+    assert env["registry"].get_content_review(tracking_id) is None
+
+    with pytest.raises(Phase1EligibilityError):
+        env["service"].discover_content(
+            untracked,
+            tracking_id=tracking_id,
+            dry_run=True,
+            root_dir=env["tmp_path"],
+            phase1_context={"tracking_id": tracking_id},
+        )
 
 
 def test_22_orchestrator_processing_workflow_rejects_untracked_file(env):
@@ -1111,3 +1138,21 @@ def test_32_validate_coarse_boundary_edge_cases():
     assert prop2 is not None
     assert prop2.kirtan_range == (0.0, 20.0)
     assert prop2.class_range == (25.0, 55.0)
+
+
+def test_33_no_clobber_finalization_fails_closed_if_hard_links_unavailable(tmp_path, monkeypatch):
+    """An unsupported hard-link operation must never fall back to overwrite-capable replace."""
+    temporary = tmp_path / ".extracted.tmp.mp3"
+    target = tmp_path / "recording.mp3"
+    temporary.write_bytes(b"extracted audio")
+
+    def unsupported_link(src, dst):
+        raise OSError("hard links unsupported")
+
+    monkeypatch.setattr(os, "link", unsupported_link)
+
+    with pytest.raises(AudioExtractionError, match="without overwriting"):
+        _atomic_no_clobber_finalize(temporary, target)
+
+    assert not target.exists()
+    assert not temporary.exists()

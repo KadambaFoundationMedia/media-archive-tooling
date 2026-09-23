@@ -1,12 +1,12 @@
 """Service layer for Tool 5 - Content Discoverer."""
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Union
 
 from ..renamer.registry.registry import LocalRegistry
+from ..renamer.models import RenameProposal
 from .audio_extractor import (
     AudioExtractionAdapter,
     AudioExtractionError,
@@ -34,6 +34,23 @@ from .transcriber import (
 class Phase1EligibilityError(ValueError):
     """Raised when a target has not undergone Phase 1 renamer processing."""
     pass
+
+
+def _matches_phase1_dry_run_context(
+    context: Any, media_path: Path, tracking_id: str, dry_run: bool
+) -> bool:
+    """Accept only the matching typed proposal produced by the current Phase 1 pass."""
+    if not dry_run or not isinstance(context, RenameProposal):
+        return False
+    if context.tracking_id != tracking_id:
+        return False
+    identity = context.parser_result.identity
+    if identity.tracking_id != tracking_id:
+        return False
+    original_path = Path(context.original_path).resolve()
+    if Path(identity.original_path).resolve() != original_path:
+        return False
+    return media_path in (original_path, Path(context.proposed_path).resolve())
 
 
 def validate_coarse_boundary(boundary_str: str, duration: float = 0.0) -> Optional[CutterBoundaryProposal]:
@@ -164,21 +181,14 @@ class ContentDiscovererService:
                 media_path = target_path.resolve()
                 resolved_tid = self.registry.find_tracking_id_by_path(media_path)
                 if not resolved_tid:
-                    is_context_valid = False
-                    if phase1_context is not None:
-                        ctx_tid = getattr(phase1_context, "tracking_id", None)
-                        if not ctx_tid and hasattr(phase1_context, "identity"):
-                            ctx_tid = getattr(phase1_context.identity, "tracking_id", None)
-                        if not ctx_tid and isinstance(phase1_context, dict):
-                            ctx_tid = phase1_context.get("tracking_id")
-                        if ctx_tid:
-                            resolved_tid = ctx_tid
-                            is_context_valid = True
-
-                    if not is_context_valid:
+                    ctx_tid = getattr(phase1_context, "tracking_id", None)
+                    if not ctx_tid or not _matches_phase1_dry_run_context(
+                        phase1_context, media_path, ctx_tid, dry_run
+                    ):
                         raise Phase1EligibilityError(
                             f"Target '{target_str}' is not registered in Phase 1 registry; files must be processed by Phase 1 before Content Discovery."
                         )
+                    resolved_tid = ctx_tid
         else:
             file_rec = self.registry.get_file(resolved_tid)
             if file_rec:
@@ -192,17 +202,9 @@ class ContentDiscovererService:
                 if tid_by_path:
                     resolved_tid = tid_by_path
                 else:
-                    is_context_valid = False
-                    if phase1_context is not None:
-                        ctx_tid = getattr(phase1_context, "tracking_id", None)
-                        if not ctx_tid and hasattr(phase1_context, "identity"):
-                            ctx_tid = getattr(phase1_context.identity, "tracking_id", None)
-                        if not ctx_tid and isinstance(phase1_context, dict):
-                            ctx_tid = phase1_context.get("tracking_id")
-                        if ctx_tid and ctx_tid == resolved_tid:
-                            is_context_valid = True
-
-                    if not is_context_valid:
+                    if not _matches_phase1_dry_run_context(
+                        phase1_context, media_path, resolved_tid, dry_run
+                    ):
                         raise Phase1EligibilityError(
                             f"Target '{target_str}' with tracking ID '{resolved_tid}' is not registered in Phase 1 registry."
                         )

@@ -59,16 +59,14 @@ def _atomic_no_clobber_finalize(tmp_path: Path, target_path: Path) -> None:
             f"Adjacent audio file appeared concurrently during extraction: {target_path}"
         )
     except OSError as e:
+        tmp_path.unlink(missing_ok=True)
         if target_path.exists():
-            tmp_path.unlink(missing_ok=True)
             raise AudioExtractionCollisionError(
                 f"Adjacent audio file appeared concurrently during extraction: {target_path}"
-            )
-        try:
-            os.replace(tmp_path, target_path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+            ) from e
+        raise AudioExtractionError(
+            f"Could not safely finalize extracted audio without overwriting another file: {e}"
+        ) from e
 
 
 class AudioExtractionAdapter:
