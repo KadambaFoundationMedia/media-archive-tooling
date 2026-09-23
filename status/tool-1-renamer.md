@@ -11,6 +11,13 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
+Downstream coordination (2026-09-23): `docs/full-pipeline-workflow-amendment.md`
+fixes the later order as Tool 1 final naming **before** Tool 11 moving and Tool
+4 final path/metadata updates. A committed enrichment of an already matched
+item updates that existing Tool 4 row; it must not create a duplicate. After
+a successful Tool 6 combination split, final Tool 1 naming applies to both
+resulting files, not to a retained full-length working original.
+
 ## Planner-authored maintenance / coordination — 2026-09-23
 
 Local alpha/beta reset after the user's JVD restore: the old in-situ renamed `sample-files/2011-08-20_KKS_SB-1-19-31-with-radha-madhava_Oslo-no.wma` was byte-identical to the restored original `sample-files/From JVD (8.9.11)/KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA` (SHA-256 checked before the user's full-folder restore). The restored original's filename encodes 2011-08-29; the prior renamed copy encoded 2011-08-20. Treat the prior renamed copy and historical local evaluation/cache results as invalid test state, not authoritative date evidence. The user is restoring `sample-files`; do not process both copies if a duplicate reappears. No archive media was deleted by the planner during this reset.

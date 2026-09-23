@@ -10,6 +10,16 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 Status: `ACCEPTED`
 
+Downstream coordination (2026-09-23): The user-confirmed future sequence is
+`docs/full-pipeline-workflow-amendment.md`. Tool 5 itself continues to
+transcribe/classify in situ without deleting its input. Later Tool 6, only
+after a confirmed combination route, replaces that working input with class
+and singing outputs. The original full-length working file is not retained
+after a successful split. The singing output gets a distinct Tool 4 Media row;
+the class output keeps the existing class row. Final Tool 1 renaming precedes
+Tool 11 moving and Tool 4 final updates. The exact cutting rules still need
+a separate Tool 6 plan.
+
 Implementation branch: `tool-5-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55
 

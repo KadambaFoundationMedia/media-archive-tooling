@@ -26,6 +26,14 @@ Example:
 ./scripts/builder-start.sh 2
 ```
 
+### Current cross-tool workflow amendment
+
+Before changing the Main Tooling Script or integrating Tools 4–11, read
+`docs/full-pipeline-workflow-amendment.md` after the relevant tool status and
+build plan. It records the latest user-confirmed split, row-identity,
+downstream ordering, and archive-scale constraints. Do not treat it as a
+complete Tool 6–11 build plan.
+
 ### Required Builder GitHub transport
 
 The Builder sandbox must use the project-owned HTTPS/token path; it must
@@ -83,9 +91,10 @@ Read in this order:
 2. `status/main-tooling-script.md`
 3. `docs/main-tooling-script-build-plan.md`
 4. `docs/project-implementation-architecture.md`
-5. `docs/implementation-protocol.md`
-6. `docs/planner-builder-coordination.md`
-7. referenced Tool 1–4 plans/status and relevant code/tests
+5. `docs/full-pipeline-workflow-amendment.md`
+6. `docs/implementation-protocol.md`
+7. `docs/planner-builder-coordination.md`
+8. referenced Tool 1–4 plans/status and relevant code/tests
 
 The numeric `builder-start.sh` helper does not select the unnumbered Main Tooling Script. Follow its synchronization/protected-branch checks manually. All other branch, PR, CI, status, commit/push, and review rules in this file apply unchanged.
 

@@ -22,6 +22,12 @@ Tool 1 finds/interprets the file and may make an initial rename
 → Tool 4 directly revalidates the write and synchronizes Baserow
 ```
 
+For later audio processing, the user-confirmed sequence is in
+`docs/full-pipeline-workflow-amendment.md`. In particular, a successful Tool 6
+combination cut replaces one working input with singing and class outputs;
+final Tool 1 naming precedes Tool 11 moving, and Tool 4 follows committed
+metadata/path changes while preserving the existing class row identity.
+
 ## 1. Application shape
 
 Build the project as a **local Python application/package with two first-class interfaces**:
