@@ -126,6 +126,7 @@
     {% if not purge_blocked %}
     <div class="controls">
         <a href="/?filter=evaluation" class="btn {% if current_filter in ('evaluation', 'review', 'active') %}active{% endif %}">Active Evaluation Queue ({{ review_count }})</a>
+        <a href="/?filter=content_discovery" class="btn {% if current_filter == 'content_discovery' %}active{% endif %}">Content Discovery</a>
         <a href="/?filter=all" class="btn {% if current_filter == 'all' %}active{% endif %}">All Files ({{ total_count }})</a>
         <a href="/?filter=committed" class="btn {% if current_filter == 'committed' %}active{% endif %}">Committed ({{ committed_count }})</a>
     </div>

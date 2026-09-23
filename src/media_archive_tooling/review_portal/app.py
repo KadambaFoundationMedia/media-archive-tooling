@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -193,6 +193,63 @@ def dashboard(
     return templates.TemplateResponse(request=request, name="index.html", context=data)
 
 
+def _resolve_audio_path(registry: LocalRegistry, tracking_id: str) -> Optional[Path]:
+    """Find the playable audio/video file for a tracking ID."""
+    # 1. Check video audio derivative table
+    deriv = registry.get_video_audio_derivative(tracking_id)
+    if deriv and deriv.get("derived_path"):
+        p = Path(deriv["derived_path"]).resolve()
+        if p.exists():
+            return p
+
+    # 2. Check content review table
+    content_rev = registry.get_content_review(tracking_id)
+    if content_rev and content_rev.get("derived_audio_path"):
+        p = Path(content_rev["derived_audio_path"]).resolve()
+        if p.exists():
+            return p
+
+    # 3. Check registered media file
+    file_rec = registry.get_file(tracking_id)
+    if file_rec:
+        for key in ("current_path", "original_path", "proposed_path"):
+            val = file_rec.get(key)
+            if val:
+                p = Path(val).resolve()
+                if p.exists():
+                    return p
+    return None
+
+
+@app.get("/audio/{tracking_id}")
+def stream_audio(tracking_id: str):
+    """Stream playable audio for a tracking ID."""
+    service = get_service()
+    registry = service.registry
+    audio_path = _resolve_audio_path(registry, tracking_id)
+    if not audio_path or not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found for tracking ID")
+
+    suffix = audio_path.suffix.lower()
+    media_types = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".aac": "audio/aac",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+        ".opus": "audio/opus",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+    }
+    media_type = media_types.get(suffix, "audio/mpeg")
+    return FileResponse(
+        path=str(audio_path),
+        media_type=media_type,
+        filename=audio_path.name,
+    )
+
+
 @app.get("/file/{tracking_id}", response_class=HTMLResponse)
 def file_detail(request: Request, tracking_id: str):
     service = get_service()
@@ -208,6 +265,9 @@ def file_detail(request: Request, tracking_id: str):
     media_db_review = service.registry.get_media_db_review(tracking_id)
     travel_review = service.registry.get_travel_review(tracking_id)
     media_db_sync = service.registry.get_media_db_sync(tracking_id)
+    content_review = service.registry.get_content_review(tracking_id)
+    audio_path = _resolve_audio_path(service.registry, tracking_id)
+    has_audio = audio_path is not None and audio_path.exists()
     return templates.TemplateResponse(
         request=request,
         name="detail.html",
@@ -216,8 +276,36 @@ def file_detail(request: Request, tracking_id: str):
             "media_db_review": media_db_review,
             "travel_review": travel_review,
             "media_db_sync": media_db_sync,
+            "content_review": content_review,
+            "has_audio": has_audio,
         },
     )
+
+
+@app.post("/file/{tracking_id}/content-review-action")
+def content_review_action(
+    tracking_id: str,
+    classification: Optional[str] = Form(None),
+    mantra_type: Optional[str] = Form(None),
+    coarse_boundary: Optional[str] = Form(None),
+    notes: Optional[str] = Form(""),
+):
+    from ..content_discoverer.service import ContentDiscovererService
+    service = get_service()
+    discoverer = ContentDiscovererService(registry=service.registry)
+    try:
+        discoverer.apply_human_decision(
+            tracking_id=tracking_id,
+            classification=classification,
+            mantra_type=mantra_type,
+            coarse_boundary=coarse_boundary,
+            reviewer="review_portal",
+            notes=notes or "",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
 
 
 @app.post("/file/{tracking_id}/media-db-action")

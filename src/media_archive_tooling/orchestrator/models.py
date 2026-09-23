@@ -16,6 +16,7 @@ class StageName(str, Enum):
     TOOL_3_REVIEW = "tool_3_travel_review"
     TOOL_1_FINALIZE = "tool_1_finalize"
     TOOL_4_SYNC = "tool_4_media_sync"
+    TOOL_5_CONTENT_DISCOVERY = "tool_5"
 
 
 class FileExecutionStatus(str, Enum):
@@ -53,6 +54,7 @@ class FileRunResult(BaseModel):
     tool4_fields: Dict[str, Any] = Field(default_factory=dict)
     tool4_sync_status: Optional[str] = None
     tool4_live_row: Optional[Dict[str, Any]] = None
+    content_discovery_result: Optional[Any] = None
     error: Optional[str] = None
 
 

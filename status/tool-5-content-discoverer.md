@@ -8,7 +8,7 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `IN_PROGRESS`
 
 Implementation branch: `tool-5-implementation`
 Implementation PR: not created

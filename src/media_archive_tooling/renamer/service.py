@@ -55,6 +55,9 @@ class RenamerApplicationService:
                     SyncStatus.FAILED_BLOCKED.value,
                 ):
                     return True
+            crev = self.registry.get_content_review(f["tracking_id"])
+            if crev and crev.get("review_required"):
+                return True
             return False
 
         evaluation_files = [f for f in all_files if requires_evaluation(f)]
@@ -65,6 +68,8 @@ class RenamerApplicationService:
             display_files = evaluation_files
         elif filter_mode == "committed":
             display_files = [f for f in all_files if f.get("status") == "committed"]
+        elif filter_mode == "content_discovery":
+            display_files = [f for f in all_files if (self.registry.get_content_review(f["tracking_id"]) or {}).get("review_required")]
         elif filter_mode == "all":
             display_files = all_files
         else:

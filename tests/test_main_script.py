@@ -438,7 +438,7 @@ def test_08_phase_a_all_runs_tools_1_to_4_and_reports_pending_tools_honestly(env
     summary = svc.run([f])
     assert summary.exit_code == 0
     captured = capsys.readouterr().out
-    assert "Processing workflow (Tools 5–11) is pending and not yet installed" in captured
+    assert "Processing workflow (Tools 6–11) is pending and not yet installed" in captured
     assert len(summary.file_results) == 1
     stage_names = [s.stage_name for s in summary.file_results[0].stage_results]
     assert StageName.TOOL_1_INITIAL in stage_names

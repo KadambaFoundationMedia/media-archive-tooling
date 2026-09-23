@@ -2,7 +2,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Set, Union
+from typing import Any, List, Optional, Set, Union
 
 from ..renamer.planner.executor import is_ignored_file
 
@@ -58,6 +58,7 @@ class DiscoveryResult:
 def discover_media_targets(
     targets: List[Union[str, Path]],
     follow_symlinks: bool = False,
+    registry: Optional[Any] = None,
 ) -> DiscoveryResult:
     """Discover, filter, and deterministically sort media targets.
     
@@ -69,7 +70,7 @@ def discover_media_targets(
     - mixed files and folders
     
     Validates target existence, eliminates duplicates, filters ignored files,
-    and separates supported media from unsupported files.
+    suppresses registered video audio derivatives, and separates supported media from unsupported files.
     """
     missing_targets: List[str] = []
     discovered_media: Set[Path] = set()
@@ -94,6 +95,8 @@ def discover_media_targets(
             if is_ignored_file(p):
                 continue
             if is_supported_media_file(p):
+                if registry is not None and hasattr(registry, "is_video_audio_derivative") and registry.is_video_audio_derivative(str(p)):
+                    continue
                 discovered_media.add(p)
             else:
                 skipped_unsupported.add(p)
@@ -107,6 +110,8 @@ def discover_media_targets(
                     if is_ignored_file(file_path):
                         continue
                     if is_supported_media_file(file_path):
+                        if registry is not None and hasattr(registry, "is_video_audio_derivative") and registry.is_video_audio_derivative(str(file_path)):
+                            continue
                         discovered_media.add(file_path)
                     else:
                         skipped_unsupported.add(file_path)

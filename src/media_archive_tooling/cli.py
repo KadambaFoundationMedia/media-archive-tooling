@@ -20,6 +20,7 @@ from .travel_reviewer.service import TravelScheduleReviewService, validate_tool3
 from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
 from .orchestrator.models import WorkflowType
 from .orchestrator.service import create_main_tooling_service, MainToolingScriptService
+from .content_discoverer.service import ContentDiscovererService
 
 
 def create_media_db_updater_service(
@@ -676,9 +677,69 @@ def run_main_script(args):
         sys.exit(summary.exit_code)
 
 
+def run_discover_content(args):
+    """Execute Tool 5: Content Discoverer standalone CLI command."""
+    config = load_config()
+    reg_path = Path(args.registry_path) if args.registry_path else config.registry_path
+    registry = LocalRegistry(reg_path)
+    service = getattr(args, "content_discoverer_service", None)
+    if service is None:
+        service = ContentDiscovererService(registry=registry)
+
+    model_path = Path(args.model_path) if getattr(args, "model_path", None) else None
+
+    try:
+        result = service.discover_content(
+            target=args.target,
+            dry_run=args.dry_run,
+            device=args.device,
+            model_path=model_path,
+            force_retranscribe=args.force_retranscribe,
+        )
+    except Exception as e:
+        print(f"Error during content discovery: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if getattr(args, "json", False):
+        print(json.dumps(result.model_dump(), indent=2))
+        return
+
+    type_display_map = {
+        "CLASS": "Class",
+        "KIRTAN_AND_CLASS": "Kirtan and Class",
+        "KIRTAN": "Kirtan",
+        "INITIATION": "Initiation",
+        "EVENT_OR_FESTIVAL_ADDRESS": "Event / Festival Address",
+        "HOME_PROGRAM": "Home Program",
+        "UNKNOWN_REVIEW": "Unknown (Review Required)",
+    }
+    type_str = type_display_map.get(result.classification.value, result.classification.value.replace("_", " ").title())
+    print("Tool 5 - Content Discoverer")
+    print(f"Type: {type_str} ({result.confidence.value})")
+    print(f"Mantra: {result.mantra_type.value}")
+    if result.cutter_proposal:
+        print(f"Boundary: {result.cutter_proposal.suggested_cut_points}")
+    print(f"Transcript: {result.transcript_path}")
+    route_str = "process_by_tool_6" if result.process_by_tool_6 else "none"
+    print(f"Route: {route_str}")
+    if result.review_required:
+        print(f"Review Required: {result.review_reason or 'Yes'}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Tool 5: Content Discoverer command
+    discover_parser = subparsers.add_parser("discover-content", help="Run Tool 5: Content Discoverer")
+    discover_parser.add_argument("target", help="Target media file path or tracking ID")
+    discover_parser.add_argument("--dry-run", action="store_true", default=False, help="Perform discovery preview without disk or registry mutations")
+    discover_parser.add_argument("--device", choices=["auto", "metal", "cpu"], default="auto", help="Compute device for transcription (default: auto)")
+    discover_parser.add_argument("--model-path", help="Path to whisper model file")
+    discover_parser.add_argument("--force-retranscribe", action="store_true", default=False, help="Force re-transcription ignoring existing sidecar cache")
+    discover_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    discover_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    discover_parser.set_defaults(func=run_discover_content)
 
     # Main Tooling Script orchestrator command
     run_parser = subparsers.add_parser("run", help="Run Main Tooling Script orchestrator (Phase A: Tools 1–4)")
