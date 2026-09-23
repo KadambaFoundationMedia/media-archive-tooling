@@ -641,3 +641,55 @@ Open questions: <Q-IDs or none>
 ```
 
 Only planning/review may accept and merge the implementation.
+
+---
+
+## 22. User-confirmed full-pipeline and archive-scale amendment (2026-09-23)
+
+The authoritative cross-tool sequence and Tool 6 split/Tool 4 row-identity
+rules are in `docs/full-pipeline-workflow-amendment.md`. This section adds
+actionable Main Script requirements without pretending that pending Tools
+6–11 are implemented.
+
+For current Tools 1–5, the Builder must:
+
+1. Remove the unbounded `shutil.copytree(sample-files, .../eval_workspace/media)`
+   behavior from the Tool 4 evaluation helper. An evaluation requiring media
+   copies must select an explicit bounded fixture/subset, enforce a preflight
+   byte/file budget, and never mutate the selected archive originals. A normal
+   run must never copy a selected directory wholesale.
+2. Keep per-file processing in place and bounded: only the current file (or an
+   explicitly configured small worker limit) may consume scratch space;
+   preflight free space for conversion/extraction; clean up owned scratch data
+   after completion/failure; and make abandoned owned scratch recoverable on
+   restart without touching arbitrary media.
+3. Persist enough per-file/per-stage state to resume after interruption and
+   skip already completed stages when their inputs/configuration remain valid.
+   A stuck or failed file must become a visible retry/review item and must not
+   prevent independent files from progressing indefinitely.
+4. Avoid retaining the full archive's detailed file results in memory or
+   emitting one giant log event containing every discovered path. Keep
+   terminal progress and the review portal useful for long folder runs.
+5. Retain existing alpha/beta purge behavior **only for test mode**. Before
+   processing the real archive, obtain an explicit production-mode policy
+   separating durable work from test-data purging; do not silently disable the
+   user's current test cleanup or silently purge production work.
+
+For future integration, the Main Script must route a confirmed combination
+through Tool 6, Tool 4 singing-row creation, class-only Tools 7–10 as
+applicable, final Tool 1 rename, Tool 11 move, and final Tool 4 updates in the
+dependency order fixed by the amendment. This is not a fixed Tool 1/Tool 4
+call count: every later trustworthy metadata event must re-evaluate whether
+Tool 1 should rename and whether Tool 4 should synchronize the matching row,
+including metadata-only changes that leave the filename unchanged. The class
+keeps its existing row identity and the singing part has a distinct row. The
+original full-length working file does not remain after a successful Tool 6
+split. Do not implement pending tool logic in the Main Script merely to
+satisfy this future sequence; route only through accepted tool services when
+their finalized plans exist.
+
+Acceptance for this amendment requires hermetic interruption/retry and
+scratch-cleanup tests, a bounded evaluation-helper test proving no full
+`sample-files` copy, a long-folder test proving bounded memory/log behavior,
+and the full existing regression suite. No live Baserow mutation or archive
+folder run is required for automated acceptance.

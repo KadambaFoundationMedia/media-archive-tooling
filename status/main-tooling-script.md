@@ -7,7 +7,41 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
+
+## Builder action — archive-scale correction and future workflow contract (2026-09-23)
+
+Read `docs/full-pipeline-workflow-amendment.md` and Section 22 of
+`docs/main-tooling-script-build-plan.md`. The user has clarified the complete
+stage order and that a successful Tool 6 combination cut replaces the one
+working input with class and singing outputs; no permanent original remains.
+The class retains its existing Baserow row and Tool 4 creates a separate
+singing row after the cut. Final Tool 1 renaming precedes Tool 11's move;
+Tool 4 updates final paths/metadata afterward. These are future integration
+contracts, not a fixed invocation schedule or permission to invent Tools 6–11.
+Any tool's newly accepted metadata must prompt Tool 1 to re-evaluate whether
+the filename needs changing and Tool 4 to synchronize any database-relevant
+change, even when no rename occurs. Repeat calls must be idempotent and retain
+the matched row identities.
+
+Active correction findings for `BUILD MAIN SCRIPT`:
+
+- **R-052 — Unbounded evaluation copy.**
+  `scripts/run_tool_4_evaluation.py` currently copies all of `sample-files`
+  into `.renamer/eval_workspace/media` (272 files/about 32 GB in the last
+  local test). Replace this with an explicit bounded fixture/subset and
+  preflight limit; never create a full archive copy. Preserve source files.
+- **R-053 — Archive-scale resumability and scratch bounds.**
+  Implement the current-stage requirements in Main Script plan Section 22:
+  bounded per-file scratch use, owned-temp cleanup/recovery, durable stage
+  checkpoints and retry/review after interruption, continuation past failed
+  independent files, and bounded discovery/result logging. Keep the current
+  alpha/beta purge policy in test mode; flag production-mode policy as open
+  before any real 15+ TB archive run.
+
+Builder implementation belongs on `main-tooling-script-implementation`,
+synced from current `main`, with tests, status updates, a pushed PR, and CI.
+Do not run a live full-folder test or create a permanent media copy.
 
 ## Planner-authored maintenance / coordination — 2026-09-23
 

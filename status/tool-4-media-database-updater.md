@@ -12,6 +12,20 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 Status: `READY_FOR_REVIEW`
 
+Downstream coordination (2026-09-23): Read
+`docs/full-pipeline-workflow-amendment.md` before touching Tool 4 integration.
+The user's full pipeline creates/updates a class row after the committed
+Phase 1 rename. Later approved metadata enriches that **same** row. For a
+successful Tool 6 singing-and-class split, that row follows the class output;
+Tool 4 uses a fresh Tool 2 check and creates a distinct singing row only when
+no matching singing item exists. After final Tool 1 naming and Tool 11 moving,
+Tool 4 updates both rows' final metadata/paths while preserving confirmed
+existing fields and unrelated URLs. No third row is created for the removed
+full-length working input. This is a future integration contract; do not
+implement Tool 6 inside Tool 4. Tool 4 must also accept trustworthy metadata
+updates from any later tool when the filename does not change; the suggested
+sequence is not a limit on Tool 4 invocation frequency.
+
 ## Active alpha/beta cleanup amendment — 2026-09-22
 
 Implement the Tool 4 portion of

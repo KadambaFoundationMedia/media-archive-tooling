@@ -14,6 +14,7 @@ Required project context:
 - `docs/main-tooling-script-build-plan.md`
 - `docs/alpha-beta-test-data-purge-build-plan.md`
 - `docs/baserow-access-boundary-amendment.md`
+- `docs/full-pipeline-workflow-amendment.md`
 - `assets/verse-structure.md`
 - `assets/original-and-edited-recording-structure.md`
 - accepted Tool 1-4 statuses and implementations
@@ -93,13 +94,26 @@ does not create Baserow test rows and must not bypass Tool 4's purge service.
 
 ## 3. Pipeline position and routing contract
 
-The intended whole project sequence is:
+The illustrative whole-project dependencies are:
 
 ```text
 Phase 1: Tool 1 -> Tool 2 -> Tool 3 -> Tool 1 final proposal -> Tool 4
-Phase 2: Tool 5 -> later selected audio tools -> Tool 11
-          -> Tool 1 enrichment/final rename -> Tool 4 synchronization
+Phase 2: Tool 5 -> Tool 6 when a confirmed combination needs cutting
+          -> Tool 4 creates/updates the singing item after a cut
+          -> applicable Tools 7-10 -> latest Tool 1 naming
+          -> Tool 11 move -> Tool 4 path synchronization
 ```
+
+This is not a fixed invocation schedule: any accepted metadata discovered by
+Tool 5 or a later tool may re-trigger Tool 1 filename evaluation and Tool 4
+metadata synchronization, including when no filename changes. Tool 1 and Tool
+4 may recur before or after the illustrated positions as evidence evolves.
+
+The later Tool 6 replacement of a combination input with two outputs does not
+change Tool 5's obligation to leave its input untouched. The exact Tool 6
+cutting rules remain for its own finalized build plan. The user-confirmed
+full-pipeline order and row-identity rules are recorded in
+`docs/full-pipeline-workflow-amendment.md`.
 
 The first Tool 5 implementation must be usable independently through a typed
 service and CLI command. Per the user's later direction, also integrate Tool 5
