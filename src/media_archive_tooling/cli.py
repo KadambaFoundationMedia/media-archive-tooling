@@ -19,6 +19,7 @@ from .travel_reviewer.reference_store import TravelReferenceStore
 from .travel_reviewer.service import TravelScheduleReviewService, validate_tool3_review_result
 from .media_db_updater import MediaDatabaseUpdaterService, BaserowWriteAdapter
 from .orchestrator.models import WorkflowType
+from .orchestrator.reporter import TerminalReporter
 from .orchestrator.service import create_main_tooling_service, MainToolingScriptService
 from .content_discoverer.service import ContentDiscovererService
 
@@ -687,6 +688,7 @@ def run_discover_content(args):
         service = ContentDiscovererService(registry=registry)
 
     model_path = Path(args.model_path) if getattr(args, "model_path", None) else None
+    progress_callback = None if getattr(args, "json", False) else TerminalReporter().report_tool5_progress
 
     try:
         result = service.discover_content(
@@ -695,6 +697,7 @@ def run_discover_content(args):
             device=args.device,
             model_path=model_path,
             force_retranscribe=args.force_retranscribe,
+            progress_callback=progress_callback,
         )
     except Exception as e:
         print(f"Error during content discovery: {e}", file=sys.stderr)

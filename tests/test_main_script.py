@@ -1490,3 +1490,16 @@ def test_51_registry_cross_process_lock(tmp_path):
         reg.set_metadata("test_lock", "active")
         assert reg.get_metadata("test_lock") == "active"
 
+
+def test_52_tool5_progress_is_concise_and_visible(capsys):
+    reporter = TerminalReporter(verbose=True)
+    reporter.report_tool5_progress("decode", 0, "start")
+    reporter.report_tool5_progress("decode", 3.1, "done")
+    reporter.report_tool5_progress("transcribe_metal", 30, "heartbeat")
+    reporter.report_tool5_progress("cache", 0, "hit")
+    assert capsys.readouterr().out.splitlines() == [
+        "  Tool 5 — Converting audio…",
+        "  Tool 5 — Converting audio finished after 3.1s",
+        "  Tool 5 — Transcribing on Metal: 30s elapsed",
+        "  Tool 5 — Reusing saved transcript",
+    ]
