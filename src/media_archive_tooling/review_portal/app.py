@@ -159,17 +159,49 @@ def dashboard(
     batch_message: str = "",
     batch_error: str = "",
 ):
+    from ..orchestrator.service import check_and_enforce_fingerprint
+
     service = get_service()
+    registry = service.registry
+    updater = get_media_db_updater_service()
+
+    with registry.acquire_lock():
+        ok, blocked_msg = check_and_enforce_fingerprint(registry, updater)
+
+    if not ok:
+        data = {
+            "files": [],
+            "total_count": 0,
+            "review_count": 0,
+            "committed_count": 0,
+            "current_filter": filter,
+            "batch_message": "",
+            "batch_error": "",
+            "purge_blocked": True,
+            "blocked_reason": blocked_msg or "Cleanup blocked",
+            "fresh_slate": False,
+        }
+        return templates.TemplateResponse(request=request, name="index.html", context=data)
+
     data = service.list_files(filter_mode=filter)
     data["files"] = [_dashboard_record(record) for record in data["files"]]
     data["batch_message"] = batch_message
     data["batch_error"] = batch_error
+    data["purge_blocked"] = False
+    data["blocked_reason"] = ""
+    data["fresh_slate"] = (data.get("total_count", 0) == 0)
     return templates.TemplateResponse(request=request, name="index.html", context=data)
 
 
 @app.get("/file/{tracking_id}", response_class=HTMLResponse)
 def file_detail(request: Request, tracking_id: str):
     service = get_service()
+    registry = service.registry
+    if registry.get_metadata("purge_blocked"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Review portal is blocked: {registry.get_metadata('purge_blocked')}. Run './run-media-archive.sh --purge' to retry.",
+        )
     file_record = service.get_file(tracking_id)
     if not file_record:
         raise HTTPException(status_code=404, detail="File not found in registry")

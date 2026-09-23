@@ -615,7 +615,8 @@ def run_media_db_update(args):
 def run_main_script(args):
     """Main Tooling Script entry point (media-archive run)."""
     config = load_config()
-    targets = args.targets
+    targets = getattr(args, "targets", [])
+    purge = getattr(args, "purge", False)
     dry_run = getattr(args, "dry_run", False)
     verbose = getattr(args, "verbose", False)
     workflow_str = getattr(args, "workflow", "all")
@@ -645,6 +646,19 @@ def run_main_script(args):
             tool4_service=getattr(args, "tool4_service", None),
         )
 
+    if purge:
+        if targets:
+            print("Error: Normal file targets cannot be specified with --purge; cleanup is a standalone operation.", file=sys.stderr)
+            sys.exit(2)
+        exit_code, _ = service.purge(dry_run=dry_run)
+        if exit_code != 0:
+            sys.exit(exit_code)
+        return
+
+    if not targets:
+        print("Error: No target paths specified. Provide media file(s) or folder(s), or use --purge.", file=sys.stderr)
+        sys.exit(2)
+
     summary = service.run(targets)
 
     if review_portal:
@@ -668,7 +682,8 @@ def main():
 
     # Main Tooling Script orchestrator command
     run_parser = subparsers.add_parser("run", help="Run Main Tooling Script orchestrator (Phase A: Tools 1–4)")
-    run_parser.add_argument("targets", nargs="+", help="Target media file(s) and/or folder(s)")
+    run_parser.add_argument("targets", nargs="*", default=[], help="Target media file(s) and/or folder(s)")
+    run_parser.add_argument("--purge", action="store_true", default=False, help="Purge alpha/beta test data from Baserow and reset local review registry")
     run_parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=False, help="Perform dry-run preview without modifying filesystem or database")
     run_parser.add_argument("--verbose", action="store_true", default=False, help="Show detailed output in terminal")
     run_parser.add_argument("--workflow", choices=["all", "renamer", "processing"], default="all", help="Workflow selection: all (default), renamer, processing")

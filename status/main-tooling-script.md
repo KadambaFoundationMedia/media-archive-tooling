@@ -7,25 +7,32 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
-## Active alpha/beta cleanup amendment — 2026-09-22
+## Alpha/beta cleanup amendment — 2026-09-22 [RESOLVED]
 
-Implement the Main Tooling Script portion of
-`docs/alpha-beta-test-data-purge-build-plan.md` **after** its Tool 4 cleanup
-service is accepted and merged. Required outcome: standalone `--purge` and
-`--purge --dry-run`, automatic review-data fingerprint invalidation at runner
-and independent portal startup, a blocked-cleanup state that hides stale
-results, and concise fresh-slate reporting. The Main Tooling Script must call
-Tool 4's typed cleanup service; it must not delete Baserow rows itself.
-
-This is an alpha/beta-only test-data policy. Preserve normal file handling,
-dry-run guarantees, the independent `--review-only` portal launcher, and all
-Tool 4 ownership boundaries.
+Implemented the Main Tooling Script portion of
+`docs/alpha-beta-test-data-purge-build-plan.md` using Tool 4's typed cleanup service:
+- **Standalone `--purge` & `--purge --dry-run`**:
+  - Added `--purge` flag to `./run-media-archive.sh` and CLI `media-archive run`.
+  - Enforced CLI mutual exclusivity: file targets are rejected if `--purge` is provided (exit code 2); targets are required if `--purge` is omitted (exit code 2).
+  - Dry-run inspects rows without mutating remote tables or local registry.
+  - Live purge confirms markers, deletes test rows via Tool 4, and clears local review state only upon complete remote success.
+- **Automatic review-data fingerprint detection**:
+  - Implemented `compute_review_data_fingerprint` generating deterministic SHA-256 over runtime code in `src/media_archive_tooling`.
+  - Automatic fresh slate triggered at runner and independent portal startup if fingerprint differs.
+  - If cleanup blocks, transitions to `PURGE_BLOCKED`, stores reason in registry metadata, and hides stale review queue/files in runner and review portal.
+- **Portal integration**:
+  - Renders concise "Fresh test slate" badge when 0 tracked files are present.
+  - Renders visible warning banner and hides review table/batch bar when `purge_blocked` is active; returns HTTP 503 on file detail view.
+- **Cross-process locking**:
+  - Implemented `acquire_lock` context manager using `fcntl.flock` on file SQLite databases and thread locks for in-memory databases.
+- **Strict architectural boundaries**:
+  - Preserved Tool 4 as the sole deleter/writer of Baserow rows. Main Script and Portal invoke Tool 4's `purge_test_rows`.
 
 Implementation branch: `main-tooling-script-implementation`
-Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/40
-Last planning update: 2026-09-19
+Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/52
+Last planning update: 2026-09-22
 
 ## Implemented Phase A Pipeline
 
@@ -61,13 +68,13 @@ The Main Tooling Script is unnumbered. It is not Tool 12. CLI command: `media-ar
 ## Verification results
 
 ### 1. Main Script Dedicated Test Suite (`tests/test_main_script.py`)
-All 41 test scenarios (including R-001 through R-005 scenarios) are implemented and passing:
-- 41 passed in 1.34s.
+All 51 test scenarios (including alpha/beta purge and fingerprint scenarios 42–51) are implemented and passing:
+- 51 passed in 1.77s.
 
 ### 2. Full Project Pytest Suite
-All 399 automated tests in the repository pass with zero regressions:
+All 430 automated tests in the repository pass with zero regressions:
 ```text
-======================= 399 passed, 2 warnings in 5.49s ========================
+======================= 430 passed, 2 warnings in 6.00s ========================
 ```
 
 ### 3. Package Build
