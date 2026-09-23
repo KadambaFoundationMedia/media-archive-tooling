@@ -102,9 +102,10 @@ Phase 2: Tool 5 -> later selected audio tools -> Tool 11
 ```
 
 The first Tool 5 implementation must be usable independently through a typed
-service and CLI command. Do not change the accepted Phase A `all`/`processing`
-semantics of the Main Tooling Script before the later Phase 2 integration plan
-is finalized.
+service and CLI command. Per the user's later direction, also integrate Tool 5
+into the Main Tooling Script's `all` and `processing` workflows while preserving
+the Phase 1-to-Phase 2 order and the Phase 1 eligibility requirement. Tools 6-11
+remain pending; Tool 5 only records their future routing decisions.
 
 Tool 5 records declarative routing; it does not invoke pending tools:
 
