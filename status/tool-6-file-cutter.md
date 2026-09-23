@@ -22,7 +22,7 @@ MP3 has its own row.
 
 ## Review checkpoint
 
-Last planning/review commit: pending planning PR
+Last planning/review commit: `66854fe` (planning PR #61)
 Current implementation HEAD: none
 Fundamental-change review pending: no
 Relevant commits since last review: none
@@ -76,3 +76,6 @@ build; do not treat the accepted coarse-bracket implementation as sufficient.
   handling (preserve instrumental/spoken lead-ins), and interactive portal
   waveform/playback. Planning was prepared in an isolated worktree while Main
   Script implementation remained dirty.
+- 2026-09-23 — Build plan and cross-tool amendments committed as `66854fe`,
+  pushed to `planner/tool-6-build-plan`, and opened as PR #61. No media or
+  Baserow data was changed.
