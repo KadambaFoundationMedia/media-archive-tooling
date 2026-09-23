@@ -408,7 +408,7 @@ def test_13_review_portal_audio_streaming_and_content_review_actions(env):
     env["register_media"](media_file)
 
     env["transcription_adapter"].canned_segments = [
-        TranscriptSegment(start_seconds=0.0, end_seconds=100.0, text="lecture on caitanya caritamrta"),
+        TranscriptSegment(start_seconds=0.0, end_seconds=2400.0, text="lecture on caitanya caritamrta"),
     ]
     result = env["service"].discover_content(media_file, root_dir=env["tmp_path"])
     tracking_id = result.tracking_id
@@ -463,6 +463,7 @@ def test_13_review_portal_audio_streaming_and_content_review_actions(env):
 def test_14_dry_run_zero_mutation(env):
     video_file = env["media_dir"] / "video_dry.mp4"
     video_file.write_bytes(b"dry run video")
+    env["register_media"](video_file, tracking_id="trk_dryrun")
 
     res = env["service"].discover_content(video_file, tracking_id="trk_dryrun", dry_run=True, root_dir=env["tmp_path"])
 
@@ -690,16 +691,36 @@ def test_20_phase1_eligible_unresolved_pending_file_allowed(env):
     assert env["registry"].get_content_review(tid) is not None
 
 
-def test_21_phase1_dry_run_with_explicit_context_allowed(env):
-    """T5-R-001: Dry-run execution with explicitly provided tracking_id context succeeds without registry write."""
+def test_21_phase1_dry_run_with_arbitrary_id_rejected(env):
+    """T5-R-001: Bare dry-run with caller-supplied tracking_id on untracked path raises Phase1EligibilityError."""
     untracked = env["media_dir"] / "dry_run_candidate.mp3"
     untracked.write_text("dry run audio")
 
+    with pytest.raises(Phase1EligibilityError) as exc_info:
+        env["service"].discover_content(
+            untracked,
+            tracking_id="trk_arbitrary_unregistered",
+            dry_run=True,
+            root_dir=env["tmp_path"],
+        )
+    assert "not registered in Phase 1 registry" in str(exc_info.value)
+    # Zero disk or registry mutations
+    assert not (env["tmp_path"] / ".renamer" / "transcripts").exists()
+    assert env["registry"].get_content_review("trk_arbitrary_unregistered") is None
+
+
+def test_21b_phase1_dry_run_with_valid_pipeline_context_allowed(env):
+    """T5-R-001: Legitimate Phase 1 context from pipeline run permits dry-run execution."""
+    untracked = env["media_dir"] / "dry_run_candidate_with_ctx.mp3"
+    untracked.write_text("dry run audio with ctx")
+
+    context = {"tracking_id": "trk_contextual_dry_01"}
     res = env["service"].discover_content(
         untracked,
         tracking_id="trk_contextual_dry_01",
         dry_run=True,
         root_dir=env["tmp_path"],
+        phase1_context=context,
     )
     assert res.tracking_id == "trk_contextual_dry_01"
     # Zero disk or registry mutations
@@ -750,6 +771,7 @@ def test_23_dry_run_strictly_zero_filesystem_artifacts(env):
     clean_dir.mkdir(parents=True, exist_ok=True)
     media_file = clean_dir / "audio.mp3"
     media_file.write_text("clean audio")
+    env["register_media"](media_file, tracking_id="trk_clean_01")
 
     res = env["service"].discover_content(
         media_file,
@@ -818,23 +840,30 @@ def test_25_video_extraction_blocks_on_tampered_derivative(env):
 
 
 def test_26_video_extraction_blocks_on_concurrent_collision(env, monkeypatch):
-    """T5-R-003: If target MP3 appears during extraction, abort safely and remove temporary file."""
+    """T5-R-003: If target MP3 appears at finalization point, abort and preserve intruder byte-for-byte."""
     video_file = env["media_dir"] / "concurrent_test.mp4"
     video_file.write_bytes(b"concurrent video content")
     target_mp3 = video_file.with_suffix(".mp3")
 
-    real_write_bytes = Path.write_bytes
-    def fake_write_bytes(self, data):
-        ret = real_write_bytes(self, data)
-        if ".tmp_extract_" in self.name:
-            target_mp3.write_bytes(b"concurrent intruder")
-        return ret
+    real_link = os.link
+    intruder_payload = b"CONCURRENT_INTRUDER_MUST_SURVIVE_BYTE_FOR_BYTE_123"
 
-    monkeypatch.setattr(Path, "write_bytes", fake_write_bytes)
+    def intrusive_link(src, dst):
+        target_mp3.write_bytes(intruder_payload)
+        return real_link(src, dst)
+
+    monkeypatch.setattr(os, "link", intrusive_link)
 
     with pytest.raises(AudioExtractionCollisionError) as exc_info:
         env["audio_extractor"].extract_audio(video_file, "trk_concurrent", registry=env["registry"])
     assert "appeared concurrently" in str(exc_info.value)
+
+    # Intruder file must survive completely untouched byte-for-byte
+    assert target_mp3.exists()
+    assert target_mp3.read_bytes() == intruder_payload
+
+    # Temporary extraction files must be cleanly deleted
+    assert not any(".tmp_extract_" in p.name for p in target_mp3.parent.iterdir())
 
 
 # T5-R-004: Evidence-Backed Human Tool 6 Routing
@@ -976,3 +1005,109 @@ def test_30_video_transcript_cache_invalidated_if_video_or_mp3_changes(env):
         root_dir=env["tmp_path"],
     )
     assert len(env["transcription_adapter"].calls) == 3
+
+
+def test_31_short_recording_portal_action_rejects_out_of_range_or_impossible_boundary(env):
+    """T5-R-004: Validate timestamps against short recording duration; reject impossible clock fields and bounds beyond file."""
+    short_file = env["media_dir"] / "short_recording.mp3"
+    short_file.write_text("short audio content")
+    tid = env["register_media"](short_file)
+
+    # 45-second recording
+    env["transcription_adapter"].canned_segments = [
+        TranscriptSegment(start_seconds=0.0, end_seconds=45.0, text="short class discourse"),
+    ]
+
+    res = env["service"].discover_content(short_file, root_dir=env["tmp_path"])
+    assert res.tracking_id == tid
+
+    # 1. Attempt impossible clock field (e.g. 00:99) via portal action
+    configure_review_context(registry=env["registry"])
+    client = TestClient(portal_app)
+
+    post_res1 = client.post(
+        f"/file/{tid}/content-review-action",
+        data={
+            "classification": "KIRTAN_AND_CLASS",
+            "mantra_type": "UNKNOWN",
+            "coarse_boundary": "kirtan 00:00-00:99; class begins 00:30",
+            "notes": "impossible seconds 99",
+        },
+        follow_redirects=False,
+    )
+    assert post_res1.status_code == 303
+    db_rec1 = env["registry"].get_content_review(tid)
+    assert db_rec1["classification"] == "KIRTAN_AND_CLASS"
+    assert db_rec1["process_by_tool_6"] == 0
+    assert db_rec1["review_required"] == 1
+    assert "Tool 6 cutter handoff requires verified coarse boundary brackets" in (db_rec1["review_reason"] or "")
+
+    # 2. Attempt out-of-range boundary extending beyond 45s recording duration
+    post_res2 = client.post(
+        f"/file/{tid}/content-review-action",
+        data={
+            "classification": "KIRTAN_AND_CLASS",
+            "mantra_type": "UNKNOWN",
+            "coarse_boundary": "kirtan 00:00-01:30; class begins 01:45",
+            "notes": "exceeds 45s recording duration",
+        },
+        follow_redirects=False,
+    )
+    assert post_res2.status_code == 303
+    db_rec2 = env["registry"].get_content_review(tid)
+    assert db_rec2["process_by_tool_6"] == 0
+    assert db_rec2["review_required"] == 1
+
+    # 3. Attempt valid boundary fully enclosed within 45s recording duration
+    post_res3 = client.post(
+        f"/file/{tid}/content-review-action",
+        data={
+            "classification": "KIRTAN_AND_CLASS",
+            "mantra_type": "Jaya-radha-madhava",
+            "coarse_boundary": "kirtan 00:00-00:20; class begins 00:25",
+            "notes": "valid within 45s duration",
+        },
+        follow_redirects=False,
+    )
+    assert post_res3.status_code == 303
+    db_rec3 = env["registry"].get_content_review(tid)
+    assert db_rec3["process_by_tool_6"] == 1
+    assert db_rec3["review_required"] == 0
+    assert db_rec3["result"]["cutter_proposal"]["kirtan_range"] == [0.0, 20.0]
+    assert db_rec3["result"]["cutter_proposal"]["class_range"] == [25.0, 45.0]
+
+
+def test_32_validate_coarse_boundary_edge_cases():
+    """T5-R-004: Unit tests for validate_coarse_boundary edge cases."""
+    from media_archive_tooling.content_discoverer.service import validate_coarse_boundary
+
+    # Zero or negative duration rejected
+    assert validate_coarse_boundary("00:00-00:30", duration=0.0) is None
+    assert validate_coarse_boundary("00:00-00:30", duration=-10.0) is None
+
+    # Impossible clock fields rejected
+    assert validate_coarse_boundary("00:00-00:99", duration=300.0) is None
+    assert validate_coarse_boundary("00:99-01:00", duration=300.0) is None
+    assert validate_coarse_boundary("01:60:00-02:00:00", duration=9000.0) is None
+    assert validate_coarse_boundary("00:00-00:60", duration=300.0) is None
+
+    # Unordered timestamps rejected
+    assert validate_coarse_boundary("00:30-00:10", duration=300.0) is None
+    assert validate_coarse_boundary("kirtan 00:00-01:00; class begins 00:50", duration=300.0) is None
+
+    # Beyond duration rejected
+    assert validate_coarse_boundary("00:00-02:00", duration=100.0) is None
+    assert validate_coarse_boundary("kirtan 00:00-00:30; class begins 01:10", duration=60.0) is None
+    assert validate_coarse_boundary("kirtan 00:00-00:20; class 00:25-01:30", duration=60.0) is None
+
+    # Valid boundaries within duration
+    prop1 = validate_coarse_boundary("kirtan 00:00-00:20; class begins 00:25", duration=60.0)
+    assert prop1 is not None
+    assert prop1.kirtan_range == (0.0, 20.0)
+    assert prop1.class_range == (25.0, 60.0)
+
+    # Valid 4-timestamp boundary within duration
+    prop2 = validate_coarse_boundary("kirtan 00:00-00:20; class 00:25-00:55", duration=60.0)
+    assert prop2 is not None
+    assert prop2.kirtan_range == (0.0, 20.0)
+    assert prop2.class_range == (25.0, 55.0)

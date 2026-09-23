@@ -45,6 +45,32 @@ def compute_file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _atomic_no_clobber_finalize(tmp_path: Path, target_path: Path) -> None:
+    """Atomically finalize tmp_path to target_path without clobbering an existing target.
+
+    On collision, cleans up only tmp_path, leaving target_path completely untouched.
+    """
+    try:
+        os.link(tmp_path, target_path)
+        tmp_path.unlink(missing_ok=True)
+    except FileExistsError:
+        tmp_path.unlink(missing_ok=True)
+        raise AudioExtractionCollisionError(
+            f"Adjacent audio file appeared concurrently during extraction: {target_path}"
+        )
+    except OSError as e:
+        if target_path.exists():
+            tmp_path.unlink(missing_ok=True)
+            raise AudioExtractionCollisionError(
+                f"Adjacent audio file appeared concurrently during extraction: {target_path}"
+            )
+        try:
+            os.replace(tmp_path, target_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+
 class AudioExtractionAdapter:
     """Adapter for extracting high-quality MP3 audio from video files using ffmpeg."""
 
@@ -134,13 +160,7 @@ class AudioExtractionAdapter:
             tmp_target.unlink(missing_ok=True)
             raise AudioExtractionError(f"ffmpeg execution error: {e}")
 
-        if target_mp3.exists():
-            tmp_target.unlink(missing_ok=True)
-            raise AudioExtractionCollisionError(
-                f"Adjacent audio file appeared concurrently during extraction: {target_mp3}"
-            )
-
-        os.replace(tmp_target, target_mp3)
+        _atomic_no_clobber_finalize(tmp_target, target_mp3)
         derived_sha256 = compute_file_sha256(target_mp3)
 
         if registry is not None and hasattr(registry, "record_video_audio_derivative"):
@@ -216,13 +236,7 @@ class FakeAudioExtractionAdapter(AudioExtractionAdapter):
         tmp_target = target_mp3.parent / f".tmp_extract_{tracking_id}_{os.getpid()}_{uuid.uuid4().hex[:8]}.mp3"
         tmp_target.write_bytes(b"FAKE_EXTRACTED_AUDIO_DATA_" + tracking_id.encode())
 
-        if target_mp3.exists():
-            tmp_target.unlink(missing_ok=True)
-            raise AudioExtractionCollisionError(
-                f"Adjacent audio file appeared concurrently during extraction: {target_mp3}"
-            )
-
-        os.replace(tmp_target, target_mp3)
+        _atomic_no_clobber_finalize(tmp_target, target_mp3)
         self.extracted_calls.append((video_path, tracking_id))
         derived_sha256 = compute_file_sha256(target_mp3)
 

@@ -189,6 +189,9 @@ class ContentClassifier:
     """Classifies audio transcripts and identifies mantra and cutter boundaries."""
 
     def classify(self, artifact: TranscriptArtifact) -> ContentDiscoveryResult:
+        meta = dict(artifact.raw_metadata or {})
+        meta["duration_seconds"] = artifact.duration_seconds
+
         segments = artifact.segments
         speech_segments = [s for s in segments if not s.is_silence and s.text.strip()]
 
@@ -205,7 +208,7 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 review_required=True,
                 review_reason="No speech segments found in transcript",
-                runtime_provenance=artifact.raw_metadata,
+                runtime_provenance=meta,
             )
 
         evidence: List[ContentEvidence] = []
@@ -430,7 +433,7 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
-                runtime_provenance=artifact.raw_metadata,
+                runtime_provenance=meta,
             )
 
         # Check for Kirtan and Class combination (Section 7.3)
@@ -463,7 +466,7 @@ class ContentClassifier:
                     source_path=artifact.input_path,
                     evidence=evidence,
                     review_required=False,
-                    runtime_provenance=artifact.raw_metadata,
+                    runtime_provenance=meta,
                 )
 
         # Check for Pure KIRTAN (singing only, no lecture/class discourse)
@@ -483,7 +486,7 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
-                runtime_provenance=artifact.raw_metadata,
+                runtime_provenance=meta,
             )
 
         # Check for Pure CLASS (e.g. partial or full class structure)
@@ -502,7 +505,7 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=(confidence != ConfidenceLevel.HIGH),
-                runtime_provenance=artifact.raw_metadata,
+                runtime_provenance=meta,
             )
 
         # Check for Festival / Event Address
@@ -520,7 +523,7 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
-                runtime_provenance=artifact.raw_metadata,
+                runtime_provenance=meta,
             )
 
         # Check for Home Program
@@ -538,7 +541,7 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
-                runtime_provenance=artifact.raw_metadata,
+                runtime_provenance=meta,
             )
 
         # Ambiguous / Uncertain -> UNKNOWN_REVIEW
@@ -556,5 +559,5 @@ class ContentClassifier:
             evidence=evidence,
             review_required=True,
             review_reason="Ambiguous transcript evidence; unable to classify with high confidence",
-            runtime_provenance=artifact.raw_metadata,
+            runtime_provenance=meta,
         )

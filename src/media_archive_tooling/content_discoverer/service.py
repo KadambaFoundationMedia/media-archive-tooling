@@ -27,6 +27,7 @@ from .transcriber import (
     BaseTranscriptionAdapter,
     TranscriptionBlockedError,
     WhisperCppTranscriptionAdapter,
+    probe_audio_duration,
 )
 
 
@@ -36,47 +37,76 @@ class Phase1EligibilityError(ValueError):
 
 
 def validate_coarse_boundary(boundary_str: str, duration: float = 0.0) -> Optional[CutterBoundaryProposal]:
-    """Parse and validate coarse boundary string from human reviewer or model."""
-    if not boundary_str or not boundary_str.strip():
+    """Parse and validate coarse boundary string against physical recording duration.
+
+    Rejects impossible clock fields (e.g. seconds >= 60, minutes >= 60 when hours present),
+    unordered timestamps, or brackets extending beyond the actual media duration.
+    """
+    if not boundary_str or not boundary_str.strip() or duration <= 0.0:
         return None
 
     clean = boundary_str.strip()
     time_pattern = r"(?:(\d{1,2}):)?(\d{1,2}):(\d{2}(?:\.\d+)?)"
 
-    def to_seconds(groups: Tuple[Optional[str], str, str]) -> float:
-        hrs = float(groups[0]) if groups[0] is not None else 0.0
-        mins = float(groups[1])
-        secs = float(groups[2])
-        return hrs * 3600.0 + mins * 60.0 + secs
+    def parse_time_group(m: re.Match) -> Optional[float]:
+        hrs_str = m.group(1)
+        mins_str = m.group(2)
+        secs_str = m.group(3)
+
+        secs = float(secs_str)
+        if secs < 0.0 or secs >= 60.0:
+            return None
+
+        mins = int(mins_str)
+        if hrs_str is not None:
+            hrs = int(hrs_str)
+            if hrs < 0 or mins < 0 or mins >= 60:
+                return None
+            return hrs * 3600.0 + mins * 60.0 + secs
+        else:
+            if mins < 0:
+                return None
+            return mins * 60.0 + secs
 
     matches = list(re.finditer(time_pattern, clean))
     if len(matches) < 2:
         return None
 
-    t0 = to_seconds((matches[0].group(1), matches[0].group(2), matches[0].group(3)))
-    t1 = to_seconds((matches[1].group(1), matches[1].group(2), matches[1].group(3)))
+    parsed_times: List[float] = []
+    for m in matches:
+        t = parse_time_group(m)
+        if t is None:
+            return None
+        parsed_times.append(t)
 
-    if t1 <= t0:
+    t0 = parsed_times[0]
+    t1 = parsed_times[1]
+
+    # Must be strictly ordered and within duration
+    if t0 < 0.0 or t1 <= t0 or t1 > duration:
         return None
 
-    if duration > 0 and (t0 > duration or t1 > duration):
-        return None
-
-    if len(matches) >= 3:
-        t2 = to_seconds((matches[2].group(1), matches[2].group(2), matches[2].group(3)))
-        if t2 < t1 or (duration > 0 and t2 > duration):
+    if len(parsed_times) >= 3:
+        t2 = parsed_times[2]
+        if t2 < t1 or t2 >= duration:
             return None
         class_start = t2
     else:
         class_start = t1
 
+    if len(parsed_times) >= 4:
+        t3 = parsed_times[3]
+        if t3 <= class_start or t3 > duration:
+            return None
+        class_end = t3
+    else:
+        class_end = duration
+
     gap_start = t1
     gap_end = max(t1, class_start)
     if gap_start == gap_end:
         gap_start = max(0.0, t1 - 10.0)
-        gap_end = t1 + 10.0
-
-    class_end = duration if duration > class_start else (class_start + 1800.0)
+        gap_end = min(duration, t1 + 10.0)
 
     return CutterBoundaryProposal(
         kirtan_range=(t0, t1),
@@ -111,6 +141,7 @@ class ContentDiscovererService:
         model_path: Optional[Path] = None,
         force_retranscribe: bool = False,
         root_dir: Optional[Path] = None,
+        phase1_context: Optional[Any] = None,
     ) -> ContentDiscoveryResult:
         """Analyze a media file, transcribe audio, classify content, and record routing."""
         target_str = str(target)
@@ -133,9 +164,21 @@ class ContentDiscovererService:
                 media_path = target_path.resolve()
                 resolved_tid = self.registry.find_tracking_id_by_path(media_path)
                 if not resolved_tid:
-                    raise Phase1EligibilityError(
-                        f"Target '{target_str}' is not registered in Phase 1 registry; files must be processed by Phase 1 before Content Discovery."
-                    )
+                    is_context_valid = False
+                    if phase1_context is not None:
+                        ctx_tid = getattr(phase1_context, "tracking_id", None)
+                        if not ctx_tid and hasattr(phase1_context, "identity"):
+                            ctx_tid = getattr(phase1_context.identity, "tracking_id", None)
+                        if not ctx_tid and isinstance(phase1_context, dict):
+                            ctx_tid = phase1_context.get("tracking_id")
+                        if ctx_tid:
+                            resolved_tid = ctx_tid
+                            is_context_valid = True
+
+                    if not is_context_valid:
+                        raise Phase1EligibilityError(
+                            f"Target '{target_str}' is not registered in Phase 1 registry; files must be processed by Phase 1 before Content Discovery."
+                        )
         else:
             file_rec = self.registry.get_file(resolved_tid)
             if file_rec:
@@ -148,12 +191,21 @@ class ContentDiscovererService:
                 tid_by_path = self.registry.find_tracking_id_by_path(media_path)
                 if tid_by_path:
                     resolved_tid = tid_by_path
-                elif dry_run and tracking_id is not None:
-                    resolved_tid = tracking_id
                 else:
-                    raise Phase1EligibilityError(
-                        f"Target '{target_str}' with tracking ID '{resolved_tid}' is not registered in Phase 1 registry."
-                    )
+                    is_context_valid = False
+                    if phase1_context is not None:
+                        ctx_tid = getattr(phase1_context, "tracking_id", None)
+                        if not ctx_tid and hasattr(phase1_context, "identity"):
+                            ctx_tid = getattr(phase1_context.identity, "tracking_id", None)
+                        if not ctx_tid and isinstance(phase1_context, dict):
+                            ctx_tid = phase1_context.get("tracking_id")
+                        if ctx_tid and ctx_tid == resolved_tid:
+                            is_context_valid = True
+
+                    if not is_context_valid:
+                        raise Phase1EligibilityError(
+                            f"Target '{target_str}' with tracking ID '{resolved_tid}' is not registered in Phase 1 registry."
+                        )
 
         if not media_path or not media_path.exists():
             raise FileNotFoundError(f"Media file not found for tracking ID {resolved_tid}: {media_path}")
@@ -287,6 +339,38 @@ class ContentDiscovererService:
         new_classification = ContentType(classification) if classification else ContentType(existing["classification"])
         new_mantra = MantraType(mantra_type) if mantra_type else MantraType(existing["mantra_type"])
 
+        # Resolve recording duration from multiple sources
+        media_duration = 0.0
+        res_data = existing.get("result", {})
+        if isinstance(res_data, dict):
+            if "runtime_provenance" in res_data and isinstance(res_data["runtime_provenance"], dict):
+                media_duration = float(res_data["runtime_provenance"].get("duration_seconds", 0.0))
+            if media_duration <= 0.0 and "cutter_proposal" in res_data and res_data["cutter_proposal"]:
+                c_range = res_data["cutter_proposal"].get("class_range", [0, 0])
+                if len(c_range) >= 2 and float(c_range[1]) > 0:
+                    media_duration = float(c_range[1])
+
+        if media_duration <= 0.0 and existing.get("transcript_path"):
+            t_path = Path(existing["transcript_path"])
+            if not t_path.is_absolute():
+                t_path = Path.cwd() / t_path
+            if t_path.exists():
+                try:
+                    t_json = json.loads(t_path.read_text(encoding="utf-8"))
+                    media_duration = float(t_json.get("duration_seconds", 0.0))
+                except Exception:
+                    pass
+
+        if media_duration <= 0.0:
+            media_cand = existing.get("derived_audio_path") or existing.get("source_path")
+            if media_cand:
+                m_path = Path(media_cand)
+                if m_path.exists():
+                    try:
+                        media_duration = probe_audio_duration(m_path)
+                    except Exception:
+                        pass
+
         # Determine tool 6 routing based on updated decision and boundary evidence
         process_by_tool6 = False
         review_required = 0
@@ -296,11 +380,13 @@ class ContentDiscovererService:
         if new_classification in (ContentType.KIRTAN_AND_CLASS, ContentType.INITIATION):
             validated_proposal: Optional[CutterBoundaryProposal] = None
             if coarse_boundary:
-                validated_proposal = validate_coarse_boundary(coarse_boundary)
+                validated_proposal = validate_coarse_boundary(coarse_boundary, duration=media_duration)
 
             if not validated_proposal and existing.get("cutter_proposal"):
                 try:
-                    validated_proposal = CutterBoundaryProposal.model_validate(existing["cutter_proposal"])
+                    cand = CutterBoundaryProposal.model_validate(existing["cutter_proposal"])
+                    if media_duration > 0 and cand.class_range[1] <= media_duration:
+                        validated_proposal = cand
                 except Exception:
                     validated_proposal = None
 

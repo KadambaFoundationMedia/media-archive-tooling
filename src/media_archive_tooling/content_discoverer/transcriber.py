@@ -466,7 +466,7 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         self,
         canned_segments: Optional[List[TranscriptSegment]] = None,
         detected_language: str = "en",
-        duration_seconds: float = 600.0,
+        duration_seconds: Optional[float] = None,
         should_fail: bool = False,
         fail_message: str = "Simulated transcription failure",
         simulate_metal_fallback: bool = False,
@@ -528,10 +528,12 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
 
         # Continuous coverage with silence
         segments = list(self.canned_segments)
-        effective_duration = max(
-            self.duration_seconds,
-            segments[-1].end_seconds if segments else 0.0,
-        )
+        if self.duration_seconds is not None:
+            effective_duration = self.duration_seconds
+        elif segments:
+            effective_duration = segments[-1].end_seconds
+        else:
+            effective_duration = 600.0
         normalized: List[TranscriptSegment] = []
         cursor = 0.0
         for seg in segments:

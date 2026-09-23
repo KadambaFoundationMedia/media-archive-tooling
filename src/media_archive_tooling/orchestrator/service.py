@@ -343,7 +343,7 @@ class MainToolingScriptService:
 
         return summary
 
-    def _run_tool_5(self, path: Path, tracking_id: str) -> Tuple[StageResult, Optional[Any]]:
+    def _run_tool_5(self, path: Path, tracking_id: str, phase1_context: Optional[Any] = None) -> Tuple[StageResult, Optional[Any]]:
         """Execute Tool 5 Content Discovery on target media path."""
         self.logger.info("STAGE_START", tool="tool_5", file_path=path, tracking_id=tracking_id, details={"dry_run": self.dry_run})
         if self.tool5_service is None:
@@ -360,6 +360,7 @@ class MainToolingScriptService:
                 target=path,
                 tracking_id=tracking_id,
                 dry_run=self.dry_run,
+                phase1_context=phase1_context,
             )
             boundary_str = f" | Boundary: {content_res.cutter_proposal.suggested_cut_points}" if content_res.cutter_proposal else ""
             route_str = " -> process_by_tool_6" if content_res.process_by_tool_6 else ""
@@ -770,7 +771,7 @@ class MainToolingScriptService:
 
                 content_res = None
                 if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
-                    t5_stage, content_res = self._run_tool_5(file_path, tracking_id)
+                    t5_stage, content_res = self._run_tool_5(file_path, tracking_id, phase1_context=prop_final)
                     stage_results.append(t5_stage)
                     self.reporter.report_stage_result(t5_stage)
                     if content_res and content_res.review_required:
@@ -994,7 +995,7 @@ class MainToolingScriptService:
 
             content_res = None
             if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
-                t5_stage, content_res = self._run_tool_5(current_path, tracking_id)
+                t5_stage, content_res = self._run_tool_5(current_path, tracking_id, phase1_context=prop_final)
                 stage_results.append(t5_stage)
                 self.reporter.report_stage_result(t5_stage)
                 if content_res and content_res.review_required:
