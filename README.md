@@ -5,7 +5,7 @@ reviewing, and registering archive media. It provides a command-line runner for
 individual files and recursive batches, plus a localhost review portal for
 items that need human attention.
 
-The accepted Phase A workflow is:
+The current runnable workflow is:
 
 ```text
 Tool 1: interpret filename
@@ -13,10 +13,12 @@ Tool 1: interpret filename
 → Tool 3: check the verified travel schedule
 → Tool 1: create and commit the final filename
 → Tool 4: create, update, or preserve the Baserow Media row
+→ Tool 5: transcribe and discover the recording's content in place
 ```
 
-Tools 1–4 and the Main Tooling Script are accepted. Tools 5–11 are planned but
-not yet implemented.
+Tools 1–5 are available. Tool 6 has a finalized build plan but is not yet
+implemented; Tools 7–11 still need their individual build plans. The Main
+Tooling Script has an active correction pass for archive-scale operation.
 
 ## Quick start
 
@@ -42,8 +44,8 @@ and can take a little longer. Later runs start directly. Live Baserow use also
 requires the project `.env` configuration.
 
 > **Important:** live mode is the default. Without `--dry-run`, eligible files
-> are renamed immediately and Tool 4 may write to Baserow. There is no
-> confirmation prompt.
+> are renamed immediately, Tool 4 may write to Baserow, and Tool 5 may
+> transcribe the recording. There is no confirmation prompt.
 
 ## Main Tooling Script
 
@@ -96,9 +98,9 @@ Start the localhost review portal after processing:
   --review-portal
 ```
 
-The portal is available at `http://127.0.0.1:8000` by default. Only files that
-need evaluation, have a conflict, or have an actionable Tool 4 synchronization
-state appear in its active queue.
+The portal is available at `http://127.0.0.1:8000` by default. Its active
+queue shows files needing evaluation, including Tool 5 content decisions and
+actionable Tool 4 synchronization states.
 
 ### Options
 
@@ -106,9 +108,10 @@ state appear in its active queue.
 | --- | --- |
 | `--dry-run` | Preview final filenames and Tool 4 changes without renaming files or mutating Baserow. |
 | `--verbose` | Show additional structured details for every tool stage. |
-| `--workflow all` | Default Phase A workflow. Runs Tools 1–4 and reports Tools 5–11 as pending. |
-| `--workflow renamer` | Runs the currently available renaming workflow: Tools 1–4. |
-| `--workflow processing` | Reserved for Tools 4–11; currently exits before mutation because Tools 5–11 are pending. |
+| `--workflow all` | Default: runs the available Tools 1–5 in sequence. Tools 6–11 are not yet executed. |
+| `--workflow renamer` | Runs the renaming/database workflow: Tools 1–4. |
+| `--workflow processing` | Runs Tool 5 for a file that already passed Phase 1 registration; it does not run pending Tools 6–11. |
+| `--purge` | Standalone alpha/beta cleanup: remove Tool 4-tracked test rows from Baserow, then reset local review state when remote cleanup succeeds. Use `--purge --dry-run` to preview. Do not supply file targets. |
 | `--registry-path PATH` | Use a specific SQLite registry instead of the configured default. |
 | `--log-file PATH` | Write the combined append-only JSONL log to a specific file. |
 | `--review-portal` | Start the localhost review portal after the run. |
@@ -128,7 +131,8 @@ For each file, terminal output separates the stages and summarizes:
 - Tool 4 `CREATE`, `UPDATE`, `NOOP`, conflict, or blocked result;
 - fields that would be or were written;
 - the created or selected Baserow row number;
-- verified live values after a successful write.
+- verified live values after a successful write;
+- Tool 5 content type, detected mantra, and transcription progress when run.
 
 Detailed structured events from all tools are appended to one log file. With
 the default configuration it is `.renamer/logs/media-archive-tooling.log`.
@@ -142,6 +146,7 @@ remains recoverable.
   access.
 - Tool 4 is the only component allowed to create or update Baserow rows or
   select options.
+- Tool 5 analyzes audio locally and does not access Baserow.
 - Existing confirmed Baserow metadata is leading. Contradictions are routed to
   review instead of being overwritten automatically.
 - An existing `media_archive_link` is preserved; Tools 1–4 do not invent or
@@ -164,12 +169,38 @@ portal session:
 ./scripts/review-tool-1.sh
 ```
 
+## Builder plans and prompts
+
+The Builder is a **separate Antigravity model** started manually by the owner.
+Send one of the exact prompts below to that model; these are not commands for
+the media-processing terminal. The Builder reads [BUILDER.md](BUILDER.md), the
+linked plan, and the matching status file, then works on its own branch. The
+planner reviews/tests the result and merges it only after approval and CI.
+
+| Work | Build plan | Builder prompt |
+| --- | --- | --- |
+| Main Tooling Script | [Main Script plan](docs/main-tooling-script-build-plan.md) | `BUILD MAIN SCRIPT` |
+| Tool 1 — Renamer | [Tool 1 plan](docs/tool-1-renamer-build-plan.md) | `BUILD TOOL 1` |
+| Tool 2 — Media database reviewer | [Tool 2 plan](docs/tool-2-media-database-reviewer-build-plan.md) | `BUILD TOOL 2` |
+| Tool 3 — Travel schedule reviewer | [Tool 3 plan](docs/tool-3-travel-schedule-reviewer-build-plan.md) | `BUILD TOOL 3` |
+| Tool 4 — Media database updater | [Tool 4 plan](docs/tool-4-media-database-updater-build-plan.md) | `BUILD TOOL 4` |
+| Tool 5 — Content discoverer | [Tool 5 plan](docs/tool-5-content-discoverer-build-plan.md) | `BUILD TOOL 5` |
+| Tool 6 — File cutter | [Tool 6 plan](docs/tool-6-file-cutter-build-plan.md) | `BUILD TOOL 6` |
+
+Tools 1–5 already have implementations; their prompts are for directed
+corrections or resumption, not an instruction to rebuild them. Wait until the
+current Main Script correction is accepted and merged before sending
+`BUILD TOOL 6`. Tool 6's plan includes the required Tool 5 exact-cut handoff
+and Tool 4 video-audio path extension. Tools 7–11 have no finalized plans or
+build prompts yet.
+
 ## Project documentation
 
 - [Project reference and development process](docs/project-reference.md)
-- [Main Tooling Script build plan](docs/main-tooling-script-build-plan.md)
 - [Main Tooling Script walkthrough](docs/main-tooling-script-walkthrough.md)
 - [Main Tooling Script acceptance status](status/main-tooling-script.md)
+- [Tool 6 implementation status](status/tool-6-file-cutter.md)
+- [Full pipeline workflow](docs/full-pipeline-workflow-amendment.md)
+- [Alpha/beta test-data purge plan](docs/alpha-beta-test-data-purge-build-plan.md)
 - [Project implementation architecture](docs/project-implementation-architecture.md)
 - [Baserow live-data policy](docs/baserow-live-data-policy.md)
-- [Builder instructions](BUILDER.md)
