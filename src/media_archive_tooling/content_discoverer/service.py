@@ -1,8 +1,10 @@
 """Service layer for Tool 5 - Content Discoverer."""
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+import re
+from typing import Any, Dict, Optional, Tuple, Union
 
 from ..renamer.registry.registry import LocalRegistry
 from .audio_extractor import (
@@ -16,6 +18,8 @@ from .models import (
     ConfidenceLevel,
     ContentDiscoveryResult,
     ContentType,
+    CutterBoundaryProposal,
+    DerivedAudioDetails,
     MantraType,
     TranscriptArtifact,
 )
@@ -24,6 +28,63 @@ from .transcriber import (
     TranscriptionBlockedError,
     WhisperCppTranscriptionAdapter,
 )
+
+
+class Phase1EligibilityError(ValueError):
+    """Raised when a target has not undergone Phase 1 renamer processing."""
+    pass
+
+
+def validate_coarse_boundary(boundary_str: str, duration: float = 0.0) -> Optional[CutterBoundaryProposal]:
+    """Parse and validate coarse boundary string from human reviewer or model."""
+    if not boundary_str or not boundary_str.strip():
+        return None
+
+    clean = boundary_str.strip()
+    time_pattern = r"(?:(\d{1,2}):)?(\d{1,2}):(\d{2}(?:\.\d+)?)"
+
+    def to_seconds(groups: Tuple[Optional[str], str, str]) -> float:
+        hrs = float(groups[0]) if groups[0] is not None else 0.0
+        mins = float(groups[1])
+        secs = float(groups[2])
+        return hrs * 3600.0 + mins * 60.0 + secs
+
+    matches = list(re.finditer(time_pattern, clean))
+    if len(matches) < 2:
+        return None
+
+    t0 = to_seconds((matches[0].group(1), matches[0].group(2), matches[0].group(3)))
+    t1 = to_seconds((matches[1].group(1), matches[1].group(2), matches[1].group(3)))
+
+    if t1 <= t0:
+        return None
+
+    if duration > 0 and (t0 > duration or t1 > duration):
+        return None
+
+    if len(matches) >= 3:
+        t2 = to_seconds((matches[2].group(1), matches[2].group(2), matches[2].group(3)))
+        if t2 < t1 or (duration > 0 and t2 > duration):
+            return None
+        class_start = t2
+    else:
+        class_start = t1
+
+    gap_start = t1
+    gap_end = max(t1, class_start)
+    if gap_start == gap_end:
+        gap_start = max(0.0, t1 - 10.0)
+        gap_end = t1 + 10.0
+
+    class_end = duration if duration > class_start else (class_start + 1800.0)
+
+    return CutterBoundaryProposal(
+        kirtan_range=(t0, t1),
+        class_range=(class_start, class_end),
+        coarse_gap_bracket=(gap_start, gap_end),
+        confidence="HIGH",
+        description=clean,
+    )
 
 
 class ContentDiscovererService:
@@ -64,18 +125,35 @@ class ContentDiscovererService:
                 resolved_tid = target_str
                 media_path = Path(file_rec["current_path"])
             else:
-                media_path = Path(target_str).resolve()
-                if not media_path.exists():
+                target_path = Path(target_str)
+                if not target_path.exists():
+                    if target_str.startswith("trk_"):
+                        raise Phase1EligibilityError(f"Tracking ID '{target_str}' not found in Phase 1 registry.")
                     raise FileNotFoundError(f"Target file not found: {target_str}")
+                media_path = target_path.resolve()
                 resolved_tid = self.registry.find_tracking_id_by_path(media_path)
                 if not resolved_tid:
-                    resolved_tid = f"trk_{hashlib.sha256(str(media_path).encode()).hexdigest()[:8]}"
+                    raise Phase1EligibilityError(
+                        f"Target '{target_str}' is not registered in Phase 1 registry; files must be processed by Phase 1 before Content Discovery."
+                    )
         else:
             file_rec = self.registry.get_file(resolved_tid)
             if file_rec:
                 media_path = Path(file_rec["current_path"])
             else:
-                media_path = Path(target_str).resolve()
+                target_path = Path(target_str)
+                if not target_path.exists():
+                    raise FileNotFoundError(f"Media file not found for tracking ID {resolved_tid}: {target_str}")
+                media_path = target_path.resolve()
+                tid_by_path = self.registry.find_tracking_id_by_path(media_path)
+                if tid_by_path:
+                    resolved_tid = tid_by_path
+                elif dry_run and tracking_id is not None:
+                    resolved_tid = tracking_id
+                else:
+                    raise Phase1EligibilityError(
+                        f"Target '{target_str}' with tracking ID '{resolved_tid}' is not registered in Phase 1 registry."
+                    )
 
         if not media_path or not media_path.exists():
             raise FileNotFoundError(f"Media file not found for tracking ID {resolved_tid}: {media_path}")
@@ -83,6 +161,7 @@ class ContentDiscovererService:
         media_path = media_path.resolve()
         is_video = is_video_file(media_path)
         derived_mp3_path: Optional[Path] = None
+        derived_details: Optional[DerivedAudioDetails] = None
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -93,6 +172,13 @@ class ContentDiscovererService:
             if dry_run:
                 # Dry run: predict extraction path without performing disk mutation
                 audio_target = derived_mp3_path
+                derived_details = DerivedAudioDetails(
+                    source_video_path=str(media_path),
+                    derived_audio_path=str(derived_mp3_path),
+                    codec_command_summary="ffmpeg libmp3lame -q:a 0 (dry-run)",
+                    duration_seconds=0.0,
+                    derived_sha256="dry_run_derived_sha256",
+                )
             else:
                 try:
                     derived_details = self.audio_extractor.extract_audio(
@@ -128,6 +214,9 @@ class ContentDiscovererService:
             artifact = self.transcription_adapter.transcribe(
                 audio_path=audio_target if audio_target.exists() else media_path,
                 tracking_id=resolved_tid,
+                source_path=media_path if is_video else None,
+                source_type="video" if is_video else "audio",
+                derived_audio_details=derived_details,
                 requested_device=device,
                 model_path=model_path,
                 force=force_retranscribe,
@@ -198,19 +287,45 @@ class ContentDiscovererService:
         new_classification = ContentType(classification) if classification else ContentType(existing["classification"])
         new_mantra = MantraType(mantra_type) if mantra_type else MantraType(existing["mantra_type"])
 
-        # Determine tool 6 routing based on updated decision
+        # Determine tool 6 routing based on updated decision and boundary evidence
         process_by_tool6 = False
+        review_required = 0
+        review_reason: Optional[str] = None
+        cutter_proposal_dict: Optional[Dict[str, Any]] = None
+
         if new_classification in (ContentType.KIRTAN_AND_CLASS, ContentType.INITIATION):
-            process_by_tool6 = True
+            validated_proposal: Optional[CutterBoundaryProposal] = None
+            if coarse_boundary:
+                validated_proposal = validate_coarse_boundary(coarse_boundary)
+
+            if not validated_proposal and existing.get("cutter_proposal"):
+                try:
+                    validated_proposal = CutterBoundaryProposal.model_validate(existing["cutter_proposal"])
+                except Exception:
+                    validated_proposal = None
+
+            if validated_proposal:
+                process_by_tool6 = True
+                review_required = 0
+                cutter_proposal_dict = validated_proposal.model_dump()
+            else:
+                process_by_tool6 = False
+                review_required = 1
+                review_reason = "Tool 6 cutter handoff requires verified coarse boundary brackets"
+        else:
+            process_by_tool6 = False
+            review_required = 0
 
         self.registry.save_content_review_human_decision(
             tracking_id=tracking_id,
             classification=new_classification.value,
             mantra_type=new_mantra.value,
             process_by_tool_6=1 if process_by_tool6 else 0,
-            review_required=0,  # Human review resolved it
+            review_required=review_required,
             human_decision_json=human_decision,
             updated_at=now_iso,
+            cutter_proposal_json=json.dumps(cutter_proposal_dict) if cutter_proposal_dict else None,
+            review_reason=review_reason,
         )
 
         updated_dict = self.registry.get_content_review(tracking_id)

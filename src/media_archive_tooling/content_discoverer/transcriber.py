@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .audio_extractor import compute_file_sha256
-from .models import TranscriptArtifact, TranscriptSegment
+from .models import DerivedAudioDetails, TranscriptArtifact, TranscriptSegment
 
 
 MAX_TRANSCRIPT_BYTES = 100 * 1024 * 1024  # 100 MB max allowed JSON payload
@@ -36,7 +36,7 @@ def parse_timestamp_seconds(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)):
         sec = float(value)
         return sec if math.isfinite(sec) and sec >= 0 else None
-    
+
     text = str(value).strip().replace(",", ".")
     if not text:
         return None
@@ -95,6 +95,9 @@ class BaseTranscriptionAdapter(ABC):
         self,
         audio_path: Path,
         tracking_id: str,
+        source_path: Optional[Path] = None,
+        source_type: str = "audio",
+        derived_audio_details: Optional[DerivedAudioDetails] = None,
         requested_device: str = "auto",
         model_path: Optional[Path] = None,
         force: bool = False,
@@ -162,6 +165,9 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
         self,
         audio_path: Path,
         tracking_id: str,
+        source_path: Optional[Path] = None,
+        source_type: str = "audio",
+        derived_audio_details: Optional[DerivedAudioDetails] = None,
         requested_device: str = "auto",
         model_path: Optional[Path] = None,
         force: bool = False,
@@ -173,22 +179,50 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
             raise TranscriptionBlockedError(f"Audio file does not exist: {audio_path}")
 
         resolved_model = self._resolve_model(model_path)
-        input_sha256 = compute_file_sha256(audio_path)
+        model_sha256 = compute_file_sha256(resolved_model)
+
+        orig_source_path = source_path.resolve() if source_path else audio_path
+        input_sha256 = compute_file_sha256(orig_source_path)
+        audio_sha256 = compute_file_sha256(audio_path)
         duration_seconds = probe_audio_duration(audio_path)
 
         # Artifact directory
         base_dir = root_dir or Path.cwd()
         transcripts_dir = base_dir / ".renamer" / "transcripts"
-        transcripts_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = transcripts_dir / f"{tracking_id}.json"
 
         # Check existing sidecar cache
         if artifact_path.exists() and not force:
             try:
                 cached_data = json.loads(artifact_path.read_text(encoding="utf-8"))
+                raw_meta = cached_data.get("raw_metadata", {})
+
+                input_match = cached_data.get("input_sha256") == input_sha256
+                model_path_match = raw_meta.get("model_path") == str(resolved_model)
+                model_hash_match = raw_meta.get("model_sha256") == model_sha256
+                threads_match = raw_meta.get("threads") == self.threads
+                contract_match = cached_data.get("contract_version") == "1.0"
+                classification_match = cached_data.get("classification_version") == "1.0"
+                source_type_match = cached_data.get("source_type", "audio") == source_type
+
+                derived_match = True
+                if source_type == "video":
+                    cached_derived = cached_data.get("derived_mp3_details")
+                    if not cached_derived:
+                        derived_match = False
+                    else:
+                        if cached_derived.get("derived_sha256") != audio_sha256:
+                            derived_match = False
+
                 if (
-                    cached_data.get("input_sha256") == input_sha256
-                    and cached_data.get("raw_metadata", {}).get("model_path") == str(resolved_model)
+                    input_match
+                    and model_path_match
+                    and model_hash_match
+                    and threads_match
+                    and contract_match
+                    and classification_match
+                    and source_type_match
+                    and derived_match
                 ):
                     return TranscriptArtifact.model_validate(cached_data)
             except Exception:
@@ -295,10 +329,14 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
             except Exception as exc:
                 raise TranscriptionBlockedError("Malformed Whisper JSON output") from exc
 
-            # Post-transcription check: ensure original audio was not altered during run
+            # Post-transcription check: ensure files were not altered during run
             post_sha256 = compute_file_sha256(audio_path)
-            if post_sha256 != input_sha256:
+            if post_sha256 != audio_sha256:
                 raise TranscriptionBlockedError("Source file changed during transcription")
+            if source_path and source_path.exists():
+                post_src_sha = compute_file_sha256(source_path)
+                if post_src_sha != input_sha256:
+                    raise TranscriptionBlockedError("Source video file changed during transcription")
 
             elapsed = time.time() - start_t
             rtf = (elapsed / duration_seconds) if duration_seconds > 0 else None
@@ -380,9 +418,10 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
             artifact = TranscriptArtifact(
                 contract_version="1.0",
                 tracking_id=tracking_id,
-                input_path=str(audio_path),
+                input_path=str(orig_source_path),
                 input_sha256=input_sha256,
-                source_type="audio",
+                source_type=source_type,
+                derived_mp3_details=derived_audio_details,
                 duration_seconds=effective_duration,
                 detected_language=detected_lang,
                 segments=normalized_segments,
@@ -407,6 +446,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
             artifact.transcript_sha256 = hashlib.sha256(serialized).hexdigest()
 
             if not dry_run:
+                transcripts_dir.mkdir(parents=True, exist_ok=True)
                 # Atomic write with 0o600 permissions
                 tmp_art = artifact_path.parent / f".{artifact_path.name}.{os.getpid()}.tmp"
                 descriptor = os.open(tmp_art, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -453,6 +493,9 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         self,
         audio_path: Path,
         tracking_id: str,
+        source_path: Optional[Path] = None,
+        source_type: str = "audio",
+        derived_audio_details: Optional[DerivedAudioDetails] = None,
         requested_device: str = "auto",
         model_path: Optional[Path] = None,
         force: bool = False,
@@ -467,7 +510,9 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         if self.simulate_source_change:
             raise TranscriptionBlockedError("Source file changed during transcription")
 
-        input_sha256 = compute_file_sha256(audio_path) if audio_path.exists() else "fake_sha256"
+        orig_source_path = source_path.resolve() if source_path else audio_path
+        input_sha256 = compute_file_sha256(orig_source_path) if orig_source_path.exists() else "fake_sha256"
+        audio_sha256 = compute_file_sha256(audio_path) if audio_path.exists() else "fake_audio_sha256"
 
         device_mode = requested_device.casefold()
         if device_mode == "metal" and self.simulate_metal_fallback:
@@ -499,14 +544,38 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
 
         base_dir = root_dir or Path.cwd()
         transcripts_dir = base_dir / ".renamer" / "transcripts"
-        transcripts_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = transcripts_dir / f"{tracking_id}.json"
 
         # Check cached sidecar
         if artifact_path.exists() and not force:
             try:
                 cached_data = json.loads(artifact_path.read_text(encoding="utf-8"))
-                if cached_data.get("input_sha256") == input_sha256:
+                raw_meta = cached_data.get("raw_metadata", {})
+                input_match = cached_data.get("input_sha256") == input_sha256
+                model_hash_match = raw_meta.get("model_sha256") == "fake_model_sha256"
+                threads_match = raw_meta.get("threads") == 4
+                contract_match = cached_data.get("contract_version") == "1.0"
+                classification_match = cached_data.get("classification_version") == "1.0"
+                source_type_match = cached_data.get("source_type", "audio") == source_type
+
+                derived_match = True
+                if source_type == "video":
+                    cached_derived = cached_data.get("derived_mp3_details")
+                    if not cached_derived:
+                        derived_match = False
+                    else:
+                        if cached_derived.get("derived_sha256") != audio_sha256:
+                            derived_match = False
+
+                if (
+                    input_match
+                    and model_hash_match
+                    and threads_match
+                    and contract_match
+                    and classification_match
+                    and source_type_match
+                    and derived_match
+                ):
                     return TranscriptArtifact.model_validate(cached_data)
             except Exception:
                 pass
@@ -517,9 +586,10 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         artifact = TranscriptArtifact(
             contract_version="1.0",
             tracking_id=tracking_id,
-            input_path=str(audio_path),
+            input_path=str(orig_source_path),
             input_sha256=input_sha256,
-            source_type="audio",
+            source_type=source_type,
+            derived_mp3_details=derived_audio_details,
             duration_seconds=effective_duration,
             detected_language=self.detected_language,
             segments=normalized,
@@ -540,6 +610,7 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         artifact.transcript_sha256 = hashlib.sha256(serialized).hexdigest()
 
         if not dry_run:
+            transcripts_dir.mkdir(parents=True, exist_ok=True)
             # Atomic write with 0o600 permissions
             tmp_art = artifact_path.parent / f".{artifact_path.name}.{os.getpid()}.tmp"
             descriptor = os.open(tmp_art, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

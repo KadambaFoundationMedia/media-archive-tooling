@@ -969,16 +969,58 @@ class LocalRegistry:
         review_required: int,
         human_decision_json: Dict[str, Any],
         updated_at: str,
+        cutter_proposal_json: Optional[str] = None,
+        review_reason: Optional[str] = None,
     ):
-        """Update content review record with human operator decision."""
+        """Update content review record with human operator decision and synchronized result_json."""
         with self._get_conn() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "SELECT result_json, cutter_proposal_json, review_reason FROM content_reviews WHERE tracking_id = ?",
+                (tracking_id,),
+            )
+            row = cursor.fetchone()
+
+            existing_result = {}
+            if row and row["result_json"]:
+                try:
+                    existing_result = json.loads(row["result_json"])
+                except Exception:
+                    existing_result = {}
+
+            existing_result["classification"] = classification
+            existing_result["mantra_type"] = mantra_type
+            existing_result["process_by_tool_6"] = bool(process_by_tool_6)
+            existing_result["review_required"] = bool(review_required)
+            existing_result["human_decision"] = human_decision_json
+            existing_result["updated_at"] = updated_at
+
+            final_cutter_json = row["cutter_proposal_json"] if row else None
+            if cutter_proposal_json is not None:
+                final_cutter_json = cutter_proposal_json
+
+            if final_cutter_json:
+                try:
+                    existing_result["cutter_proposal"] = json.loads(final_cutter_json)
+                except Exception:
+                    existing_result["cutter_proposal"] = None
+            else:
+                existing_result["cutter_proposal"] = None
+
+            final_review_reason = row["review_reason"] if row else None
+            if review_reason is not None:
+                final_review_reason = review_reason
+            existing_result["review_reason"] = final_review_reason
+
             cursor.execute("""
             UPDATE content_reviews
             SET classification = ?,
                 mantra_type = ?,
                 process_by_tool_6 = ?,
                 review_required = ?,
+                cutter_proposal_json = ?,
+                review_reason = ?,
+                result_json = ?,
                 human_decision_json = ?,
                 updated_at = ?
             WHERE tracking_id = ?
@@ -987,6 +1029,9 @@ class LocalRegistry:
                 mantra_type,
                 process_by_tool_6,
                 review_required,
+                final_cutter_json,
+                final_review_reason,
+                json.dumps(existing_result),
                 json.dumps(human_decision_json),
                 updated_at,
                 tracking_id,

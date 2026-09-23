@@ -414,11 +414,28 @@ class MainToolingScriptService:
             if self.workflow == WorkflowType.PROCESSING:
                 existing_tid = self.registry.find_tracking_id_by_path(file_path)
                 if not existing_tid:
-                    try:
-                        parser_res = self.parser.parse_file(file_path=file_path, mode=RenameMode.INITIAL, collection_grammar=grammar)
-                        existing_tid = parser_res.identity.tracking_id
-                    except Exception:
-                        existing_tid = f"trk_{hashlib.sha256(str(file_path).encode()).hexdigest()[:8]}"
+                    reason = "Target has not undergone Phase 1 renamer processing"
+                    self.logger.warning("FILE_PHASE1_INELIGIBLE", file_path=file_path, details={"reason": reason})
+                    t5_stage = StageResult(
+                        stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
+                        success=False,
+                        summary=f"Tool 5 — Skipped: {reason}",
+                        error=reason,
+                    )
+                    stage_results.append(t5_stage)
+                    self.reporter.report_stage_result(t5_stage)
+                    review_reasons.append(reason)
+                    return FileRunResult(
+                        target_path=str(file_path),
+                        tracking_id="unregistered",
+                        original_filename=orig_filename,
+                        final_filename=orig_filename,
+                        final_path=str(file_path),
+                        status=FileExecutionStatus.REVIEW_REQUIRED,
+                        review_reasons=review_reasons,
+                        stage_results=stage_results,
+                        content_discovery_result=None,
+                    )
 
                 tracking_id = existing_tid
                 t5_stage, content_res = self._run_tool_5(file_path, tracking_id)
