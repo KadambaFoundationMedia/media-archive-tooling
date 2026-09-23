@@ -10,6 +10,24 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 Status: `ACCEPTED`
 
+## Tool 6 integration amendment — pending implementation (2026-09-23)
+
+The owner's Tool 6 requirements supersede the accepted coarse-boundary-only
+handoff. `docs/tool-5-content-discoverer-build-plan.md` Section 7.3 now
+requires a recording-specific exact numeric end-of-singing timestamp with
+audio/transcript evidence and source-fingerprint binding. High-confidence
+`KIRTAN_AND_CLASS` may be cut automatically by Tool 6; uncertain points stay
+intact for waveform/audio portal review. The existing `CutterBoundaryProposal`
+does **not** yet provide this contract. Tool 6 implementation must include
+the Tool 5 interface/classifier changes and corresponding regressions.
+
+The owner also supplied common initiation and Vyasa-puja structures. Tool 5
+should recognize/retain these multi-part forms, but neither may enter the
+first two-part Tool 6 cutter automatically. Existing tests that route
+initiations to Tool 6 must be revised to match this decision. This is a
+forward integration requirement, not a retroactive claim that the accepted
+Tool 5 implementation already performs exact cutting.
+
 Downstream coordination (2026-09-23): The user-confirmed future sequence is
 `docs/full-pipeline-workflow-amendment.md`. Tool 5 itself continues to
 transcribe/classify in situ without deleting its input. Later Tool 6, only

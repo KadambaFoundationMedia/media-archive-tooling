@@ -22,9 +22,17 @@ A class should have this structure after editing:
 6. Class (the explanation of the purport by the speaker)  
 7. Questions and answers (if present)
 
-Original filename: 2011-08-20\_KKS\_SB-1-19-31-with-radha-madhava\_oslo\_fi.wma  
-Edited filename \- kirtan: 2011-08-20\_KKS\_Jaya-radha-madhava\_oslo\_fi.mp3  
-Edited filename \- class: 2011-08-20\_KKS\_SB-1-19-31\_fi.mp3
+Original filename: 2011-08-29\_KKS\_SB-1-19-31-with-radha-madhava\_Oslo-no.wma
+
+Tool 6 output \- kirtan: 2011-08-29\_KKS\_Jaya-radha-madhava\_Oslo-no.wma
+
+Tool 6 output \- class: 2011-08-29\_KKS\_SB-1-19-31\_Oslo-no.wma
+
+These timestamps describe **only this recording**; another recording needs
+its own Tool 5 evidence and cut point. Tool 6 cuts at the end of singing and
+trims only actual leading silence in either result. The additional internal
+class edits shown below are for later class-processing tools, not permission
+for Tool 6 to remove meaningful speech or prayers.
 
 **Timings original file (WMA)**
 
@@ -44,4 +52,3 @@ Edited filename \- class: 2011-08-20\_KKS\_SB-1-19-31\_fi.mp3
 | 20:25 \- 21:15 | Oblations \- Om ajnana timeranda shaj | Trim |
 | 21:15 \- 01:43:33 | Start of class | Keep |
 | 01:43:33 \- end | Rest of the class mixed with Questions and answers | Keep |
-

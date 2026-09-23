@@ -432,6 +432,22 @@ A populated value should not normally enter this workflow because none of Tools 
 
 Write the full actual archive filesystem path for the synchronized file.
 
+### Tool 6 video-derived class audio — `audio_file_path` amendment
+
+When Tool 6 cuts a combination recording whose original source is video, the
+video remains in the archive. The existing class Media row keeps its
+`Filename` and `media_archive_path` pointing to that video. Tool 4 writes the
+**full local filesystem path** of the separate class MP3 to the
+`audio_file_path` column and updates that column after a later Tool 11 move.
+This is an explicit exception to assigning every new class output to
+`media_archive_path`. Validate that the live `audio_file_path` field exists
+and accepts a path string before writing; if not, block that field and retain
+durable pending/review state. Never place a local path in the `Audio link` URL
+field or replace the confirmed video filename/path merely because its audio
+was cut. The singing MP3 is a separate item with its own row, `Filename`, and
+`media_archive_path`, subject to the normal Tool 2 matching and Tool 4 write
+gates. Preserve all unrelated and human-confirmed fields.
+
 ### Location and country
 
 When the live `media` schema exposes the existing Media location/country fields (currently semantically represented as `Place, location` and `Country`), write trustworthy resolved Tool 1 location/country evidence. Apply the country/location select-option policy above.
