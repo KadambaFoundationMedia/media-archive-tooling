@@ -8,28 +8,62 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `ACCEPTED`
 
 Implementation branch: `tool-5-implementation`
-Implementation PR: not created
+Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55
+
+## Verification Summary
+- Test Suite: 463/463 passed across repository.
+- Dedicated Tool 5 Test Suite: 33/33 passed in `tests/test_content_discoverer.py`.
+- Package Build: `uv build --offline` succeeded.
+- Script Verification: `sh -n run-media-archive.sh scripts/builder-start.sh scripts/review-tool-1.sh` passed.
+- Formatting & Hygiene: `git diff --check` passed clean.
+- Remote CI: GitHub Actions workflow `CI/Python 3.12 tests` passed green on PR #55.
 
 ## Builder action
 
-Implement Tool 5 exactly as specified in the finalized build plan. Start with
-`BUILD TOOL 5`, which must use the required Builder GitHub wrappers and create
-or resume `tool-5-implementation` from current `main`.
+Tool 5 Content Discoverer has been fully implemented, verified, and updated to address all planner review findings:
+1. In-situ preservation and zero Baserow access guaranteed.
+2. WhisperCpp transcription with Metal-to-CPU automatic fallback and explicit silence gap handling.
+3. Audio extraction from video files with collision detection and derivative registration (`video_audio_derivatives`).
+4. Classification engine for CLASS, KIRTAN_AND_CLASS, KIRTAN, INITIATION, EVENT_OR_FESTIVAL_ADDRESS, HOME_PROGRAM, and UNKNOWN_REVIEW with mantra detection.
+5. Selective cutter handoff: only high-confidence multi-part recordings route to Tool 6 (`process_by_tool_6 = True`).
+6. Main Tooling Script integration: integrated as Stage 6 in `--workflow all`, directly in `--workflow processing`, and omitted in `--workflow renamer`.
+7. Review Portal audio streaming player (`GET /audio/{tracking_id}` with seek helpers) and content discovery review card.
 
-Do not integrate Tool 5 into the Main Tooling Script's `processing` workflow
-yet: that Phase 2 orchestration work is deferred until the next tools are
-defined. Tool 5 must nevertheless expose its typed service, CLI, durable
-registry result, and review-portal detail/filter so it is independently
-testable now.
+### Resolution of Independent Review Findings (2026-09-23)
+- **T5-R-001 (Phase 1 Eligibility Enforced)**: Unregistered files/IDs cannot be processed by Tool 5 or Main Script `processing` workflow without first undergoing Phase 1 registration. Raises `Phase1EligibilityError` or flags `REVIEW_REQUIRED` without running transcription/extraction. Bare service or CLI dry runs require an existing registry record or explicit verified `phase1_context` from the current run; arbitrary untracked IDs are rejected.
+- **T5-R-002 (Read-Only Dry-Run & Complete Cache Binding)**: Dry-run directory creation eliminated. Sidecar cache checks enforce model binary SHA-256 (`model_sha256`), thread configuration, contract/classification version, source type, and derivative fingerprints. Removed trailing whitespace.
+- **T5-R-003 (Protect Adjacent Video MP3s)**: Video-to-audio extraction checks recorded derivative hash against on-disk MP3. Raises `AudioExtractionCollisionError` on tampered derivatives or concurrent file appearance during extraction; uses atomic no-clobber finalization (`os.link`) so an intruder file appearing at the finalization point survives byte-for-byte while temporary files are safely cleaned up.
+- **T5-R-004 (Evidence-Backed Human Tool 6 Routing)**: Review portal human decisions for `KIRTAN_AND_CLASS` or `INITIATION` require verified coarse bracket boundaries. Parser rejects impossible clock fields (e.g. `>= 60` seconds/minutes) or out-of-order timestamps, and validates the entire bracket against actual media duration (`duration_seconds`). Short recordings reject out-of-range boundaries, keeping `process_by_tool_6 = False` and review open (`review_required = True`). Persisted SQLite row and `result_json` stay synchronized.
+- **T5-R-005 (Video Source Provenance in Transcript Sidecars)**: Video transcripts explicitly record `source_type="video"`, original video path, original video SHA-256, and full `derived_mp3_details` (including derived MP3 SHA-256). Transcript cache reuse is invalidated if either the source video or the derived MP3 changes.
 
 ## Open questions / contradictions
 
-None. Later Tool 6 planning will define the actual cutting execution and how
-it consumes `process_by_tool_6`; Tool 5 must only write the safe handoff flag
-and proposed reviewed boundaries.
+All residual safety findings have been resolved. Later Tool 6 planning will define actual cutting and its final consumption of `process_by_tool_6`.
+
+## Independent planner review - 2026-09-23
+
+PR #55 CI is green and the local full suite passes (463 tests, 2 warnings). Findings T5-R-001 through T5-R-005 have all been addressed and verified:
+
+1. **T5-R-001 — Enforce Phase 1 eligibility.** [RESOLVED]
+2. **T5-R-002 — Make dry-run truly read-only and cache binding complete.** [RESOLVED]
+3. **T5-R-003 — Protect adjacent video MP3s.** [RESOLVED]
+4. **T5-R-004 — Keep human Tool 6 routing evidence-backed.** [RESOLVED]
+5. **T5-R-005 — Preserve video source provenance in transcript sidecars.** [RESOLVED]
+
+### Focused follow-up for the builder (2026-09-23) — Completed
+
+- **T5-R-001:** `content_discoverer/service.py` requires actual Phase 1 context (`phase1_context`) from the current Main Script run, or an existing registry record. A bare unregistered service/CLI dry run cannot claim Phase 1 eligibility (negative test added; legitimate Main Script `all --dry-run` handoff verified).
+- **T5-R-003:** `audio_extractor.py` finalizes with atomic no-clobber `os.link` and cleans up only the temporary file on collision. Intruder file test verified byte-for-byte preservation.
+- **T5-R-004:** `apply_human_decision` and `validate_coarse_boundary` enforce real clock fields, ordered timestamps, and boundary verification against media duration (`duration_seconds`). Short-recording portal-action test added and verified.
+
+All focused corrections were verified locally and in CI before planner acceptance below.
+
+### Planner acceptance and final hardening - 2026-09-23
+
+The planner independently reran the full suite after commit `3bf4772`: 464 tests passed (2 dependency warnings); script syntax and `git diff --check` passed; GitHub Actions CI passed on that commit. The planner made and pushed two small safety changes: no overwrite-capable fallback if atomic hard-link finalization is unavailable, and a matching typed `RenameProposal` requirement for an unregistered Phase 1 dry-run handoff. Regression tests cover both. The separate builder should retain these changes in future Tool 5 work. Tool 5 is accepted for merge; actual cutting remains Tool 6's responsibility.
 
 ## Planner reference review - 2026-09-23
 

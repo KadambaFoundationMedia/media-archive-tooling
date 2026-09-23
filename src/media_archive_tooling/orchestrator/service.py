@@ -1,5 +1,6 @@
 """Main Tooling Script application service coordinating discovery, Tools 1–4 pipeline, and audit trails."""
 from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -114,6 +115,7 @@ class MainToolingScriptService:
         tool2_service: Optional[MediaDatabaseReviewService] = None,
         travel_service: Optional[TravelScheduleReviewService] = None,
         tool4_service: Optional[MediaDatabaseUpdaterService] = None,
+        tool5_service: Optional[Any] = None,
         workflow: WorkflowType = WorkflowType.ALL,
         dry_run: bool = False,
         verbose: bool = False,
@@ -125,6 +127,7 @@ class MainToolingScriptService:
         self.tool2_service = tool2_service
         self.travel_service = travel_service
         self.tool4_service = tool4_service
+        self.tool5_service = tool5_service
         self.workflow = workflow
         self.dry_run = dry_run
         self.verbose = verbose
@@ -231,7 +234,7 @@ class MainToolingScriptService:
                 )
 
         # 1. Validate workflow availability
-        if self.workflow == WorkflowType.PROCESSING:
+        if self.workflow == WorkflowType.PROCESSING and self.tool5_service is None:
             msg = "Workflow 'processing' is not available yet (Tools 5–11 pending)."
             self.logger.error("WORKFLOW_UNAVAILABLE", details={"workflow": "processing", "error": msg})
             print(f"Error: {msg}", file=sys.stderr if "sys" in globals() else None)
@@ -245,7 +248,7 @@ class MainToolingScriptService:
             )
 
         # 2. Target discovery & pre-flight existence checks
-        discovery = discover_media_targets(targets)
+        discovery = discover_media_targets(targets, registry=self.registry)
         if discovery.missing_targets:
             err_msg = f"One or more target paths do not exist: {', '.join(discovery.missing_targets)}"
             self.logger.error("MISSING_TARGETS", details={"missing": discovery.missing_targets})
@@ -340,6 +343,58 @@ class MainToolingScriptService:
 
         return summary
 
+    def _run_tool_5(self, path: Path, tracking_id: str, phase1_context: Optional[Any] = None) -> Tuple[StageResult, Optional[Any]]:
+        """Execute Tool 5 Content Discovery on target media path."""
+        self.logger.info("STAGE_START", tool="tool_5", file_path=path, tracking_id=tracking_id, details={"dry_run": self.dry_run})
+        if self.tool5_service is None:
+            t5_stage = StageResult(
+                stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
+                success=False,
+                summary="Tool 5 — Content Discovery: Service not configured",
+                error="Tool 5 service unavailable",
+            )
+            return t5_stage, None
+
+        try:
+            content_res = self.tool5_service.discover_content(
+                target=path,
+                tracking_id=tracking_id,
+                dry_run=self.dry_run,
+                phase1_context=phase1_context,
+            )
+            boundary_str = f" | Boundary: {content_res.cutter_proposal.suggested_cut_points}" if content_res.cutter_proposal else ""
+            route_str = " -> process_by_tool_6" if content_res.process_by_tool_6 else ""
+            summary_str = (
+                f"Tool 5 — Content Discovery: {content_res.classification.value} ({content_res.confidence.value}) | "
+                f"Mantra: {content_res.mantra_type.value}{boundary_str}{route_str}"
+            )
+            t5_stage = StageResult(
+                stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
+                success=not content_res.review_required,
+                summary=summary_str,
+                details={
+                    "classification": content_res.classification.value,
+                    "confidence": content_res.confidence.value,
+                    "mantra_type": content_res.mantra_type.value,
+                    "process_by_tool_6": content_res.process_by_tool_6,
+                    "transcript_path": content_res.transcript_path,
+                    "review_required": content_res.review_required,
+                    "review_reason": content_res.review_reason,
+                },
+            )
+            self.logger.info("STAGE_COMPLETE", tool="tool_5", file_path=path, tracking_id=tracking_id, details=t5_stage.details)
+            return t5_stage, content_res
+        except Exception as e:
+            err_msg = f"Tool 5 content discovery error: {e}"
+            self.logger.error("TOOL_5_ERROR", tool="tool_5", tracking_id=tracking_id, details={"error": err_msg})
+            t5_stage = StageResult(
+                stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
+                success=False,
+                summary=f"Tool 5 — Error: {err_msg}",
+                error=err_msg,
+            )
+            return t5_stage, None
+
     def _process_single_file(self, file_path: Path) -> FileRunResult:
         """Execute the continuous Phase A pipeline on an individual media file."""
         file_path = file_path.resolve()
@@ -355,6 +410,56 @@ class MainToolingScriptService:
                 if f.is_file() and not f.name.startswith(".")
             ] if parent_dir.exists() else [orig_filename]
             grammar = CollectionGrammar(parent_dir, sibling_names)
+
+            # Processing workflow: Tool 5 Content Discovery only
+            if self.workflow == WorkflowType.PROCESSING:
+                existing_tid = self.registry.find_tracking_id_by_path(file_path)
+                if not existing_tid:
+                    reason = "Target has not undergone Phase 1 renamer processing"
+                    self.logger.warning("FILE_PHASE1_INELIGIBLE", file_path=file_path, details={"reason": reason})
+                    t5_stage = StageResult(
+                        stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
+                        success=False,
+                        summary=f"Tool 5 — Skipped: {reason}",
+                        error=reason,
+                    )
+                    stage_results.append(t5_stage)
+                    self.reporter.report_stage_result(t5_stage)
+                    review_reasons.append(reason)
+                    return FileRunResult(
+                        target_path=str(file_path),
+                        tracking_id="unregistered",
+                        original_filename=orig_filename,
+                        final_filename=orig_filename,
+                        final_path=str(file_path),
+                        status=FileExecutionStatus.REVIEW_REQUIRED,
+                        review_reasons=review_reasons,
+                        stage_results=stage_results,
+                        content_discovery_result=None,
+                    )
+
+                tracking_id = existing_tid
+                t5_stage, content_res = self._run_tool_5(file_path, tracking_id)
+                stage_results.append(t5_stage)
+                self.reporter.report_stage_result(t5_stage)
+
+                status = FileExecutionStatus.DRY_RUN if self.dry_run else FileExecutionStatus.COMPLETED
+                if content_res and content_res.review_required:
+                    status = FileExecutionStatus.REVIEW_REQUIRED
+                    if content_res.review_reason:
+                        review_reasons.append(content_res.review_reason)
+
+                return FileRunResult(
+                    target_path=str(file_path),
+                    tracking_id=tracking_id,
+                    original_filename=orig_filename,
+                    final_filename=orig_filename,
+                    final_path=str(file_path),
+                    status=status,
+                    review_reasons=review_reasons,
+                    stage_results=stage_results,
+                    content_discovery_result=content_res,
+                )
 
             # -------------------------------------------------------------
             # Stage 1: Tool 1 Initial Interpretation
@@ -664,6 +769,16 @@ class MainToolingScriptService:
                 self.reporter.report_stage_result(t4_stage)
                 self.logger.info("STAGE_COMPLETE", tool="tool_4", file_path=file_path, tracking_id=tracking_id, details=t4_stage.details)
 
+                content_res = None
+                if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
+                    t5_stage, content_res = self._run_tool_5(file_path, tracking_id, phase1_context=prop_final)
+                    stage_results.append(t5_stage)
+                    self.reporter.report_stage_result(t5_stage)
+                    if content_res and content_res.review_required:
+                        status = FileExecutionStatus.REVIEW_REQUIRED
+                        if content_res.review_reason and content_res.review_reason not in review_reasons:
+                            review_reasons.append(content_res.review_reason)
+
                 return FileRunResult(
                     target_path=str(file_path),
                     tracking_id=tracking_id,
@@ -676,6 +791,7 @@ class MainToolingScriptService:
                     tool4_row_id=tool4_row_id,
                     tool4_operation=tool4_operation,
                     tool4_fields=tool4_fields,
+                    content_discovery_result=content_res,
                 )
 
             # Live Mode execution
@@ -692,6 +808,15 @@ class MainToolingScriptService:
                 self.reporter.report_stage_result(t4_stage)
                 self.logger.info("STAGE_COMPLETE", tool="tool_4", file_path=file_path, tracking_id=tracking_id, details=t4_stage.details)
 
+                content_res = None
+                if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
+                    t5_stage, content_res = self._run_tool_5(file_path, tracking_id)
+                    stage_results.append(t5_stage)
+                    self.reporter.report_stage_result(t5_stage)
+                    if content_res and content_res.review_required:
+                        if content_res.review_reason and content_res.review_reason not in prop_final.review_reasons:
+                            prop_final.review_reasons.append(content_res.review_reason)
+
                 return FileRunResult(
                     target_path=str(file_path),
                     tracking_id=tracking_id,
@@ -701,6 +826,7 @@ class MainToolingScriptService:
                     status=status,
                     review_reasons=prop_final.review_reasons,
                     stage_results=stage_results,
+                    content_discovery_result=content_res,
                 )
 
             # Execute commit through accepted RenameCommitService boundary (R-003)
@@ -867,6 +993,16 @@ class MainToolingScriptService:
             self.reporter.report_stage_result(t4_stage)
             self.logger.info("STAGE_COMPLETE", tool="tool_4", file_path=current_path, tracking_id=tracking_id, details=t4_stage.details)
 
+            content_res = None
+            if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
+                t5_stage, content_res = self._run_tool_5(current_path, tracking_id, phase1_context=prop_final)
+                stage_results.append(t5_stage)
+                self.reporter.report_stage_result(t5_stage)
+                if content_res and content_res.review_required:
+                    status = FileExecutionStatus.REVIEW_REQUIRED
+                    if content_res.review_reason and content_res.review_reason not in review_reasons:
+                        review_reasons.append(content_res.review_reason)
+
             return FileRunResult(
                 target_path=str(file_path),
                 tracking_id=tracking_id,
@@ -881,6 +1017,7 @@ class MainToolingScriptService:
                 tool4_fields=tool4_fields,
                 tool4_sync_status=tool4_sync_status,
                 tool4_live_row=tool4_live_row,
+                content_discovery_result=content_res,
             )
 
         except Exception as e:
@@ -919,6 +1056,7 @@ def create_main_tooling_service(
     tool2_service: Optional[MediaDatabaseReviewService] = None,
     travel_service: Optional[TravelScheduleReviewService] = None,
     tool4_service: Optional[MediaDatabaseUpdaterService] = None,
+    tool5_service: Optional[Any] = None,
     travel_schedule_path: Optional[Union[str, Path]] = None,
 ) -> MainToolingScriptService:
     """Factory creating a fully wired MainToolingScriptService with all dependencies."""
@@ -991,6 +1129,11 @@ def create_main_tooling_service(
             tool2_service=tool2_service,
         )
 
+    # Tool 5 Content Discoverer
+    if tool5_service is None:
+        from ..content_discoverer.service import ContentDiscovererService
+        tool5_service = ContentDiscovererService(registry=registry)
+
     return MainToolingScriptService(
         registry=registry,
         logger=logger,
@@ -999,6 +1142,7 @@ def create_main_tooling_service(
         tool2_service=tool2_service,
         travel_service=travel_service,
         tool4_service=tool4_service,
+        tool5_service=tool5_service,
         workflow=wf,
         dry_run=dry_run,
         verbose=verbose,

@@ -99,8 +99,8 @@ class TerminalReporter:
         print(f"Log File:                    {summary.log_path}")
         print(f"Registry Database:           {summary.registry_path}")
 
-        if summary.workflow == WorkflowType.ALL:
-            print("Note:                        Processing workflow (Tools 5–11) is pending and not yet installed.")
+        if summary.workflow in (WorkflowType.ALL, WorkflowType.PROCESSING):
+            print("Note:                        Processing workflow (Tools 6–11) is pending and not yet installed.")
 
         needs_eval = (
             summary.review_required > 0

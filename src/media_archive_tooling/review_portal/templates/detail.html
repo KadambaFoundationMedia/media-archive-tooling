@@ -366,6 +366,115 @@
     </div>
     {% endif %}
 
+    <!-- Audio Player Card -->
+    <div class="card" id="audio-player-card">
+        <h2>Audio Preview</h2>
+        {% if has_audio %}
+        <div style="margin-bottom: 12px;">
+            <audio id="audio-preview" controls preload="metadata" style="width: 100%; border-radius: 6px;">
+                <source src="/audio/{{ file.tracking_id }}" type="audio/mpeg">
+                Your browser does not support audio playback.
+            </audio>
+        </div>
+        {% if content_review and content_review.cutter_proposal %}
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; align-items: center;">
+            <span style="font-size: 12px; color: var(--muted-color); font-weight: 600;">Jump to timestamps:</span>
+            {% if content_review.cutter_proposal.kirtan_start_sec is defined and content_review.cutter_proposal.kirtan_start_sec is not none %}
+            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ content_review.cutter_proposal.kirtan_start_sec }})">Kirtan Start ({{ content_review.cutter_proposal.kirtan_start_sec }}s)</button>
+            {% endif %}
+            {% if content_review.cutter_proposal.kirtan_end_sec is defined and content_review.cutter_proposal.kirtan_end_sec is not none %}
+            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ content_review.cutter_proposal.kirtan_end_sec }})">Kirtan End ({{ content_review.cutter_proposal.kirtan_end_sec }}s)</button>
+            {% endif %}
+            {% if content_review.cutter_proposal.class_start_sec is defined and content_review.cutter_proposal.class_start_sec is not none %}
+            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ content_review.cutter_proposal.class_start_sec }})">Class Start ({{ content_review.cutter_proposal.class_start_sec }}s)</button>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="muted-text" style="font-size: 13px;">No audio file available for preview.</div>
+        {% endif %}
+    </div>
+
+    <!-- Tool 5 Content Discovery Card -->
+    {% if content_review %}
+    <div class="card" id="content-discovery-card">
+        <h2>Tool 5 — Content Discovery &amp; Transcription</h2>
+        <div style="margin-bottom: 16px;">
+            <div>
+                Classification: <strong>{{ content_review.classification }}</strong>
+                &middot; Confidence: <strong>{{ content_review.confidence }}</strong>
+                &middot; Mantra: <strong>{{ content_review.mantra_type }}</strong>
+            </div>
+            <div style="margin-top: 4px;">
+                Cutter Routing:
+                {% if content_review.process_by_tool_6 %}
+                <span class="badge" style="background: var(--exact); color: white;">process_by_tool_6</span>
+                {% else %}
+                <span class="badge" style="background: var(--unresolved); color: white;">none</span>
+                {% endif %}
+                &middot; Review Required:
+                {% if content_review.review_required %}
+                <span class="badge" style="background: var(--ambiguous); color: white;">YES</span> ({{ content_review.review_reason or 'Needs Review' }})
+                {% else %}
+                <span class="badge" style="background: var(--exact); color: white;">NO</span>
+                {% endif %}
+            </div>
+            {% if content_review.cutter_proposal and content_review.cutter_proposal.suggested_cut_points %}
+            <div style="margin-top: 6px;">
+                <strong>Suggested Cut Points:</strong> <code>{{ content_review.cutter_proposal.suggested_cut_points }}</code>
+            </div>
+            {% endif %}
+            <div style="margin-top: 6px; font-size: 12px; color: var(--muted-color);">
+                Transcript: <code>{{ content_review.transcript_path }}</code>
+                {% if content_review.derived_audio_path %}
+                &middot; Derived Audio: <code>{{ content_review.derived_audio_path }}</code>
+                {% endif %}
+            </div>
+            {% if content_review.human_decision %}
+            <div style="margin-top: 10px; padding: 8px 12px; background: var(--header-bg); border-radius: 6px; font-size: 13px;">
+                <strong>Audited Human Review:</strong> Reviewer: <code>{{ content_review.human_decision.reviewer }}</code> at {{ content_review.human_decision.timestamp }}
+                {% if content_review.human_decision.notes %}
+                &middot; Notes: <em>{{ content_review.human_decision.notes }}</em>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+
+        <form method="POST" action="/file/{{ file.tracking_id }}/content-review-action" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+            <h3 style="font-size: 14px; margin-bottom: 12px;">Override / Confirm Content Classification</h3>
+            <div class="grid">
+                <div class="field-group">
+                    <label>Classification:</label>
+                    <select name="classification" style="padding: 6px 10px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-text);">
+                        {% for ctype in ["CLASS", "KIRTAN_AND_CLASS", "KIRTAN", "INITIATION", "EVENT_OR_FESTIVAL_ADDRESS", "HOME_PROGRAM", "UNKNOWN_REVIEW"] %}
+                        <option value="{{ ctype }}" {% if content_review.classification == ctype %}selected{% endif %}>{{ ctype }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field-group">
+                    <label>Mantra Type:</label>
+                    <select name="mantra_type" style="padding: 6px 10px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-text);">
+                        {% for mtype in ["Jaya-radha-madhava", "Jaya-Jaya-Sri-Caitanya", "Nrishmadeva", "Kirtan", "UNKNOWN", "NONE"] %}
+                        <option value="{{ mtype }}" {% if content_review.mantra_type == mtype %}selected{% endif %}>{{ mtype }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="field-group" style="margin-top: 10px;">
+                <label>Coarse Boundary / Cut Points (optional):</label>
+                <input type="text" name="coarse_boundary" value="{% if content_review.cutter_proposal %}{{ content_review.cutter_proposal.suggested_cut_points }}{% endif %}" placeholder="e.g. kirtan 00:00-11:41; class begins 12:23">
+            </div>
+            <div class="field-group" style="margin-top: 10px;">
+                <label>Reviewer Notes:</label>
+                <input type="text" name="notes" placeholder="Reason for classification / boundary confirmation">
+            </div>
+            <div style="margin-top: 14px;">
+                <button type="submit" class="btn btn-primary">Save Content Decision</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
     <form method="POST" action="/file/{{ file.tracking_id }}/update">
         <div class="card">
             <h2>Metadata Fields & Evidence</h2>
@@ -744,6 +853,14 @@
                 });
             }
         })();
+
+        function seekAudio(seconds) {
+            const audio = document.getElementById('audio-preview');
+            if (audio) {
+                audio.currentTime = seconds;
+                audio.play();
+            }
+        }
     </script>
 </body>
 </html>

@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from ..models import ParserResult, RenameProposal
 
@@ -138,6 +138,38 @@ class LocalRegistry:
                 updated_at TEXT NOT NULL
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS content_reviews (
+                tracking_id TEXT PRIMARY KEY,
+                classification TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                mantra_type TEXT NOT NULL,
+                process_by_tool_6 INTEGER NOT NULL,
+                cutter_proposal_json TEXT,
+                transcript_path TEXT NOT NULL,
+                transcript_sha256 TEXT NOT NULL,
+                input_sha256 TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                derived_audio_path TEXT,
+                result_json TEXT NOT NULL,
+                review_required INTEGER NOT NULL,
+                review_reason TEXT,
+                human_decision_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS video_audio_derivatives (
+                derived_path TEXT PRIMARY KEY,
+                source_video_path TEXT NOT NULL,
+                source_video_tracking_id TEXT NOT NULL,
+                source_video_sha256 TEXT NOT NULL,
+                derived_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """)
             try:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
@@ -154,6 +186,9 @@ class LocalRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_test_row_ledger_status ON test_row_ledger(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_test_row_ledger_tracking_id ON test_row_ledger(tracking_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_test_row_ledger_session_id ON test_row_ledger(session_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_reviews_classification ON content_reviews(classification)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_reviews_review_required ON content_reviews(review_required)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_audio_derivatives_source ON video_audio_derivatives(source_video_path)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -844,9 +879,305 @@ class LocalRegistry:
             cursor.execute("DELETE FROM media_db_reviews")
             cursor.execute("DELETE FROM travel_reviews")
             cursor.execute("DELETE FROM media_db_syncs")
+            cursor.execute("DELETE FROM content_reviews")
+            cursor.execute("DELETE FROM video_audio_derivatives")
             cursor.execute("DELETE FROM files")
             cursor.execute("DELETE FROM test_row_ledger")
             conn.commit()
+
+    def save_content_review(self, result: Any):
+        """Persist or replace Tool 5 content discovery result."""
+        now = datetime.now(timezone.utc).isoformat()
+        res_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+        cutter_json = json.dumps(res_dict.get("cutter_proposal")) if res_dict.get("cutter_proposal") else None
+        human_json = json.dumps(res_dict.get("human_decision")) if res_dict.get("human_decision") else None
+        classification_val = res_dict["classification"].value if hasattr(res_dict["classification"], "value") else str(res_dict["classification"])
+        confidence_val = res_dict["confidence"].value if hasattr(res_dict["confidence"], "value") else str(res_dict["confidence"])
+        mantra_val = res_dict["mantra_type"].value if hasattr(res_dict["mantra_type"], "value") else str(res_dict["mantra_type"])
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO content_reviews (
+                tracking_id, classification, confidence, mantra_type, process_by_tool_6,
+                cutter_proposal_json, transcript_path, transcript_sha256, input_sha256,
+                source_path, derived_audio_path, result_json, review_required, review_reason,
+                human_decision_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                res_dict["tracking_id"],
+                classification_val,
+                confidence_val,
+                mantra_val,
+                1 if res_dict.get("process_by_tool_6") else 0,
+                cutter_json,
+                res_dict.get("transcript_path", ""),
+                res_dict.get("transcript_sha256", ""),
+                res_dict.get("input_sha256", ""),
+                res_dict.get("source_path", ""),
+                res_dict.get("derived_audio_path"),
+                json.dumps(res_dict),
+                1 if res_dict.get("review_required") else 0,
+                res_dict.get("review_reason"),
+                human_json,
+                res_dict.get("created_at", now),
+                res_dict.get("updated_at", now),
+            ))
+            conn.commit()
+
+    def get_content_review(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve Tool 5 content discovery review record by tracking_id."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM content_reviews WHERE tracking_id = ?", (tracking_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
+                d["cutter_proposal"] = json.loads(d["cutter_proposal_json"]) if d.get("cutter_proposal_json") else None
+                d["human_decision"] = json.loads(d["human_decision_json"]) if d.get("human_decision_json") else None
+                return d
+        return None
+
+    def list_content_reviews(self, review_required: Optional[bool] = None) -> List[Dict[str, Any]]:
+        """List content reviews with optional review_required filter."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if review_required is not None:
+                cursor.execute(
+                    "SELECT * FROM content_reviews WHERE review_required = ? ORDER BY updated_at DESC",
+                    (1 if review_required else 0,),
+                )
+            else:
+                cursor.execute("SELECT * FROM content_reviews ORDER BY updated_at DESC")
+            rows = cursor.fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
+                d["cutter_proposal"] = json.loads(d["cutter_proposal_json"]) if d.get("cutter_proposal_json") else None
+                d["human_decision"] = json.loads(d["human_decision_json"]) if d.get("human_decision_json") else None
+                out.append(d)
+            return out
+
+    def save_content_review_human_decision(
+        self,
+        tracking_id: str,
+        classification: str,
+        mantra_type: str,
+        process_by_tool_6: int,
+        review_required: int,
+        human_decision_json: Dict[str, Any],
+        updated_at: str,
+        cutter_proposal_json: Optional[str] = None,
+        review_reason: Optional[str] = None,
+    ):
+        """Update content review record with human operator decision and synchronized result_json."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT result_json, cutter_proposal_json, review_reason FROM content_reviews WHERE tracking_id = ?",
+                (tracking_id,),
+            )
+            row = cursor.fetchone()
+
+            existing_result = {}
+            if row and row["result_json"]:
+                try:
+                    existing_result = json.loads(row["result_json"])
+                except Exception:
+                    existing_result = {}
+
+            existing_result["classification"] = classification
+            existing_result["mantra_type"] = mantra_type
+            existing_result["process_by_tool_6"] = bool(process_by_tool_6)
+            existing_result["review_required"] = bool(review_required)
+            existing_result["human_decision"] = human_decision_json
+            existing_result["updated_at"] = updated_at
+
+            final_cutter_json = row["cutter_proposal_json"] if row else None
+            if cutter_proposal_json is not None:
+                final_cutter_json = cutter_proposal_json
+
+            if final_cutter_json:
+                try:
+                    existing_result["cutter_proposal"] = json.loads(final_cutter_json)
+                except Exception:
+                    existing_result["cutter_proposal"] = None
+            else:
+                existing_result["cutter_proposal"] = None
+
+            final_review_reason = row["review_reason"] if row else None
+            if review_reason is not None:
+                final_review_reason = review_reason
+            existing_result["review_reason"] = final_review_reason
+
+            cursor.execute("""
+            UPDATE content_reviews
+            SET classification = ?,
+                mantra_type = ?,
+                process_by_tool_6 = ?,
+                review_required = ?,
+                cutter_proposal_json = ?,
+                review_reason = ?,
+                result_json = ?,
+                human_decision_json = ?,
+                updated_at = ?
+            WHERE tracking_id = ?
+            """, (
+                classification,
+                mantra_type,
+                process_by_tool_6,
+                review_required,
+                final_cutter_json,
+                final_review_reason,
+                json.dumps(existing_result),
+                json.dumps(human_decision_json),
+                updated_at,
+                tracking_id,
+            ))
+            conn.commit()
+
+    def register_file(
+        self,
+        tracking_id: str,
+        current_path: Union[str, Path],
+        original_path: Optional[Union[str, Path]] = None,
+        original_filename: Optional[str] = None,
+        current_filename: Optional[str] = None,
+        proposed_filename: Optional[str] = None,
+        when_val: Optional[str] = None,
+        who_val: Optional[str] = None,
+        what_val: Optional[str] = None,
+        where_val: Optional[str] = None,
+        status: str = "PENDING",
+        needs_review: bool = False,
+        review_reasons: Optional[List[str]] = None,
+        parser_result_json: Optional[str] = None,
+        proposal_mode: str = "DRY_RUN",
+        source_hash: Optional[str] = None,
+    ):
+        """Convenience registration of file record for tests or external tracking."""
+        now = datetime.now(timezone.utc).isoformat()
+        c_path = Path(current_path)
+        o_path = Path(original_path) if original_path else c_path
+        cur_fn = current_filename or c_path.name
+        orig_fn = original_filename or o_path.name
+        prop_fn = proposed_filename or cur_fn
+        pr_json = parser_result_json
+        if not pr_json or pr_json == "{}":
+            pr_dict = {
+                "identity": {
+                    "tracking_id": tracking_id,
+                    "original_filename": orig_fn,
+                    "original_path": str(o_path.resolve()),
+                    "current_filename": cur_fn,
+                    "extension": c_path.suffix.lower(),
+                },
+                "context": {"parent_folder": c_path.parent.name},
+                "when": {"selected_value": when_val or "2023-01-01", "precision": "day", "state": "EXACT"},
+                "what": {"selected_value": what_val or "Class", "state": "EXACT"},
+                "where": {"place_location": where_val or "Unknown", "country": "", "country_iso2": "", "state": "EXACT"},
+                "who": who_val or "KKS",
+                "review_reasons": review_reasons or [],
+            }
+            pr_json = json.dumps(pr_dict)
+        rev_reasons = review_reasons or []
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO files (
+                tracking_id, original_path, current_path, original_filename, current_filename,
+                proposed_filename, when_val, who_val, what_val, where_val, status,
+                needs_review, review_reasons, parser_result_json, proposal_mode, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id) DO UPDATE SET
+                current_path = excluded.current_path,
+                current_filename = excluded.current_filename,
+                proposed_filename = excluded.proposed_filename,
+                status = excluded.status,
+                needs_review = excluded.needs_review,
+                review_reasons = excluded.review_reasons,
+                updated_at = excluded.updated_at
+            """, (
+                tracking_id,
+                str(o_path.resolve()),
+                str(c_path.resolve()),
+                orig_fn,
+                cur_fn,
+                prop_fn,
+                when_val or "",
+                who_val or "",
+                what_val or "",
+                where_val or "",
+                status,
+                1 if needs_review else 0,
+                json.dumps(rev_reasons),
+                pr_json,
+                proposal_mode,
+                now,
+                now,
+            ))
+            conn.commit()
+
+    def record_video_audio_derivative(
+        self,
+        derived_path: Union[str, Path] = "",
+        source_video_path: Union[str, Path] = "",
+        source_video_tracking_id: str = "",
+        source_video_sha256: str = "",
+        derived_sha256: str = "",
+        **kwargs,
+    ):
+        """Record video-derived MP3 to prevent re-discovery as an independent file."""
+        now = datetime.now(timezone.utc).isoformat()
+        final_derived_path = kwargs.get("derived_audio_path") or derived_path
+        final_source_path = kwargs.get("source_video_path") or source_video_path
+        final_tracking_id = kwargs.get("tracking_id") or source_video_tracking_id
+        final_source_sha = kwargs.get("source_sha256") or source_video_sha256
+        final_deriv_sha = kwargs.get("derived_sha256") or derived_sha256
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO video_audio_derivatives (
+                derived_path, source_video_path, source_video_tracking_id,
+                source_video_sha256, derived_sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                str(Path(final_derived_path).resolve()),
+                str(Path(final_source_path).resolve()),
+                str(final_tracking_id),
+                str(final_source_sha),
+                str(final_deriv_sha),
+                now,
+            ))
+            conn.commit()
+
+    def get_video_audio_derivative(self, path_or_id: Union[str, Path]) -> Optional[Dict[str, Any]]:
+        """Retrieve video-audio derivative metadata if registered by path or tracking_id."""
+        val = str(path_or_id)
+        resolved = str(Path(val).resolve()) if ("/" in val or "\\" in val) else val
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT * FROM video_audio_derivatives
+            WHERE derived_path = ? OR source_video_tracking_id = ? OR source_video_path = ?
+            ORDER BY created_at DESC LIMIT 1
+            """, (resolved, val, resolved))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def is_video_audio_derivative(self, path: Union[str, Path]) -> bool:
+        """Check if path is a registered video audio derivative."""
+        resolved = str(Path(path).resolve())
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM video_audio_derivatives WHERE derived_path = ? LIMIT 1",
+                (resolved,),
+            )
+            return cursor.fetchone() is not None
 
     @contextmanager
     def acquire_lock(self, timeout: float = 30.0):
