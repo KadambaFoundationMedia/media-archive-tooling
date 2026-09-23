@@ -7,7 +7,26 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `IN_PROGRESS`
+
+Implementation branch: `main-tooling-script-implementation`
+
+## Open questions / contradictions
+
+### Q-001 — Production-mode data retention and test-row purge separation policy
+
+Status: OPEN
+Build-plan section(s): Section 22 (`docs/main-tooling-script-build-plan.md`), Section 5 (`status/main-tooling-script.md`)
+Blocking scope: Live production processing of the full 15+ TB archive under `--production`. Normal test-mode runs and alpha/beta testing remain unaffected.
+
+Problem:
+The existing test harness automatically purges test rows and resets review state when the code fingerprint changes or `--purge` is invoked. In real archive production on 15+ TB of data, operator decisions, review approvals, and production Baserow entries must be permanently retained and isolated from automated test-slate resets.
+
+Why this matters:
+Running production data through the test-mode purge logic could inadvertently clear durable review actions or delete live rows if the code fingerprint changes.
+
+Implementation action:
+The runner retains existing alpha/beta purge and fresh-slate logic exclusively for test mode. Any invocation with `--production` fails closed with an explanatory error until an explicit production-mode data retention and purge separation policy is confirmed by the owner/planner.
 
 ## Builder action — archive-scale correction and future workflow contract (2026-09-23)
 
