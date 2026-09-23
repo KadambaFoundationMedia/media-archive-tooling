@@ -8,7 +8,7 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `ACCEPTED`
 
 Implementation branch: `tool-5-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55
@@ -59,7 +59,11 @@ PR #55 CI is green and the local full suite passes (463 tests, 2 warnings). Find
 - **T5-R-003:** `audio_extractor.py` finalizes with atomic no-clobber `os.link` and cleans up only the temporary file on collision. Intruder file test verified byte-for-byte preservation.
 - **T5-R-004:** `apply_human_decision` and `validate_coarse_boundary` enforce real clock fields, ordered timestamps, and boundary verification against media duration (`duration_seconds`). Short-recording portal-action test added and verified.
 
-All focused corrections are verified locally and in CI. The implementation is ready for review. Do not merge the branch.
+All focused corrections were verified locally and in CI before planner acceptance below.
+
+### Planner acceptance and final hardening - 2026-09-23
+
+The planner independently reran the full suite after commit `3bf4772`: 464 tests passed (2 dependency warnings); script syntax and `git diff --check` passed; GitHub Actions CI passed on that commit. The planner made and pushed two small safety changes: no overwrite-capable fallback if atomic hard-link finalization is unavailable, and a matching typed `RenameProposal` requirement for an unregistered Phase 1 dry-run handoff. Regression tests cover both. The separate builder should retain these changes in future Tool 5 work. Tool 5 is accepted for merge; actual cutting remains Tool 6's responsibility.
 
 ## Planner reference review - 2026-09-23
 
