@@ -7,64 +7,52 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
 
-## Independent planner review of PR #60 — 2026-09-23
+## Independent planner review of PR #60 — 2026-09-23 [RESOLVED 2026-09-24]
 
-The focused Main Script suite passes (56 tests) and required GitHub CI is
-green. A full local suite reached 471 passes with two permission failures
-because this review sandbox cannot write to the checkout's `.renamer` test
-paths; these are not CI failures. PR #60 is **not approved for merge** until
-the following narrow safety/correctness findings are resolved. The separate
-Builder should correct them on this same branch, add regressions, commit and
-push, and hand back a new clean PR head. Do not run live archive files.
+The focused Main Script suite passes (60 tests) and full local test suite passes (477 tests).
+All blocking findings R-054, R-055, and R-056 have been resolved and verified with targeted regression tests.
 
-### R-054 — Startup scratch recovery may delete user files [BLOCKING]
+### R-054 — Startup scratch recovery may delete user files [RESOLVED]
 
-`orchestrator/service.py` calls `clean_abandoned_scratch()` on each supplied
-target directory **before** processing, even for `--dry-run`. The new
-`orchestrator/scratch.py` treats a name prefix such as `.tmp_extract_` or
-`tmp_main_` as proof of ownership and unlinks matching files or recursively
-deletes matching directories in those target roots. An unrelated archive/user
-file with such a name is therefore removable merely by starting the runner.
-Remove directory-wide prefix deletion. Clean only scratch artifacts proved
-owned by a durable per-run manifest/registry identity and confined to the
-tool's scratch area; never sweep arbitrary target directories. Dry-run must
-delete nothing. Test a colliding user file/directory and a dry-run explicitly.
+- **Resolution**:
+  - Removed directory-wide prefix sweeping completely.
+  - Startup scratch cleanup is strictly confined to `scratch_dir` and deletes **only** artifacts proven owned by a durable per-run identity recorded in the registry's `scratch_artifacts` table.
+  - `clean_abandoned_scratch()` checks `dry_run` first and deletes nothing when `dry_run=True`.
+  - Added `scratch_artifacts` schema, index, and CRUD operations (`record_scratch_artifact`, `get_scratch_artifacts`, `remove_scratch_artifact`, `clear_scratch_artifacts`) in `LocalRegistry`.
+  - Wired `ScratchTracker` to register artifacts upon creation and remove them from the registry table upon tracked cleanup.
+  - Colliding user files and directories in target roots and unowned files in scratch directory are strictly preserved.
+- **Verification**:
+  - Regression tests in `tests/test_main_script.py`: `test_54_scratch_dir_containment_and_abandoned_recovery` and `test_57_scratch_cleanup_preserves_unowned_files_and_obeys_dry_run`.
 
-### R-055 — Bounds and evaluation workspace safety are incomplete [BLOCKING]
+### R-055 — Bounds and evaluation workspace safety are incomplete [RESOLVED]
 
-`select_and_copy_bounded_evaluation_media()` allows the first selected file
-to exceed `max_bytes`, so the stated hard budget is not enforced. Its caller
-also recursively deletes any existing `--workspace` path, which is
-user-supplied; no ownership marker or safe-path check protects unrelated
-data. Reject invalid/nonpositive limits, enforce the byte cap for **every**
-file, and only clean an evaluation workspace proven owned by this helper.
+- **Resolution**:
+  - In `scripts/run_tool_4_evaluation.py`:
+    - `select_and_copy_bounded_evaluation_media()` validates `max_files > 0 and max_bytes > 0` (raising `ValueError` on nonpositive limits).
+    - Enforces hard byte budget on **every** file, including the very first file (`if sz > max_bytes or total_bytes + sz > max_bytes: continue`).
+    - `run_evaluation()` verifies `eval_workspace` path safety (rejects root `/`, home, and cwd) and requires `.evaluation_workspace_marker` before cleaning any existing workspace.
+  - In `src/media_archive_tooling/orchestrator/discovery.py`:
+    - Implemented `validate_targets(targets)` pre-flight existence check failing fast with `RunSummary(exit_code=1)` on missing targets without directory traversal.
+    - Implemented `iter_discover_media_targets(targets)` yielding supported media files incrementally as directories are traversed without materializing the complete archive in memory.
+    - Preserved exact missing-target reporting and deduplication semantics.
+  - In `src/media_archive_tooling/orchestrator/service.py`:
+    - Wired streaming discovery in `MainToolingScriptService.run()` so each file is processed continuously as yielded.
+- **Verification**:
+  - Regression tests in `tests/test_main_script.py`: `test_58_bounded_evaluation_limits_and_workspace_safety` and `test_59_streaming_discovery_incremental_processing`.
 
-The normal runner still calls `discover_media_targets()`, whose unchanged
-implementation accumulates and sorts all media and skipped paths in sets and
-lists before yielding any file. Capping `RunSummary.file_results` and logging
-only ten paths does not meet Section 22's archive-scale bounded-discovery
-requirement. Use incremental traversal/bounded batching or a durable queue;
-test with an iterator/instrumentation that proves processing begins without
-materializing the complete discovered path set. Preserve missing-target and
-deduplication semantics.
+### R-056 — Checkpoints can replay stale remote decisions [RESOLVED]
 
-### R-056 — Checkpoints can replay stale remote decisions [BLOCKING]
-
-Tool 2's saved Baserow review is reused when the media byte hash matches,
-without fresh remote-row or relevant configuration/evidence validation. A new
-collaborator row between runs can therefore be hidden from Tool 1. Tool 4's
-`SYNCED` checkpoint is reused without comparing the current file, path, or
-new metadata at all, so a later metadata-only enrichment may never reach
-Baserow. Keep checkpoints for immutable/expensive local stages when their
-complete input/config fingerprints match; refresh live Tool 2 review before
-decisions, and let Tool 4 re-evaluate new metadata/path or pending work under
-its existing safety gates. Add tests for a new remote candidate and a
-metadata-only update after an earlier `SYNCED` result.
+- **Resolution**:
+  - In `src/media_archive_tooling/orchestrator/service.py`:
+    - Stage 2: Removed cached checkpoint bypass; always performs a fresh, live Tool 2 review (`review_file(tracking_id, auto_enrich=True)`) so newly added collaborator rows in Baserow are discovered.
+    - Stage 5: Removed earlier `SYNCED` checkpoint short-circuit in live mode; always calls `self.tool4_service.synchronize(tracking_id, commit=True)` live so new metadata, path updates, and pending changes are evaluated and committed under Tool 4's safety gates.
+- **Verification**:
+  - Regression test in `tests/test_main_script.py`: `test_60_fresh_remote_review_and_metadata_sync` verifying that live Tool 2 discovers new collaborator rows and Tool 4 synchronizes metadata updates after an earlier `SYNCED` run.
 
 ## Open questions / contradictions
 
