@@ -34,13 +34,15 @@ an automatic rename or database write.
    or another supported content type. Uncertain results remain in place for
    review; they must not trigger a destructive downstream step.
 5. For a confirmed singing-and-class combination, Tool 6 cuts the working
-   input into two resulting files: a singing part and a class part. On
-   successful completion, the full-length working input **no longer exists**.
-   The archive is backed up separately; the pipeline must not keep or create
-   a permanent third copy of the original. Temporary staging while safely
-   producing and validating both outputs is allowed. If cutting fails or
-   cannot be verified, retain the input and route it for review rather than
-   deleting it or presenting a partial split as complete.
+   audio input into two resulting files: a singing part and a class part. On
+   successful completion, the full-length working **audio** input no longer
+   exists. The archive is backed up separately; the pipeline must not keep
+   a permanent third audio copy. For video, retain the original video and
+   split Tool 5's extracted MP3; remove only that owned full-length MP3 after
+   both MP3 outputs are verified. Temporary staging while safely producing
+   and validating both outputs is allowed. If cutting fails, retain the
+   working input and route it for review rather than presenting a partial
+   split as complete.
 6. The previously created class Media row remains the class row and follows
    the class output; do not create a second class row. Tool 4 checks for an
    existing matching singing item through Tool 2 and creates the singing row
@@ -48,7 +50,10 @@ an automatic rename or database write.
    identities remain distinct and durable through later renames and moves.
    If the Phase 1 class row was blocked or never created, do not fabricate an
    existing row ID; Tool 4 must resolve the class item under its normal safe
-   create/update/review rules when enough evidence becomes available.
+   create/update/review rules when enough evidence becomes available. For a
+   retained video, preserve its filename/archive path and use
+   `audio_file_path` for the class MP3's full local path; do not overwrite the
+   video path or write a local path into the `Audio link` URL field.
 7. Tool 7 discovers class type. Tools 8 (class trimming), 9 (class gain), and
    10 (questions gain) act only on the applicable class part/evidence. The
    singing part does not pass through class-only processing merely because it
@@ -61,6 +66,13 @@ an automatic rename or database write.
    trustworthy metadata arrives even after this point, the appropriate Tool
    1, Tool 11, and/or Tool 4 actions can recur. Tool 4 alone writes Baserow
    and must preserve confirmed existing fields and unrelated online links.
+
+The initial Tool 6 build handles two-part kirtan/class combinations. Tool 5
+provides a recording-specific, high-confidence exact end-of-singing timestamp
+for automatic cutting; uncertain cases remain intact for waveform/audio
+review and manual adjustment. Tool 6 trims only actual leading silence and
+does not remove meaningful speech. Both outputs stay in place with a durable
+pending Tool 11 move until Tool 11 has its own accepted implementation.
 
 The class and singing items can therefore receive many Tool 1/Tool 4 passes
 over their lifetimes. A metadata-only update must not be omitted merely
@@ -92,8 +104,6 @@ pending/review state and does not undo a successful local file change.
 
 The Main Tooling Script builder should address the currently actionable
 archive-scale runner/evaluation-helper safeguards and keep extension points
-for the confirmed later sequence. The Tool 6 builder must receive a separate
-finalized plan for exact cut boundaries, output formats, collision handling,
-transcript segment/child-file association, and review approval. Do not invent
-those choices from this amendment. Tools 7–11 likewise retain their own
-future build plans.
+for the confirmed later sequence. The Tool 6 builder must use its separate
+finalized plan for cut evidence, formats, collision handling, transcript
+association, and portal review. Tools 7–11 retain their own future plans.

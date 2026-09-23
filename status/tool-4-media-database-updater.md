@@ -12,6 +12,19 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 Status: `READY_FOR_REVIEW`
 
+## Tool 6 video-audio integration amendment — pending implementation (2026-09-23)
+
+For a retained video combination, the owner specified that the existing
+class row's `Filename` and `media_archive_path` continue to identify the
+video. Tool 4 must write the newly split class MP3's **full local path** to
+the separate `audio_file_path` column, after validating its live schema/type.
+The singing MP3 is a distinct row with its own filename/archive path. Do not
+misuse the `Audio link` URL field or overwrite the video's confirmed path.
+Later Tool 11 moves update the class row's `audio_file_path` and the singing
+row's path through Tool 4. This future integration belongs to the Tool 6
+implementation/review and does not claim that current Tool 4 already handles
+the new field. See `docs/tool-6-file-cutter-build-plan.md` Section 6.
+
 Downstream coordination (2026-09-23): Read
 `docs/full-pipeline-workflow-amendment.md` before touching Tool 4 integration.
 The user's full pipeline creates/updates a class row after the committed
