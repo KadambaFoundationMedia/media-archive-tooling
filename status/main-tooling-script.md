@@ -7,10 +7,64 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
+
+## Independent planner review of PR #60 — 2026-09-23
+
+The focused Main Script suite passes (56 tests) and required GitHub CI is
+green. A full local suite reached 471 passes with two permission failures
+because this review sandbox cannot write to the checkout's `.renamer` test
+paths; these are not CI failures. PR #60 is **not approved for merge** until
+the following narrow safety/correctness findings are resolved. The separate
+Builder should correct them on this same branch, add regressions, commit and
+push, and hand back a new clean PR head. Do not run live archive files.
+
+### R-054 — Startup scratch recovery may delete user files [BLOCKING]
+
+`orchestrator/service.py` calls `clean_abandoned_scratch()` on each supplied
+target directory **before** processing, even for `--dry-run`. The new
+`orchestrator/scratch.py` treats a name prefix such as `.tmp_extract_` or
+`tmp_main_` as proof of ownership and unlinks matching files or recursively
+deletes matching directories in those target roots. An unrelated archive/user
+file with such a name is therefore removable merely by starting the runner.
+Remove directory-wide prefix deletion. Clean only scratch artifacts proved
+owned by a durable per-run manifest/registry identity and confined to the
+tool's scratch area; never sweep arbitrary target directories. Dry-run must
+delete nothing. Test a colliding user file/directory and a dry-run explicitly.
+
+### R-055 — Bounds and evaluation workspace safety are incomplete [BLOCKING]
+
+`select_and_copy_bounded_evaluation_media()` allows the first selected file
+to exceed `max_bytes`, so the stated hard budget is not enforced. Its caller
+also recursively deletes any existing `--workspace` path, which is
+user-supplied; no ownership marker or safe-path check protects unrelated
+data. Reject invalid/nonpositive limits, enforce the byte cap for **every**
+file, and only clean an evaluation workspace proven owned by this helper.
+
+The normal runner still calls `discover_media_targets()`, whose unchanged
+implementation accumulates and sorts all media and skipped paths in sets and
+lists before yielding any file. Capping `RunSummary.file_results` and logging
+only ten paths does not meet Section 22's archive-scale bounded-discovery
+requirement. Use incremental traversal/bounded batching or a durable queue;
+test with an iterator/instrumentation that proves processing begins without
+materializing the complete discovered path set. Preserve missing-target and
+deduplication semantics.
+
+### R-056 — Checkpoints can replay stale remote decisions [BLOCKING]
+
+Tool 2's saved Baserow review is reused when the media byte hash matches,
+without fresh remote-row or relevant configuration/evidence validation. A new
+collaborator row between runs can therefore be hidden from Tool 1. Tool 4's
+`SYNCED` checkpoint is reused without comparing the current file, path, or
+new metadata at all, so a later metadata-only enrichment may never reach
+Baserow. Keep checkpoints for immutable/expensive local stages when their
+complete input/config fingerprints match; refresh live Tool 2 review before
+decisions, and let Tool 4 re-evaluate new metadata/path or pending work under
+its existing safety gates. Add tests for a new remote candidate and a
+metadata-only update after an earlier `SYNCED` result.
 
 ## Open questions / contradictions
 
