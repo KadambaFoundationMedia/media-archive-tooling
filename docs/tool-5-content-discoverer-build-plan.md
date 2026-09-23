@@ -40,6 +40,7 @@ CLASS
 KIRTAN_AND_CLASS
 KIRTAN
 INITIATION
+VYASA_PUJA
 EVENT_OR_FESTIVAL_ADDRESS
 HOME_PROGRAM
 UNKNOWN_REVIEW
@@ -126,7 +127,8 @@ Tool 5 records declarative routing; it does not invoke pending tools:
 | Classification | Required route state |
 |---|---|
 | `KIRTAN_AND_CLASS` | `process_by_tool_6=true` |
-| `INITIATION` | `process_by_tool_6=true` (multi-part boundary review/cutting) |
+| `INITIATION` | retain multi-part ceremony evidence for review; no automatic two-part cutter route |
+| `VYASA_PUJA` | retain multi-part offering/address evidence for review; no automatic two-part cutter route |
 | `CLASS` | retain class evidence; do not call Tool 7 yet |
 | `KIRTAN` | retain kirtan/mantra metadata; no cutter route |
 | `EVENT_OR_FESTIVAL_ADDRESS` / `HOME_PROGRAM` | retain type metadata; no invented later route |
@@ -325,7 +327,7 @@ Store both the canonical mantra label and raw/timestamped supporting excerpts.
 The label `Kirtan` is used for detected maha-mantra/general singing; do not
 mislabel an uncertain song as a known named mantra.
 
-### 7.3 Timed combination decision
+### 7.3 Timed combination decision — Tool 6 handoff amendment
 
 Use the full transcript and inspect classification windows around 1, 2, 5, and
 10 minutes. If unresolved, adaptively inspect later timestamped regions rather
@@ -335,35 +337,43 @@ A confident `KIRTAN_AND_CLASS` requires distinct ordered time ranges:
 
 1. an initial sustained kirtan/mantra range; and
 2. later class-pattern/sustained explanatory speech evidence;
-3. a boundary **review interval/range** and confidence for the intended Tool 6
-   handoff.
+3. the recording-specific, **exact numeric timestamp at the end of singing**,
+   with confidence and audio/transcript evidence for the intended Tool 6
+   handoff. A coarse transition bracket may be retained for explanation, but
+   it does not authorize a cut. Analyze local audio around the transition; a
+   transcript-segment edge alone is insufficient evidence of the precise end
+   of singing.
 
-An `INITIATION` requires positive multi-part ceremony evidence (for example
-mantra/yajna/ceremonial language plus distinct discourse/singing portions),
-not merely a filename word. It receives `process_by_tool_6=true` but its
-proposed boundaries remain reviewable.
+An `INITIATION` requires positive multi-part ceremony evidence, not merely a
+filename word. Its common sequence is singing, introduction, class, name
+giving, mantra, singing. A `VYASA_PUJA` commonly contains singing,
+introduction, offerings, an address by the speaker, and singing. These are
+recognition guides, not guaranteed segments or fixed timing rules. Neither
+multi-part type enters the initial two-part Tool 6 cutter automatically;
+retain evidence and flag it for review pending specific cutting rules.
 
 A file whose filename suggests a combination but whose full audio evidence is
 only singing is `KIRTAN`, not a combination. It remains in place and receives
 no cutter flag.
 
-Tool 5 must never call the boundary an approved exact cut. The `process_by_tool_6`
-handoff contains the source-bound coarse bracket between the last detected
-kirtan/mantra evidence and first later class evidence; Tool 6 will refine it
-and obtain the human decision required for actual cutting. No
-combination/cutting handoff is allowed if even the coarse bracket is uncertain.
-Mark it `UNKNOWN_REVIEW` (or another explicitly uncertain result) and route it
-to the portal with the evidence needed for human review.
+Tool 5's exact singing-end timestamp can authorize an **automatic** Tool 6 cut
+only with `HIGH` confidence and a matching source fingerprint. Tool 6 cuts at
+that timestamp and may conservatively trim actual leading silence from the
+class output; Tool 5 does not need to supply a second class-start timestamp.
+If the exact end is uncertain, Tool 5 must not guess from the coarse bracket:
+retain the file and route it to the portal for waveform/playback review and a
+human-adjusted cut point. Tool 5 itself never cuts or deletes media.
 
 ### 7.4 Confidence and review
 
 Return a typed confidence (`HIGH`, `MEDIUM`, `LOW`, `BLOCKED`) and structured
 evidence. Automatic `process_by_tool_6=true` requires `HIGH` confidence and a
-validated boundary. `MEDIUM`/`LOW`, competing types, transcript failure,
+validated exact singing-end timestamp. `MEDIUM`/`LOW`, competing types,
+transcript failure,
 ambiguous mantra, or a type contradicted by strong existing evidence requires
 portal review but keeps the media in place.
 
-The portal may let a human select a type/mantra/boundary later, but must retain
+The portal may let a human select a type/mantra/cut point later, but must retain
 the automatic evidence and never rewrite a transcript. Human decisions are
 durably audited and must be consumable by Tool 6 and the later Tool 1 pass.
 
@@ -377,7 +387,8 @@ Whisper/ffmpeg subprocess code behind adapters.
 
 Persist Tool 5 result/history against `tracking_id` in the local registry. It
 must contain the classification, confidence, mantra type, transcript artifact
-path/fingerprints, evidence ranges, proposed cutter boundaries, routing flags,
+path/fingerprints, evidence ranges, the exact singing-end timestamp and
+confidence when available, routing flags,
 review state, runtime provenance, and redacted failures. Never put transcript
 text, raw paths beyond required existing provenance, model binaries, or secrets
 in Baserow.
@@ -390,7 +401,7 @@ path, supports `--dry-run`, `--device auto|metal|cpu`, `--model-path`, and
 Tool 5 - Content Discoverer
 Type: Kirtan and Class (HIGH)
 Mantra: Jaya-radha-madhava
-Boundary: kirtan 00:00-11:41; class begins 12:23
+Singing ends: 00:11:41 (recording-specific, verified)
 Transcript: .renamer/transcripts/<tracking-id>.json
 Route: process_by_tool_6
 ```
@@ -412,11 +423,12 @@ local paths to a network listener; portal remains loopback-only.
 Add hermetic fixtures and tests for at least:
 
 1. class with a partial/abbreviated recorded class sequence;
-2. `Jaya-radha-madhava` then a class, with a Tool 6 cutter flag and precise
-   boundary evidence;
+2. `Jaya-radha-madhava` then a class, with a Tool 6 cutter flag, exact
+   singing-end timestamp, audio evidence, and source-fingerprint binding;
 3. CC/Panca-tattva and Nrsimha normalized mantra variants;
 4. singing-only recording incorrectly labelled combination by filename;
-5. initiation with multiple distinct sections;
+5. initiation and Vyasa-puja with multiple distinct sections, both retained
+   for review rather than fed to the two-part cutter;
 6. event/festival address and home program classifications;
 7. ambiguous/transcription-failed input: in place, review required, no route;
 8. video MP3 extraction path, source fingerprint reuse, collision protection,
@@ -452,7 +464,8 @@ Tool 5 is ready for review only when it:
 - retains canonical mantra metadata and evidence;
 - stores valid reusable temporary transcripts outside the archive;
 - leaves Phase 1 media in place and makes no Baserow call or mutation;
-- gives only high-confidence combinations a `process_by_tool_6` handoff;
+- gives only high-confidence kirtan/class combinations with a validated exact
+  singing-end timestamp a `process_by_tool_6` handoff;
 - routes uncertainty to the local portal without pretending certainty;
 - preserves Tool 1/Tool 4 ownership for later rename/Baserow synchronization;
 - passes the required focused/full tests, package build, and CI; and
