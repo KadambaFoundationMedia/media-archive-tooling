@@ -72,6 +72,11 @@ Phase A is the implementation requested now. It must not wait for Tools 5–11.
 
 When Tools 5–11 have been accepted, the same orchestrator will be extended to support:
 
+Tool 5's finalized independent discovery contract is in
+`docs/tool-5-content-discoverer-build-plan.md`. Its later integration must use
+that typed service and its durable `process_by_tool_6` handoff state; it must
+not reimplement transcription or content classification in the orchestrator.
+
 ```text
 Renamer workflow:
 Tools 1, 2, 3, 4, 11
