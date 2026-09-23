@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -35,6 +36,7 @@ from media_archive_tooling.content_discoverer.service import (
 from media_archive_tooling.content_discoverer.transcriber import (
     FakeTranscriptionAdapter,
     TranscriptionBlockedError,
+    prepare_whisper_input,
 )
 from media_archive_tooling.orchestrator.discovery import discover_media_targets
 from media_archive_tooling.orchestrator.models import FileExecutionStatus, StageName, WorkflowType
@@ -1156,3 +1158,48 @@ def test_33_no_clobber_finalization_fails_closed_if_hard_links_unavailable(tmp_p
 
     assert not target.exists()
     assert not temporary.exists()
+
+
+def test_34_wma_is_decoded_to_temporary_whisper_wav(tmp_path, monkeypatch):
+    """WMA cannot go straight to whisper-cli; decode it without changing the source."""
+    source = tmp_path / "recording.WMA"
+    source.write_bytes(b"original WMA archive bytes")
+    decoded = tmp_path / "whisper-input.wav"
+    commands = []
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.transcriber.shutil.which",
+        lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None,
+    )
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        decoded.write_bytes(b"RIFF" + b"\x00" * 48)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr("media_archive_tooling.content_discoverer.transcriber.subprocess.run", fake_run)
+    whisper_input, detail = prepare_whisper_input(source, tmp_path)
+
+    assert whisper_input == decoded
+    assert "16 kHz mono" in detail
+    assert commands[0][commands[0].index("-i") + 1] == str(source)
+    assert commands[0][commands[0].index("-ar") + 1] == "16000"
+    assert commands[0][commands[0].index("-ac") + 1] == "1"
+    assert source.read_bytes() == b"original WMA archive bytes"
+
+
+def test_35_wma_decode_failure_blocks_before_whisper(tmp_path, monkeypatch):
+    source = tmp_path / "bad.wma"
+    source.write_bytes(b"invalid audio")
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.transcriber.shutil.which",
+        lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None,
+    )
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.transcriber.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, b"", b"invalid input"),
+    )
+
+    with pytest.raises(TranscriptionBlockedError, match="Audio decoding failed before transcription"):
+        prepare_whisper_input(source, tmp_path)
+    assert source.read_bytes() == b"invalid audio"
