@@ -71,6 +71,30 @@ def test_dotted_sb_combination_uses_primary_class_for_canonical_filename():
     assert proposal.proposed_filename == "2011-08-29_KKS_SB-1-19-31_Oslo-no.wma"
 
 
+def test_hyphenated_combination_clue_does_not_enter_scripture_title():
+    source = Path(
+        "/archive/2011-08-20_KKS_SB-1-19-31-with-radha-madhava_Oslo-no.wma"
+    )
+    result = RenamerParser().parse_file(source)
+    proposal = RenamePlanner(mode=RenameMode.FINALIZE).plan_rename(result)
+
+    assert result.what.selected_value == "SB-1-19-31"
+    assert result.what.category == "Srimad Bhagavatam"
+    assert result.file_metadata.possible_combination is True
+    assert proposal.proposed_filename == "2011-08-20_KKS_SB-1-19-31_Oslo-no.wma"
+
+    from media_archive_tooling.media_db_updater.engine import _resolve_title
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncRequest
+
+    request = MediaDbSyncRequest(
+        tracking_id=result.identity.tracking_id,
+        current_filename=proposal.proposed_filename,
+        current_path=proposal.proposed_path,
+        what_val=result.what.selected_value,
+    )
+    assert _resolve_title(request) == "SB 1.19.31"
+
+
 def test_dotted_sb_following_date_produces_canonical_filename():
     source = Path(
         "/archive/From JVD (8.9.11)/"

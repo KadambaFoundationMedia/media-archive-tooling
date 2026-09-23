@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 from ..renamer.registry.registry import LocalRegistry
 from ..renamer.models import RenameProposal
@@ -159,6 +159,7 @@ class ContentDiscovererService:
         force_retranscribe: bool = False,
         root_dir: Optional[Path] = None,
         phase1_context: Optional[Any] = None,
+        progress_callback: Optional[Callable[[str, float, str], None]] = None,
     ) -> ContentDiscoveryResult:
         """Analyze a media file, transcribe audio, classify content, and record routing."""
         target_str = str(target)
@@ -276,6 +277,7 @@ class ContentDiscovererService:
                 force=force_retranscribe,
                 root_dir=root_dir,
                 dry_run=dry_run,
+                progress_callback=progress_callback,
             )
         except Exception as e:
             # Transcription failure -> fail closed with BLOCKED confidence

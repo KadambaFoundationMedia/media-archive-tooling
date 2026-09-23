@@ -9,8 +9,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from .audio_extractor import compute_file_sha256
 from .models import DerivedAudioDetails, TranscriptArtifact, TranscriptSegment
@@ -18,6 +19,7 @@ from .models import DerivedAudioDetails, TranscriptArtifact, TranscriptSegment
 
 MAX_TRANSCRIPT_BYTES = 100 * 1024 * 1024  # 100 MB max allowed JSON payload
 WHISPER_NATIVE_AUDIO_EXTENSIONS = frozenset({".flac", ".mp3", ".ogg", ".wav"})
+ProgressCallback = Callable[[str, float, str], None]
 
 
 class TranscriptionError(Exception):
@@ -30,7 +32,44 @@ class TranscriptionBlockedError(TranscriptionError):
     pass
 
 
-def prepare_whisper_input(audio_path: Path, temporary_dir: Path) -> Tuple[Path, str]:
+def run_with_heartbeat(
+    command: List[str],
+    *,
+    stage: str,
+    progress_callback: Optional[ProgressCallback] = None,
+    heartbeat_interval: float = 30.0,
+    **run_kwargs: Any,
+) -> subprocess.CompletedProcess:
+    """Run a captured subprocess while reporting brief terminal heartbeats."""
+    if progress_callback is None:
+        return subprocess.run(command, **run_kwargs)
+
+    started = time.monotonic()
+    stopped = threading.Event()
+    progress_callback(stage, 0.0, "start")
+
+    def heartbeat() -> None:
+        while not stopped.wait(heartbeat_interval):
+            progress_callback(stage, time.monotonic() - started, "heartbeat")
+
+    ticker = threading.Thread(target=heartbeat, daemon=True)
+    ticker.start()
+    status = "failed"
+    try:
+        result = subprocess.run(command, **run_kwargs)
+        status = "done" if result.returncode == 0 else "failed"
+        return result
+    finally:
+        stopped.set()
+        ticker.join(timeout=1.0)
+        progress_callback(stage, time.monotonic() - started, status)
+
+
+def prepare_whisper_input(
+    audio_path: Path,
+    temporary_dir: Path,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Tuple[Path, str]:
     """Decode formats unsupported by whisper-cli into a temporary 16 kHz mono WAV."""
     if audio_path.suffix.lower() in WHISPER_NATIVE_AUDIO_EXTENSIONS:
         return audio_path, "native"
@@ -50,8 +89,11 @@ def prepare_whisper_input(audio_path: Path, temporary_dir: Path) -> Tuple[Path, 
         "-c:a", "pcm_s16le", "-f", "wav", str(decoded_path),
     ]
     try:
-        result = subprocess.run(
+        result = run_with_heartbeat(
             command,
+            stage="decode",
+            progress_callback=progress_callback,
+            heartbeat_interval=5.0,
             capture_output=True,
             stdin=subprocess.DEVNULL,
             timeout=900,
@@ -142,6 +184,7 @@ class BaseTranscriptionAdapter(ABC):
         force: bool = False,
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> TranscriptArtifact:
         """Transcribe audio into a durable normalized TranscriptArtifact."""
         pass
@@ -212,6 +255,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
         force: bool = False,
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> TranscriptArtifact:
         audio_path = audio_path.resolve()
         if not audio_path.is_file():
@@ -263,6 +307,8 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     and source_type_match
                     and derived_match
                 ):
+                    if progress_callback:
+                        progress_callback("cache", 0.0, "hit")
                     return TranscriptArtifact.model_validate(cached_data)
             except Exception:
                 pass  # Corrupted or outdated cache, regenerate
@@ -282,7 +328,12 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
             expected_json = Path(f"{tmp_stem}.json")
 
             start_t = time.time()
-            whisper_input, audio_preprocessing = prepare_whisper_input(audio_path, Path(tmp_dir))
+            decode_started = time.monotonic()
+            whisper_input, audio_preprocessing = prepare_whisper_input(
+                audio_path, Path(tmp_dir), progress_callback=progress_callback
+            )
+            decode_elapsed = time.monotonic() - decode_started
+            transcription_started = time.monotonic()
             success = False
 
             # Attempt 1: Metal if auto or metal
@@ -301,8 +352,10 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     "--flash-attn",
                 ]
                 try:
-                    res = subprocess.run(
+                    res = run_with_heartbeat(
                         cmd,
+                        stage="transcribe_metal",
+                        progress_callback=progress_callback,
                         capture_output=True,
                         timeout=1800,
                         check=False,
@@ -339,8 +392,10 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     "--no-gpu",
                 ]
                 try:
-                    res = subprocess.run(
+                    res = run_with_heartbeat(
                         cmd,
+                        stage="transcribe_cpu",
+                        progress_callback=progress_callback,
                         capture_output=True,
                         timeout=1800,
                         check=False,
@@ -475,6 +530,8 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     "threads": self.threads,
                     "fallback_reason": fallback_reason,
                     "audio_preprocessing": audio_preprocessing,
+                    "decode_elapsed_seconds": decode_elapsed,
+                    "transcription_elapsed_seconds": time.monotonic() - transcription_started,
                     "elapsed_seconds": elapsed,
                     "rtf": rtf,
                 },
@@ -542,6 +599,7 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         force: bool = False,
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> TranscriptArtifact:
         audio_path = audio_path.resolve()
 
@@ -619,6 +677,8 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
                     and source_type_match
                     and derived_match
                 ):
+                    if progress_callback:
+                        progress_callback("cache", 0.0, "hit")
                     return TranscriptArtifact.model_validate(cached_data)
             except Exception:
                 pass

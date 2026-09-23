@@ -23,9 +23,11 @@ class TerminalReporter:
             print("Operating directly on files; authorized renames and Baserow mutations will occur without prompt.")
 
         if workflow == WorkflowType.ALL:
-            print("Workflow: all (Phase A: Tools 1–4 active; Processing Tools 5–11 pending)")
+            print("Workflow: all (Tools 1–5 active; Tools 6–11 pending)")
         elif workflow == WorkflowType.RENAMER:
             print("Workflow: renamer (Phase A: Tools 1–4 active)")
+        elif workflow == WorkflowType.PROCESSING:
+            print("Workflow: processing (Tool 5 active for Phase 1-tracked files; Tools 6–11 pending)")
 
         print(f"Discovered {target_count} media file(s) for processing.\n")
 
@@ -37,8 +39,30 @@ class TerminalReporter:
         if self.verbose and result.details:
             clean_details = redact_secrets(result.details)
             for k, v in clean_details.items():
+                if result.summary.startswith("Tool 4 —") and k in {"fields", "live_row"}:
+                    # Tool 4 already prints these values in its summary. Avoid
+                    # repeating large Notes fields and nested Baserow rows.
+                    continue
                 if v:
                     print(f"    - {k}: {v}")
+
+    def report_tool5_progress(self, stage: str, elapsed_seconds: float, status: str) -> None:
+        if stage == "cache":
+            print("  Tool 5 — Reusing saved transcript", flush=True)
+            return
+        labels = {
+            "decode": "Converting audio",
+            "transcribe_metal": "Transcribing on Metal",
+            "transcribe_cpu": "Transcribing on CPU",
+        }
+        label = labels.get(stage, stage)
+        if status == "start":
+            print(f"  Tool 5 — {label}…", flush=True)
+        elif status == "heartbeat":
+            print(f"  Tool 5 — {label}: {elapsed_seconds:.0f}s elapsed", flush=True)
+        elif status in {"done", "failed"}:
+            outcome = "finished" if status == "done" else "failed"
+            print(f"  Tool 5 — {label} {outcome} after {elapsed_seconds:.1f}s", flush=True)
 
     def report_file_result(self, file_result: FileRunResult) -> None:
         status_label = file_result.status.value.upper()

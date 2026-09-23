@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -37,6 +38,7 @@ from media_archive_tooling.content_discoverer.transcriber import (
     FakeTranscriptionAdapter,
     TranscriptionBlockedError,
     prepare_whisper_input,
+    run_with_heartbeat,
 )
 from media_archive_tooling.orchestrator.discovery import discover_media_targets
 from media_archive_tooling.orchestrator.models import FileExecutionStatus, StageName, WorkflowType
@@ -1178,7 +1180,10 @@ def test_34_wma_is_decoded_to_temporary_whisper_wav(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr("media_archive_tooling.content_discoverer.transcriber.subprocess.run", fake_run)
-    whisper_input, detail = prepare_whisper_input(source, tmp_path)
+    progress = []
+    whisper_input, detail = prepare_whisper_input(
+        source, tmp_path, progress_callback=lambda stage, elapsed, status: progress.append((stage, status))
+    )
 
     assert whisper_input == decoded
     assert "16 kHz mono" in detail
@@ -1186,6 +1191,7 @@ def test_34_wma_is_decoded_to_temporary_whisper_wav(tmp_path, monkeypatch):
     assert commands[0][commands[0].index("-ar") + 1] == "16000"
     assert commands[0][commands[0].index("-ac") + 1] == "1"
     assert source.read_bytes() == b"original WMA archive bytes"
+    assert progress == [("decode", "start"), ("decode", "done")]
 
 
 def test_35_wma_decode_failure_blocks_before_whisper(tmp_path, monkeypatch):
@@ -1203,3 +1209,22 @@ def test_35_wma_decode_failure_blocks_before_whisper(tmp_path, monkeypatch):
     with pytest.raises(TranscriptionBlockedError, match="Audio decoding failed before transcription"):
         prepare_whisper_input(source, tmp_path)
     assert source.read_bytes() == b"invalid audio"
+
+
+def test_36_transcription_heartbeat_reports_slow_subprocess(monkeypatch):
+    progress = []
+
+    def slow_run(command, **kwargs):
+        time.sleep(0.04)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr("media_archive_tooling.content_discoverer.transcriber.subprocess.run", slow_run)
+    run_with_heartbeat(
+        ["whisper-cli", "--no-prints"],
+        stage="transcribe_metal",
+        heartbeat_interval=0.01,
+        progress_callback=lambda stage, elapsed, status: progress.append((stage, status)),
+    )
+    assert progress[0] == ("transcribe_metal", "start")
+    assert ("transcribe_metal", "heartbeat") in progress
+    assert progress[-1] == ("transcribe_metal", "done")

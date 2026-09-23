@@ -58,6 +58,11 @@ def _check_scripture_descriptive_suffix(
         m = re.match(r"^[-_]([A-Za-z0-9\-]+)", remainder)
         if m:
             raw_suffix = m.group(1).strip("-_")
+            # A following performance/combination clue is not part of the
+            # scripture reference or its title. Technical parsing retains
+            # the clue separately as possible_combination evidence.
+            if re.match(r"^(?:with|and|plus|followed-by)(?:-|$)", raw_suffix, re.IGNORECASE):
+                return None, 0
             # Do not consume technical tokens, country codes, or tracking IDs
             if not re.match(r"^(?:ID-[0-9a-fA-F]{8}|cz|in|nl|it|us|se|no|rs|kks|\d+)$", raw_suffix, re.IGNORECASE):
                 # Check if it matches a known specific title

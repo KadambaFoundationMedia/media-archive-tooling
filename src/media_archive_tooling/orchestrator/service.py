@@ -356,11 +356,23 @@ class MainToolingScriptService:
             return t5_stage, None
 
         try:
+            def report_progress(stage: str, elapsed_seconds: float, status: str) -> None:
+                self.reporter.report_tool5_progress(stage, elapsed_seconds, status)
+                if status in {"heartbeat", "done", "failed"}:
+                    self.logger.info(
+                        "TOOL_5_PROGRESS",
+                        tool="tool_5",
+                        file_path=path,
+                        tracking_id=tracking_id,
+                        details={"stage": stage, "status": status, "elapsed_seconds": round(elapsed_seconds, 1)},
+                    )
+
             content_res = self.tool5_service.discover_content(
                 target=path,
                 tracking_id=tracking_id,
                 dry_run=self.dry_run,
                 phase1_context=phase1_context,
+                progress_callback=report_progress,
             )
             boundary_str = f" | Boundary: {content_res.cutter_proposal.suggested_cut_points}" if content_res.cutter_proposal else ""
             route_str = " -> process_by_tool_6" if content_res.process_by_tool_6 else ""
