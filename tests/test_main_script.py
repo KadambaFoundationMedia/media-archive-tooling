@@ -1503,3 +1503,185 @@ def test_52_tool5_progress_is_concise_and_visible(capsys):
         "  Tool 5 — Transcribing on Metal: 30s elapsed",
         "  Tool 5 — Reusing saved transcript",
     ]
+
+
+def test_53_bounded_evaluation_copy(tmp_path):
+    """53. Bounded evaluation helper enforces max_files, max_bytes, preflight space, and preserves sources (R-052)."""
+    import sys
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from scripts.run_tool_4_evaluation import (
+        DEFAULT_MAX_EVAL_BYTES,
+        DEFAULT_MAX_EVAL_FILES,
+        select_and_copy_bounded_evaluation_media,
+    )
+
+    src_dir = tmp_path / "sample_source"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "eval_dest"
+
+    created_files = []
+    for i in range(10):
+        f = src_dir / f"2022-09-19_KKS_Oslo_{i:02d}.mp3"
+        f.write_bytes(b"X" * 100)
+        created_files.append(f)
+
+    # 1. Enforce max_files
+    copied = select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=4, max_bytes=10000)
+    assert len(copied) == 4
+    assert len(list(dst_dir.glob("*.mp3"))) == 4
+    for f in created_files:
+        assert f.exists()
+        assert f.stat().st_size == 100
+
+    # 2. Enforce max_bytes
+    dst_dir_2 = tmp_path / "eval_dest_2"
+    copied_bytes = select_and_copy_bounded_evaluation_media(src_dir, dst_dir_2, max_files=10, max_bytes=250)
+    assert len(copied_bytes) == 2
+    assert len(list(dst_dir_2.glob("*.mp3"))) == 2
+
+    # 3. Preflight space check failure
+    dst_dir_3 = tmp_path / "eval_dest_3"
+    with patch("shutil.disk_usage", return_value=shutil._ntuple_diskusage(1000, 990, 50)):
+        with pytest.raises(RuntimeError, match="Insufficient disk space"):
+            select_and_copy_bounded_evaluation_media(src_dir, dst_dir_3, max_files=5, max_bytes=1000)
+
+
+def test_54_scratch_space_preflight_and_cleanup(tmp_path, env_setup):
+    """54. Preflight scratch space verification and safe abandoned scratch cleanup (R-053)."""
+    from media_archive_tooling.orchestrator.scratch import clean_abandoned_scratch
+
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+
+    s1 = scratch_dir / ".tmp_extract_123.wav"
+    s1.write_text("extract")
+    s2 = scratch_dir / ".tmp_whisper_abc.json"
+    s2.write_text("whisper")
+    s3 = scratch_dir / "tmp_main_run_xyz.tmp"
+    s3.write_text("run")
+
+    media_file = scratch_dir / "real_archive_audio.mp3"
+    media_file.write_text("audio")
+    user_file = scratch_dir / "notes.txt"
+    user_file.write_text("user notes")
+
+    cleaned = clean_abandoned_scratch(scratch_dir)
+    assert len(cleaned) == 3
+    assert not s1.exists()
+    assert not s2.exists()
+    assert not s3.exists()
+    assert media_file.exists()
+    assert user_file.exists()
+
+    f_test = env_setup["media_dir"] / "test_scratch.mp3"
+    f_test.write_text("audio")
+    svc = env_setup["service"]
+
+    with patch("shutil.disk_usage", return_value=shutil._ntuple_diskusage(1000, 999, 10)):
+        summary = svc.run([f_test])
+        assert summary.failed_retryable == 1
+        assert summary.completed == 0
+        assert summary.file_results[0].status == FileExecutionStatus.FAILED_RETRYABLE
+        assert "Insufficient disk space" in summary.file_results[0].error
+        assert f_test.exists()
+
+
+def test_55_stage_checkpoint_resumability_and_retry(env_setup):
+    """55. Durable stage checkpoints allow resuming uncompleted stages and isolating file failures (R-053)."""
+    from media_archive_tooling.orchestrator.scratch import compute_file_sha256
+
+    media_dir = env_setup["media_dir"]
+    file1 = media_dir / "2022-09-19_KKS_Oslo.mp3"
+    file1.write_text("audio 1")
+    file2 = media_dir / "2017-04-10_KKS_Krsna-Dvur.mp3"
+    file2.write_text("audio 2")
+
+    svc = env_setup["service"]
+    reg = env_setup["registry"]
+
+    # First run: simulate failure in Tool 2
+    with patch.object(svc.tool2_service, "review_file", side_effect=RuntimeError("Simulated Tool 2 error")):
+        summary1 = svc.run([file1])
+        assert summary1.review_required == 1
+        assert summary1.completed == 0
+        tid1 = summary1.file_results[0].tracking_id
+        cp1 = reg.get_stage_checkpoint(tid1, StageName.TOOL_1_INITIAL.value)
+        assert cp1 is not None
+        assert cp1["status"] == "COMPLETED"
+        assert cp1["input_path"] == str(file1.resolve())
+
+    # Second run: resumes from Stage 2 using Stage 1 checkpoint
+    with patch.object(svc.logger, "info") as mock_info:
+        summary2 = svc.run([file1])
+        assert summary2.completed == 1
+        assert summary2.failed == 0
+        skipped_calls = [
+            c for c in mock_info.call_args_list
+            if c.args and c.args[0] == "STAGE_SKIPPED_CHECKPOINT"
+        ]
+        assert len(skipped_calls) >= 1
+        assert any(c.kwargs.get("tool") == "tool_1" for c in skipped_calls)
+
+    # File failure isolation: an errored file fails isolatedly without blocking other files
+    f_bad = media_dir / "2022-09-19_KKS_Bad_File.mp3"
+    f_bad.write_text("corrupted")
+    orig_sha = compute_file_sha256
+
+    def selective_sha(p):
+        if "Bad_File" in str(p):
+            raise RuntimeError("Corrupted file read error")
+        return orig_sha(p)
+
+    with patch("media_archive_tooling.orchestrator.service.compute_file_sha256", side_effect=selective_sha):
+        summary3 = svc.run([f_bad, file2])
+        assert summary3.failed == 1
+        assert summary3.review_required >= 1
+
+
+def test_56_long_folder_bounded_memory_and_logging(tmp_path, env_setup):
+    """56. Bounded in-memory results, bounded discovery logging, and fail-closed production flag (R-053)."""
+    media_dir = env_setup["media_dir"]
+    files = []
+    for i in range(25):
+        f = media_dir / f"2022-09-19_KKS_Oslo_{i:02d}.mp3"
+        f.write_text("audio")
+        files.append(f)
+
+    svc = create_main_tooling_service(
+        registry_path=env_setup["registry"].db_path,
+        log_file=tmp_path / "test.log",
+        workflow=WorkflowType.RENAMER,
+        dry_run=True,
+        max_retained_file_results=5,
+        registry=env_setup["registry"],
+        travel_service=env_setup["service"].travel_service,
+        tool2_service=env_setup["service"].tool2_service,
+        tool4_service=env_setup["service"].tool4_service,
+    )
+
+    with patch.object(svc.logger, "info") as mock_info:
+        summary = svc.run(files)
+        disc_calls = [c for c in mock_info.call_args_list if c.args and c.args[0] == "TARGETS_DISCOVERED"]
+        assert len(disc_calls) == 1
+        details = disc_calls[0].kwargs.get("details", {})
+        assert details["media_count"] == 25
+        assert len(details["sample_media_files"]) <= 10
+
+    assert summary.total_discovered == 25
+    assert summary.dry_run_previews == 25
+    assert len(summary.file_results) == 5
+
+    prod_svc = create_main_tooling_service(
+        registry_path=env_setup["registry"].db_path,
+        log_file=tmp_path / "test_prod.log",
+        workflow=WorkflowType.RENAMER,
+        production=True,
+        registry=env_setup["registry"],
+    )
+    prod_summary = prod_svc.run([files[0]])
+    assert prod_summary.exit_code == 1
+    assert prod_summary.completed == 0

@@ -621,6 +621,7 @@ def run_main_script(args):
     purge = getattr(args, "purge", False)
     dry_run = getattr(args, "dry_run", False)
     verbose = getattr(args, "verbose", False)
+    production = getattr(args, "production", False)
     workflow_str = getattr(args, "workflow", "all")
     reg_path = getattr(args, "registry_path", None)
     log_file = getattr(args, "log_file", None)
@@ -643,6 +644,7 @@ def run_main_script(args):
             workflow=workflow,
             dry_run=dry_run,
             verbose=verbose,
+            production=production,
             tool2_service=getattr(args, "tool2_service", None),
             travel_service=getattr(args, "travel_service", None),
             tool4_service=getattr(args, "tool4_service", None),
@@ -748,6 +750,7 @@ def main():
     run_parser = subparsers.add_parser("run", help="Run Main Tooling Script orchestrator (Phase A: Tools 1–4)")
     run_parser.add_argument("targets", nargs="*", default=[], help="Target media file(s) and/or folder(s)")
     run_parser.add_argument("--purge", action="store_true", default=False, help="Purge alpha/beta test data from Baserow and reset local review registry")
+    run_parser.add_argument("--production", action="store_true", default=False, help="Run in production archive mode (gated pending confirmed production retention policy)")
     run_parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=False, help="Perform dry-run preview without modifying filesystem or database")
     run_parser.add_argument("--verbose", action="store_true", default=False, help="Show detailed output in terminal")
     run_parser.add_argument("--workflow", choices=["all", "renamer", "processing"], default="all", help="Workflow selection: all (default), renamer, processing")

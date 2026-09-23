@@ -170,6 +170,20 @@ class LocalRegistry:
                 created_at TEXT NOT NULL
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stage_checkpoints (
+                tracking_id TEXT NOT NULL,
+                stage_name TEXT NOT NULL,
+                input_path TEXT NOT NULL,
+                input_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL, -- COMPLETED, FAILED, REVIEW_REQUIRED, SKIPPED
+                summary TEXT,
+                details_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (tracking_id, stage_name)
+            )
+            """)
             try:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
@@ -189,6 +203,7 @@ class LocalRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_reviews_classification ON content_reviews(classification)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_reviews_review_required ON content_reviews(review_required)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_audio_derivatives_source ON video_audio_derivatives(source_video_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_stage_checkpoints_tid ON stage_checkpoints(tracking_id)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -881,6 +896,7 @@ class LocalRegistry:
             cursor.execute("DELETE FROM media_db_syncs")
             cursor.execute("DELETE FROM content_reviews")
             cursor.execute("DELETE FROM video_audio_derivatives")
+            cursor.execute("DELETE FROM stage_checkpoints")
             cursor.execute("DELETE FROM files")
             cursor.execute("DELETE FROM test_row_ledger")
             conn.commit()
@@ -1200,3 +1216,111 @@ class LocalRegistry:
             except Exception:
                 pass
             f.close()
+
+    def save_stage_checkpoint(
+        self,
+        tracking_id: str,
+        stage_name: str,
+        input_path: Union[str, Path],
+        input_sha256: str,
+        status: str,
+        summary: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """Persist or update a stage checkpoint for resumability."""
+        now = datetime.now(timezone.utc).isoformat()
+        resolved_path = str(Path(input_path).resolve())
+        details_json = json.dumps(details) if details is not None else None
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO stage_checkpoints (
+                tracking_id, stage_name, input_path, input_sha256,
+                status, summary, details_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id, stage_name) DO UPDATE SET
+                input_path = excluded.input_path,
+                input_sha256 = excluded.input_sha256,
+                status = excluded.status,
+                summary = excluded.summary,
+                details_json = excluded.details_json,
+                updated_at = excluded.updated_at
+            """, (
+                tracking_id,
+                stage_name,
+                resolved_path,
+                input_sha256,
+                status,
+                summary,
+                details_json,
+                now,
+                now,
+            ))
+            conn.commit()
+
+    def get_stage_checkpoint(
+        self,
+        tracking_id: str,
+        stage_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve a specific stage checkpoint by tracking_id and stage_name."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT tracking_id, stage_name, input_path, input_sha256,
+                   status, summary, details_json, created_at, updated_at
+            FROM stage_checkpoints
+            WHERE tracking_id = ? AND stage_name = ?
+            """, (tracking_id, stage_name))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            if res.get("details_json"):
+                try:
+                    res["details"] = json.loads(res["details_json"])
+                except Exception:
+                    res["details"] = None
+            else:
+                res["details"] = None
+            return res
+
+    def get_stage_checkpoints(
+        self,
+        tracking_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve all stage checkpoints for a file by tracking_id."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT tracking_id, stage_name, input_path, input_sha256,
+                   status, summary, details_json, created_at, updated_at
+            FROM stage_checkpoints
+            WHERE tracking_id = ?
+            ORDER BY created_at ASC
+            """, (tracking_id,))
+            rows = cursor.fetchall()
+            results = []
+            for row in rows:
+                res = dict(row)
+                if res.get("details_json"):
+                    try:
+                        res["details"] = json.loads(res["details_json"])
+                    except Exception:
+                        res["details"] = None
+                else:
+                    res["details"] = None
+                results.append(res)
+            return results
+
+    def clear_stage_checkpoints(self, tracking_id: Optional[str] = None):
+        """Clear stage checkpoints for a specific tracking_id or all."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if tracking_id:
+                cursor.execute("DELETE FROM stage_checkpoints WHERE tracking_id = ?", (tracking_id,))
+            else:
+                cursor.execute("DELETE FROM stage_checkpoints")
+            conn.commit()

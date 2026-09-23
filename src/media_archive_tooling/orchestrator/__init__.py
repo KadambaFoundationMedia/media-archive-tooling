@@ -18,6 +18,13 @@ from .models import (
     WorkflowType,
 )
 from .reporter import TerminalReporter
+from .scratch import (
+    ScratchTracker,
+    check_available_scratch_space,
+    clean_abandoned_scratch,
+    compute_file_sha256,
+    ensure_sufficient_scratch_space,
+)
 from .service import MainToolingScriptService, create_main_tooling_service
 
 __all__ = [
@@ -36,6 +43,11 @@ __all__ = [
     "TerminalReporter",
     "UnifiedArchiveLogger",
     "WorkflowType",
+    "ScratchTracker",
+    "check_available_scratch_space",
+    "clean_abandoned_scratch",
+    "compute_file_sha256",
+    "ensure_sufficient_scratch_space",
     "discover_media_targets",
     "is_supported_media_file",
 ]
