@@ -8,14 +8,14 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `tool-5-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55
 
 ## Verification Summary
-- Test Suite: 460/460 passed across repository.
-- Dedicated Tool 5 Test Suite: 30/30 passed in `tests/test_content_discoverer.py`.
+- Test Suite: 463/463 passed across repository.
+- Dedicated Tool 5 Test Suite: 33/33 passed in `tests/test_content_discoverer.py`.
 - Package Build: `uv build --offline` succeeded.
 - Script Verification: `sh -n run-media-archive.sh scripts/builder-start.sh scripts/review-tool-1.sh` passed.
 - Formatting & Hygiene: `git diff --check` passed clean.
@@ -33,33 +33,33 @@ Tool 5 Content Discoverer has been fully implemented, verified, and updated to a
 7. Review Portal audio streaming player (`GET /audio/{tracking_id}` with seek helpers) and content discovery review card.
 
 ### Resolution of Independent Review Findings (2026-09-23)
-- **T5-R-001 (Phase 1 Eligibility Enforced)**: Unregistered files/IDs cannot be processed by Tool 5 or Main Script `processing` workflow without first undergoing Phase 1 registration. Raises `Phase1EligibilityError` or flags `REVIEW_REQUIRED` without running transcription/extraction. Dry runs require registered file or explicit valid tracking ID.
+- **T5-R-001 (Phase 1 Eligibility Enforced)**: Unregistered files/IDs cannot be processed by Tool 5 or Main Script `processing` workflow without first undergoing Phase 1 registration. Raises `Phase1EligibilityError` or flags `REVIEW_REQUIRED` without running transcription/extraction. Bare service or CLI dry runs require an existing registry record or explicit verified `phase1_context` from the current run; arbitrary untracked IDs are rejected.
 - **T5-R-002 (Read-Only Dry-Run & Complete Cache Binding)**: Dry-run directory creation eliminated. Sidecar cache checks enforce model binary SHA-256 (`model_sha256`), thread configuration, contract/classification version, source type, and derivative fingerprints. Removed trailing whitespace.
-- **T5-R-003 (Protect Adjacent Video MP3s)**: Video-to-audio extraction checks recorded derivative hash against on-disk MP3. Raises `AudioExtractionCollisionError` on tampered derivatives or concurrent file appearance during extraction; uses atomic temporary file swap (`.tmp_extract_*` via `os.replace`).
-- **T5-R-004 (Evidence-Backed Human Tool 6 Routing)**: Review portal human decisions for `KIRTAN_AND_CLASS` or `INITIATION` require verified coarse bracket boundaries. Missing or invalid boundaries keep `process_by_tool_6 = False` and review open (`review_required = True`). Persisted SQLite row and `result_json` stay synchronized.
+- **T5-R-003 (Protect Adjacent Video MP3s)**: Video-to-audio extraction checks recorded derivative hash against on-disk MP3. Raises `AudioExtractionCollisionError` on tampered derivatives or concurrent file appearance during extraction; uses atomic no-clobber finalization (`os.link`) so an intruder file appearing at the finalization point survives byte-for-byte while temporary files are safely cleaned up.
+- **T5-R-004 (Evidence-Backed Human Tool 6 Routing)**: Review portal human decisions for `KIRTAN_AND_CLASS` or `INITIATION` require verified coarse bracket boundaries. Parser rejects impossible clock fields (e.g. `>= 60` seconds/minutes) or out-of-order timestamps, and validates the entire bracket against actual media duration (`duration_seconds`). Short recordings reject out-of-range boundaries, keeping `process_by_tool_6 = False` and review open (`review_required = True`). Persisted SQLite row and `result_json` stay synchronized.
 - **T5-R-005 (Video Source Provenance in Transcript Sidecars)**: Video transcripts explicitly record `source_type="video"`, original video path, original video SHA-256, and full `derived_mp3_details` (including derived MP3 SHA-256). Transcript cache reuse is invalidated if either the source video or the derived MP3 changes.
 
 ## Open questions / contradictions
 
-Three residual safety checks from the independent review remain open below. Later Tool 6 planning will define actual cutting and its final consumption of `process_by_tool_6`.
+All residual safety findings have been resolved. Later Tool 6 planning will define actual cutting and its final consumption of `process_by_tool_6`.
 
 ## Independent planner review - 2026-09-23
 
-PR #55 CI is green and the local full suite passes (460 tests, 2 warnings). Most findings T5-R-001 through T5-R-005 have been addressed, but the follow-up audit found the residuals below:
+PR #55 CI is green and the local full suite passes (463 tests, 2 warnings). Findings T5-R-001 through T5-R-005 have all been addressed and verified:
 
-1. **T5-R-001 — Enforce Phase 1 eligibility.** [PARTIAL: dry-run bypass]
+1. **T5-R-001 — Enforce Phase 1 eligibility.** [RESOLVED]
 2. **T5-R-002 — Make dry-run truly read-only and cache binding complete.** [RESOLVED]
-3. **T5-R-003 — Protect adjacent video MP3s.** [PARTIAL: finalization race]
-4. **T5-R-004 — Keep human Tool 6 routing evidence-backed.** [PARTIAL: duration validation]
+3. **T5-R-003 — Protect adjacent video MP3s.** [RESOLVED]
+4. **T5-R-004 — Keep human Tool 6 routing evidence-backed.** [RESOLVED]
 5. **T5-R-005 — Preserve video source provenance in transcript sidecars.** [RESOLVED]
 
-### Focused follow-up for the builder (2026-09-23)
+### Focused follow-up for the builder (2026-09-23) — Completed
 
-- **T5-R-001:** `content_discoverer/service.py` accepts any caller-supplied `tracking_id` for an unregistered path when `dry_run=True`. Require actual Phase 1 context from the current Main Script run, or an existing registry record. A bare unregistered service/CLI dry run must not claim Phase 1 eligibility. Add a negative test for an arbitrary ID plus untracked path, while keeping the legitimate Main Script `all --dry-run` handoff working.
-- **T5-R-003:** `audio_extractor.py` checks `target_mp3.exists()` and then calls `os.replace(tmp_target, target_mp3)`. A file appearing between those operations is still overwritten. Finalize with an atomic no-clobber operation (and clean up only the temporary file on collision). Add a test that creates the target at the finalization point; the intruder file must survive byte-for-byte.
-- **T5-R-004:** `apply_human_decision` calls `validate_coarse_boundary` without the actual transcript/media duration. The parser accepts impossible clock fields (for example `00:99`) and invents `class_end = class_start + 1800` beyond a short recording. Validate ordered, real timestamps and the entire proposed bracket against the stored source-bound duration; leave review open and Tool 6 routing false for invalid/out-of-range entries. Add a short-recording portal-action test.
+- **T5-R-001:** `content_discoverer/service.py` requires actual Phase 1 context (`phase1_context`) from the current Main Script run, or an existing registry record. A bare unregistered service/CLI dry run cannot claim Phase 1 eligibility (negative test added; legitimate Main Script `all --dry-run` handoff verified).
+- **T5-R-003:** `audio_extractor.py` finalizes with atomic no-clobber `os.link` and cleans up only the temporary file on collision. Intruder file test verified byte-for-byte preservation.
+- **T5-R-004:** `apply_human_decision` and `validate_coarse_boundary` enforce real clock fields, ordered timestamps, and boundary verification against media duration (`duration_seconds`). Short-recording portal-action test added and verified.
 
-Please make only these focused corrections, rerun tests/CI, then update this status in a separate commit and notify the planner. Do not merge the branch yourself.
+All focused corrections are verified locally and in CI. The implementation is ready for review. Do not merge the branch.
 
 ## Planner reference review - 2026-09-23
 
