@@ -14,7 +14,7 @@ class TerminalReporter:
         self.verbose = verbose
         self.dry_run = dry_run
 
-    def report_startup(self, workflow: WorkflowType, target_count: int) -> None:
+    def report_startup(self, workflow: WorkflowType, target_count: Optional[int] = None) -> None:
         if self.dry_run:
             print("=== [DRY-RUN MODE] Media Archive Tooling Runner ===")
             print("Dry-run preview active: no filesystem or Baserow mutations will be made.")
@@ -29,10 +29,17 @@ class TerminalReporter:
         elif workflow == WorkflowType.PROCESSING:
             print("Workflow: processing (Tool 5 active for Phase 1-tracked files; Tools 6–11 pending)")
 
-        print(f"Discovered {target_count} media file(s) for processing.\n")
+        if target_count is not None:
+            print(f"Discovered {target_count} media file(s) for processing.\n")
+        else:
+            print("Incremental streaming target discovery active.\n")
 
-    def report_file_start(self, file_path: Path, index: int, total: int) -> None:
-        print(f"[{index}/{total}] Processing file: {file_path}")
+    def report_file_start(self, file_path: Path, index: int, total: Optional[int] = None) -> None:
+        if total is not None:
+            print(f"[{index}/{total}] Processing file: {file_path}")
+        else:
+            print(f"[{index}] Processing file: {file_path}")
+
 
     def report_stage_result(self, result: StageResult) -> None:
         print(f"  {result.summary}")

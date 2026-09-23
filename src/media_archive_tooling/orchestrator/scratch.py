@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 # Common prefixes for temporary files generated across tools
 ABANDONED_SCRATCH_PREFIXES = (
@@ -80,40 +80,52 @@ def is_scratch_artifact(path: Path) -> bool:
 
 def clean_abandoned_scratch(
     scratch_dir: Optional[Union[str, Path]] = None,
+    registry: Optional[Any] = None,
+    dry_run: bool = False,
     target_roots: Optional[List[Union[str, Path]]] = None,
 ) -> List[Path]:
-    """Clean up owned temporary scratch files from interrupted prior runs.
-    
-    Safety rule: only removes files or directories matching owned scratch patterns.
-    Never removes media originals or arbitrary files.
+    """Clean up owned temporary scratch files from interrupted prior runs (R-054).
+
+    Safety rules:
+    - Dry-run must delete nothing.
+    - Clean ONLY scratch artifacts proved owned by durable registry identity
+      and strictly confined to the tool's designated scratch area.
+    - Never sweep arbitrary target roots or perform directory-wide prefix deletion.
     """
+    if dry_run or not scratch_dir or registry is None:
+        return []
+
+    p_scratch = Path(scratch_dir).resolve()
+    if not p_scratch.exists() or not p_scratch.is_dir():
+        return []
+
     cleaned: List[Path] = []
-    dirs_to_scan: List[Path] = []
+    try:
+        recorded_artifacts = registry.get_scratch_artifacts()
+    except Exception:
+        return []
 
-    if scratch_dir:
-        p = Path(scratch_dir).resolve()
-        if p.exists() and p.is_dir():
-            dirs_to_scan.append(p)
+    for item in recorded_artifacts:
+        art_path_str = item.get("artifact_path")
+        if not art_path_str:
+            continue
+        art_path = Path(art_path_str).resolve()
 
-    if target_roots:
-        for root in target_roots:
-            rp = Path(root).resolve()
-            if rp.exists() and rp.is_dir() and rp not in dirs_to_scan:
-                dirs_to_scan.append(rp)
-
-    for base in dirs_to_scan:
+        # Strict containment check: must be inside scratch_dir
         try:
-            for item in base.iterdir():
-                if is_scratch_artifact(item):
-                    try:
-                        if item.is_file() or item.is_symlink():
-                            item.unlink(missing_ok=True)
-                            cleaned.append(item)
-                        elif item.is_dir():
-                            shutil.rmtree(item, ignore_errors=True)
-                            cleaned.append(item)
-                    except Exception:
-                        pass
+            if not art_path.is_relative_to(p_scratch):
+                continue
+        except (ValueError, AttributeError):
+            continue
+
+        try:
+            if art_path.is_file() or art_path.is_symlink():
+                art_path.unlink(missing_ok=True)
+                cleaned.append(art_path)
+            elif art_path.is_dir():
+                shutil.rmtree(art_path, ignore_errors=True)
+                cleaned.append(art_path)
+            registry.remove_scratch_artifact(art_path)
         except Exception:
             pass
 
@@ -123,15 +135,47 @@ def clean_abandoned_scratch(
 class ScratchTracker:
     """Context manager and tracker for temporary scratch files created during file execution."""
 
-    def __init__(self, scratch_dir: Optional[Union[str, Path]] = None):
+    def __init__(
+        self,
+        scratch_dir: Optional[Union[str, Path]] = None,
+        registry: Optional[Any] = None,
+        run_id: Optional[str] = None,
+        tracking_id: Optional[str] = None,
+    ):
         self.scratch_dir = Path(scratch_dir).resolve() if scratch_dir else None
+        self.registry = registry
+        self.run_id = run_id
+        self.tracking_id = tracking_id
         self.tracked_paths: List[Path] = []
+
+    def set_tracking_id(self, tracking_id: str) -> None:
+        """Update tracking_id for subsequently or already tracked paths."""
+        self.tracking_id = tracking_id
+        if self.registry and hasattr(self.registry, "record_scratch_artifact"):
+            for p in self.tracked_paths:
+                try:
+                    self.registry.record_scratch_artifact(
+                        artifact_path=p,
+                        run_id=self.run_id,
+                        tracking_id=self.tracking_id,
+                    )
+                except Exception:
+                    pass
 
     def register(self, path: Union[str, Path]) -> Path:
         """Register an existing or about-to-be-created scratch path for lifecycle cleanup."""
         p = Path(path).resolve()
         if p not in self.tracked_paths:
             self.tracked_paths.append(p)
+            if self.registry and hasattr(self.registry, "record_scratch_artifact"):
+                try:
+                    self.registry.record_scratch_artifact(
+                        artifact_path=p,
+                        run_id=self.run_id,
+                        tracking_id=self.tracking_id,
+                    )
+                except Exception:
+                    pass
         return p
 
     def create_scratch_file(self, prefix: str = "tmp_main_", suffix: str = ".tmp") -> Path:
@@ -156,6 +200,11 @@ class ScratchTracker:
                     shutil.rmtree(p, ignore_errors=True)
             except Exception:
                 pass
+            if self.registry and hasattr(self.registry, "remove_scratch_artifact"):
+                try:
+                    self.registry.remove_scratch_artifact(p)
+                except Exception:
+                    pass
         self.tracked_paths.clear()
 
     def __enter__(self):

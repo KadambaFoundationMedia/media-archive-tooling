@@ -59,6 +59,7 @@ def make_portable(data: Any) -> Any:
 
 DEFAULT_MAX_EVAL_FILES = 30
 DEFAULT_MAX_EVAL_BYTES = 500 * 1024 * 1024  # 500 MB preflight budget
+EVALUATION_WORKSPACE_MARKER = ".evaluation_workspace_marker"
 
 
 def select_and_copy_bounded_evaluation_media(
@@ -67,10 +68,16 @@ def select_and_copy_bounded_evaluation_media(
     max_files: int = DEFAULT_MAX_EVAL_FILES,
     max_bytes: int = DEFAULT_MAX_EVAL_BYTES,
 ) -> List[Path]:
-    """Select a diverse bounded subset of sample media files and copy within budget (R-052).
+    """Select a diverse bounded subset of sample media files and copy within budget (R-052, R-055).
 
     Never copies the full archive or sample-files directory wholesale. Preserves source files.
+    Rejects invalid/nonpositive limits and enforces byte limits on every single file.
     """
+    if max_files <= 0:
+        raise ValueError(f"max_files must be positive, got {max_files}")
+    if max_bytes <= 0:
+        raise ValueError(f"max_bytes must be positive, got {max_bytes}")
+
     eval_media_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Preflight disk space verification
@@ -107,7 +114,7 @@ def select_and_copy_bounded_evaluation_media(
         if len(selected) >= max_files:
             break
         sz = cand.stat().st_size
-        if total_bytes + sz > max_bytes and len(selected) > 0:
+        if sz > max_bytes or total_bytes + sz > max_bytes:
             continue
         selected.append(cand)
         total_bytes += sz
@@ -148,8 +155,25 @@ def run_evaluation(
     config = load_config()
     sample_path = (sample_dir or Path("sample-files")).resolve()
     workspace_path = (eval_workspace or Path(".renamer/eval_workspace")).resolve()
+
+    # Safety: Refuse deleting system or repository roots
+    forbidden_roots = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+    if workspace_path in forbidden_roots or workspace_path.parent == Path("/").resolve():
+        raise ValueError(f"Refusing unsafe evaluation workspace path: {workspace_path}")
+
+    marker_file = workspace_path / EVALUATION_WORKSPACE_MARKER
     if workspace_path.exists():
-        shutil.rmtree(workspace_path)
+        existing_items = [p for p in workspace_path.iterdir() if p.name != ".DS_Store"]
+        if existing_items:
+            if not marker_file.exists():
+                raise ValueError(
+                    f"Refusing to delete unowned evaluation workspace at {workspace_path}: "
+                    f"directory is non-empty and missing {EVALUATION_WORKSPACE_MARKER} proof of ownership."
+                )
+            shutil.rmtree(workspace_path)
+
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    marker_file.write_text("owned_by=run_tool_4_evaluation\n")
     eval_media_dir = workspace_path / "media"
 
     select_and_copy_bounded_evaluation_media(

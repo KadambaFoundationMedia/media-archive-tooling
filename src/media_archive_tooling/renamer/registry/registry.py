@@ -184,6 +184,14 @@ class LocalRegistry:
                 PRIMARY KEY (tracking_id, stage_name)
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS scratch_artifacts (
+                artifact_path TEXT PRIMARY KEY,
+                run_id TEXT,
+                tracking_id TEXT,
+                created_at TEXT NOT NULL
+            )
+            """)
             try:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
@@ -204,6 +212,7 @@ class LocalRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_reviews_review_required ON content_reviews(review_required)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_audio_derivatives_source ON video_audio_derivatives(source_video_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_stage_checkpoints_tid ON stage_checkpoints(tracking_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_scratch_artifacts_run_id ON scratch_artifacts(run_id)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -897,6 +906,7 @@ class LocalRegistry:
             cursor.execute("DELETE FROM content_reviews")
             cursor.execute("DELETE FROM video_audio_derivatives")
             cursor.execute("DELETE FROM stage_checkpoints")
+            cursor.execute("DELETE FROM scratch_artifacts")
             cursor.execute("DELETE FROM files")
             cursor.execute("DELETE FROM test_row_ledger")
             conn.commit()
@@ -1323,4 +1333,63 @@ class LocalRegistry:
                 cursor.execute("DELETE FROM stage_checkpoints WHERE tracking_id = ?", (tracking_id,))
             else:
                 cursor.execute("DELETE FROM stage_checkpoints")
+            conn.commit()
+
+    def record_scratch_artifact(
+        self,
+        artifact_path: Union[str, Path],
+        run_id: Optional[str] = None,
+        tracking_id: Optional[str] = None,
+    ) -> None:
+        """Record an owned temporary scratch artifact for safe lifecycle tracking."""
+        resolved = str(Path(artifact_path).resolve())
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO scratch_artifacts (artifact_path, run_id, tracking_id, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(artifact_path) DO UPDATE SET
+                run_id = excluded.run_id,
+                tracking_id = excluded.tracking_id,
+                created_at = excluded.created_at
+            """, (resolved, run_id, tracking_id, now))
+            conn.commit()
+
+    def get_scratch_artifacts(
+        self,
+        run_id: Optional[str] = None,
+        tracking_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve registered scratch artifacts, optionally filtered by run_id or tracking_id."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            query = "SELECT artifact_path, run_id, tracking_id, created_at FROM scratch_artifacts WHERE 1=1"
+            params: List[Any] = []
+            if run_id:
+                query += " AND run_id = ?"
+                params.append(run_id)
+            if tracking_id:
+                query += " AND tracking_id = ?"
+                params.append(tracking_id)
+            query += " ORDER BY created_at ASC"
+            cursor.execute(query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def remove_scratch_artifact(self, artifact_path: Union[str, Path]) -> None:
+        """Remove a scratch artifact record after it has been deleted or cleaned."""
+        resolved = str(Path(artifact_path).resolve())
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM scratch_artifacts WHERE artifact_path = ?", (resolved,))
+            conn.commit()
+
+    def clear_scratch_artifacts(self, run_id: Optional[str] = None) -> None:
+        """Clear scratch artifact records for a run or all."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if run_id:
+                cursor.execute("DELETE FROM scratch_artifacts WHERE run_id = ?", (run_id,))
+            else:
+                cursor.execute("DELETE FROM scratch_artifacts")
             conn.commit()
