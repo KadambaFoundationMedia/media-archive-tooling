@@ -7,9 +7,10 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `IN_PROGRESS`
+Status: `READY_FOR_REVIEW`
 
 Implementation branch: `main-tooling-script-implementation`
+Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
 
 ## Open questions / contradictions
 
