@@ -17,6 +17,7 @@ from .models import DerivedAudioDetails, TranscriptArtifact, TranscriptSegment
 
 
 MAX_TRANSCRIPT_BYTES = 100 * 1024 * 1024  # 100 MB max allowed JSON payload
+WHISPER_NATIVE_AUDIO_EXTENSIONS = frozenset({".flac", ".mp3", ".ogg", ".wav"})
 
 
 class TranscriptionError(Exception):
@@ -27,6 +28,44 @@ class TranscriptionError(Exception):
 class TranscriptionBlockedError(TranscriptionError):
     """Raised when transcription cannot proceed or model/hardware fails."""
     pass
+
+
+def prepare_whisper_input(audio_path: Path, temporary_dir: Path) -> Tuple[Path, str]:
+    """Decode formats unsupported by whisper-cli into a temporary 16 kHz mono WAV."""
+    if audio_path.suffix.lower() in WHISPER_NATIVE_AUDIO_EXTENSIONS:
+        return audio_path, "native"
+
+    ffmpeg_executable = shutil.which("ffmpeg")
+    if not ffmpeg_executable:
+        raise TranscriptionBlockedError(
+            f"ffmpeg is required to decode {audio_path.suffix or 'this audio format'} for whisper-cli"
+        )
+
+    decoded_path = temporary_dir / "whisper-input.wav"
+    command = [
+        ffmpeg_executable,
+        "-nostdin", "-v", "error", "-y",
+        "-i", str(audio_path),
+        "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000",
+        "-c:a", "pcm_s16le", "-f", "wav", str(decoded_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=900,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TranscriptionBlockedError("Audio decoding timed out before transcription") from exc
+    except OSError as exc:
+        raise TranscriptionBlockedError(f"Could not start ffmpeg audio decoder: {exc}") from exc
+
+    if result.returncode != 0 or not decoded_path.is_file() or decoded_path.stat().st_size <= 44:
+        error = result.stderr.decode("utf-8", errors="replace")[-500:].strip()
+        raise TranscriptionBlockedError(f"Audio decoding failed before transcription: {error or 'no valid WAV output'}")
+    return decoded_path, "ffmpeg pcm_s16le 16 kHz mono (temporary)"
 
 
 def parse_timestamp_seconds(value: Any) -> Optional[float]:
@@ -243,6 +282,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
             expected_json = Path(f"{tmp_stem}.json")
 
             start_t = time.time()
+            whisper_input, audio_preprocessing = prepare_whisper_input(audio_path, Path(tmp_dir))
             success = False
 
             # Attempt 1: Metal if auto or metal
@@ -250,7 +290,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                 cmd = [
                     str(self.whisper_executable),
                     "--model", str(resolved_model),
-                    "--file", str(audio_path),
+                    "--file", str(whisper_input),
                     "--language", "auto",
                     "--output-json",
                     "--output-file", str(tmp_stem),
@@ -272,10 +312,10 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     if res.returncode == 0 and expected_json.exists():
                         success = True
                     else:
-                        err = res.stderr.decode(errors="replace").strip()
+                        err = res.stderr.decode(errors="replace")[-1000:].strip()
                         if device_mode == "metal":
                             raise TranscriptionBlockedError(f"Transcription failed on explicit Metal device: {err}")
-                        fallback_reason = f"Metal failure (exit {res.returncode}): {err[:200]}"
+                        fallback_reason = f"Metal failure (exit {res.returncode}): {err}"
                 except Exception as e:
                     if device_mode == "metal":
                         raise TranscriptionBlockedError(f"Transcription error on explicit Metal device: {e}")
@@ -287,7 +327,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                 cmd = [
                     str(self.whisper_executable),
                     "--model", str(resolved_model),
-                    "--file", str(audio_path),
+                    "--file", str(whisper_input),
                     "--language", "auto",
                     "--output-json",
                     "--output-file", str(tmp_stem),
@@ -310,7 +350,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     if res.returncode == 0 and expected_json.exists():
                         success = True
                     else:
-                        err = res.stderr.decode(errors="replace").strip()
+                        err = res.stderr.decode(errors="replace")[-1000:].strip()
                         raise TranscriptionBlockedError(f"Transcription failed on CPU: {err}")
                 except Exception as e:
                     if isinstance(e, TranscriptionBlockedError):
@@ -434,6 +474,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     "requested_device": requested_device,
                     "threads": self.threads,
                     "fallback_reason": fallback_reason,
+                    "audio_preprocessing": audio_preprocessing,
                     "elapsed_seconds": elapsed,
                     "rtf": rtf,
                 },
