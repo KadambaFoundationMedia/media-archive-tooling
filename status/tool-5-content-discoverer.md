@@ -8,7 +8,7 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
 
 Implementation branch: `tool-5-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55
@@ -41,17 +41,25 @@ Tool 5 Content Discoverer has been fully implemented, verified, and updated to a
 
 ## Open questions / contradictions
 
-None. All review findings T5-R-001 through T5-R-005 have been resolved and verified with dedicated test coverage. Later Tool 6 planning will define actual cutting and its final consumption of `process_by_tool_6`.
+Three residual safety checks from the independent review remain open below. Later Tool 6 planning will define actual cutting and its final consumption of `process_by_tool_6`.
 
 ## Independent planner review - 2026-09-23
 
-PR #55 CI is green and the local full suite passes (460 tests, 2 warnings). Findings T5-R-001 through T5-R-005 have been addressed:
+PR #55 CI is green and the local full suite passes (460 tests, 2 warnings). Most findings T5-R-001 through T5-R-005 have been addressed, but the follow-up audit found the residuals below:
 
-1. **T5-R-001 — Enforce Phase 1 eligibility.** [RESOLVED]
+1. **T5-R-001 — Enforce Phase 1 eligibility.** [PARTIAL: dry-run bypass]
 2. **T5-R-002 — Make dry-run truly read-only and cache binding complete.** [RESOLVED]
-3. **T5-R-003 — Protect adjacent video MP3s.** [RESOLVED]
-4. **T5-R-004 — Keep human Tool 6 routing evidence-backed.** [RESOLVED]
+3. **T5-R-003 — Protect adjacent video MP3s.** [PARTIAL: finalization race]
+4. **T5-R-004 — Keep human Tool 6 routing evidence-backed.** [PARTIAL: duration validation]
 5. **T5-R-005 — Preserve video source provenance in transcript sidecars.** [RESOLVED]
+
+### Focused follow-up for the builder (2026-09-23)
+
+- **T5-R-001:** `content_discoverer/service.py` accepts any caller-supplied `tracking_id` for an unregistered path when `dry_run=True`. Require actual Phase 1 context from the current Main Script run, or an existing registry record. A bare unregistered service/CLI dry run must not claim Phase 1 eligibility. Add a negative test for an arbitrary ID plus untracked path, while keeping the legitimate Main Script `all --dry-run` handoff working.
+- **T5-R-003:** `audio_extractor.py` checks `target_mp3.exists()` and then calls `os.replace(tmp_target, target_mp3)`. A file appearing between those operations is still overwritten. Finalize with an atomic no-clobber operation (and clean up only the temporary file on collision). Add a test that creates the target at the finalization point; the intruder file must survive byte-for-byte.
+- **T5-R-004:** `apply_human_decision` calls `validate_coarse_boundary` without the actual transcript/media duration. The parser accepts impossible clock fields (for example `00:99`) and invents `class_end = class_start + 1800` beyond a short recording. Validate ordered, real timestamps and the entire proposed bracket against the stored source-bound duration; leave review open and Tool 6 routing false for invalid/out-of-range entries. Add a short-recording portal-action test.
+
+Please make only these focused corrections, rerun tests/CI, then update this status in a separate commit and notify the planner. Do not merge the branch yourself.
 
 ## Planner reference review - 2026-09-23
 
