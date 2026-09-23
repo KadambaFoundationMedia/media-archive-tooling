@@ -9,6 +9,10 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 Status: `READY_FOR_REVIEW`
 
+## Planner-authored maintenance / coordination — 2026-09-23
+
+PR [#57](https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/57), code commit `d558163`, wires Tool 5's optional progress callback through the Main Script and standalone CLI, adds concise conversion/transcription heartbeat lines, and omits duplicated large Tool 4 `fields`/`live_row` dumps from verbose terminal output while retaining the normal Tool 4 write summary and structured log details. The workflow banner now correctly lists Tools 1–5 as active. The builder must preserve the callback/reporting integration and keep JSON output free of terminal progress text. Full local suite: 469 passed.
+
 ## Alpha/beta cleanup amendment — 2026-09-22 [RESOLVED]
 
 Implemented the Main Tooling Script portion of

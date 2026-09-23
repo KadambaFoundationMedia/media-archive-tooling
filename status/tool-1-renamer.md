@@ -11,6 +11,10 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
+## Planner-authored maintenance / coordination — 2026-09-23
+
+PR [#57](https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/57), code commit `d558163`, fixes the user's WMA regression: a suffix such as `-with-radha-madhava` after `SB-1-19-31` is combination evidence, not part of the scripture WHAT or Baserow Title. Tool 1 now proposes `2011-08-20_KKS_SB-1-19-31_Oslo-no.wma`, keeps `possible_combination=True`, and passes `SB 1.19.31` to Tool 4 title resolution. The builder must retain this separation when working on Tool 1 or the later combination/cutting workflow. This is a narrow parser correction, not a new content classification rule. No live rename or Baserow write was made during verification.
+
 Post-acceptance architecture note (2026-09-17): Tool 1's accepted naming/domain behavior remains approved. `docs/baserow-access-boundary-amendment.md` requires Tool 1 to ask Tool 2 for the live Media check and Tool 3 for schedule/date evidence, commit the final filename for that stage, and then call Tool 4 once to synchronize Baserow. Tool 1 itself has no Baserow access. This integration refinement is tracked with the Tool 4 correction round and does not reopen the accepted naming rules.
 
 Practical correction (2026-09-17): the user identified an accepted-parser gap. `S.B. 1.19.31` must resolve to `SB-1-19-31`; `with Radha Madhava` marks a combination for later Tools 5/6 without replacing the exact primary class name; and all proposed filenames must follow the strict punctuation-free archive grammar. The exact sample regression now expects `2011-08-29_KKS_SB-1-19-31_Oslo-no.wma`. These orchestrator-authored changes supersede the older raw-stem fallback for combinations and are recorded here for the Builder.
