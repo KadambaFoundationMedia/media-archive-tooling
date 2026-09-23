@@ -30,3 +30,15 @@ testable now.
 None. Later Tool 6 planning will define the actual cutting execution and how
 it consumes `process_by_tool_6`; Tool 5 must only write the safe handoff flag
 and proposed reviewed boundaries.
+
+## Planner reference review - 2026-09-23
+
+The independent local `audio-editing` project was reviewed as a read-only
+implementation reference. Tool 5 must preserve this project's in-situ archive
+policy and remain independent, but the finalized plan now adopts compatible
+patterns: source/configuration/transcript fingerprints, complete timeline
+coverage including silence gaps, explicit Metal-to-CPU evidence, bounded
+subprocess/JSON handling, source-change detection, and coarse review brackets
+instead of automatic exact cut points. A video-derived adjacent MP3 is also
+registered as a Tool 5 derivative so archive discovery cannot treat it as a
+second independent input.

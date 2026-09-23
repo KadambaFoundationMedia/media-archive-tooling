@@ -155,6 +155,12 @@ proving it was generated for the same source fingerprint; otherwise block for
 review. A failed/missing `ffmpeg` is a blocked processing result, not a
 fallback to an online service.
 
+The derived MP3 is a Tool 5 video-audio derivative, not a new archive media
+item. Persist its source-video tracking ID and fingerprints in the registry so
+normal archive discovery skips it and cannot process it a second time as an
+independent Phase 1 file. Tool 5 may use it internally for transcription; a
+later explicit policy must decide whether it becomes a retained archive asset.
+
 Audio input is used directly and no derivative audio file is created.
 
 ---
@@ -232,6 +238,37 @@ transcription configuration/model fingerprint match; otherwise regenerate.
 An existing valid transcript enables classification retry without rerunning
 Whisper.
 
+Before transcribing, calculate the input fingerprint and duration with safe
+local preflight (`ffprobe`/decoder metadata). Recalculate the input fingerprint
+after transcription; if it changed, discard/quarantine the result and block
+classification as a changed source. Do not follow a symlink outside the
+requested archive target and do not construct shell commands from filename
+text. Subprocesses must use argument arrays, `-nostdin`, bounded output,
+timeouts, and a minimal inherited environment.
+
+Normalize the raw Whisper JSON into a bounded project segment contract with
+timeline coverage from `00:00` to the measured end. Preserve explicit blank
+intervals for non-speech/silence rather than silently omitting gaps. This lets
+later Tools 6, 8, and 10 distinguish an observed silent/ambience interval from
+an unreviewed part of the recording. Store private transcript artifacts with
+owner-only permissions where the platform supports them.
+
+### Reference implementation patterns (Audio-Editing review, 2026-09-23)
+
+The independent `/Users/maced/dev/audio-editing` project is a **reference only**:
+Tool 5 must not import it, share its private job database, or require its
+working-root layout. The Builder should adapt these proven local patterns:
+
+- `whisper.cpp` capability probing, hardware-aware thread selection, recorded
+  real-time factor/load metrics, and visible Metal-to-CPU fallback;
+- source SHA-256, analysis-profile/configuration digest, and transcript digest
+  binding before cache reuse or later handoff;
+- 1/2/5/10-minute plus tail windows as explanatory evidence derived from the
+  full transcript, not as a substitute for it;
+- normalized Sanskrit/mantra aliases while retaining raw excerpts and timing;
+- strict malformed/oversized transcript rejection and fixture-backed adapters
+  so CI never requires media hardware or model assets.
+
 ---
 
 ## 7. Content evidence and classification rules
@@ -283,7 +320,8 @@ A confident `KIRTAN_AND_CLASS` requires distinct ordered time ranges:
 
 1. an initial sustained kirtan/mantra range; and
 2. later class-pattern/sustained explanatory speech evidence;
-3. a boundary interval/range and confidence for the intended Tool 6 handoff.
+3. a boundary **review interval/range** and confidence for the intended Tool 6
+   handoff.
 
 An `INITIATION` requires positive multi-part ceremony evidence (for example
 mantra/yajna/ceremonial language plus distinct discourse/singing portions),
@@ -294,9 +332,13 @@ A file whose filename suggests a combination but whose full audio evidence is
 only singing is `KIRTAN`, not a combination. It remains in place and receives
 no cutter flag.
 
-No combination/cutting handoff is allowed if a boundary is uncertain. Mark it
-`UNKNOWN_REVIEW` (or another explicitly uncertain result) and route it to the
-portal with the evidence needed for human review.
+Tool 5 must never call the boundary an approved exact cut. The `process_by_tool_6`
+handoff contains the source-bound coarse bracket between the last detected
+kirtan/mantra evidence and first later class evidence; Tool 6 will refine it
+and obtain the human decision required for actual cutting. No
+combination/cutting handoff is allowed if even the coarse bracket is uncertain.
+Mark it `UNKNOWN_REVIEW` (or another explicitly uncertain result) and route it
+to the portal with the evidence needed for human review.
 
 ### 7.4 Confidence and review
 
@@ -372,6 +414,8 @@ Add hermetic fixtures and tests for at least:
 14. dry-run zero mutation;
 15. Tool 5 registry data is cleared by the existing alpha/beta fresh-slate/
     purge flow only after Tool 4 test-row cleanup succeeds.
+16. source changes during transcription, symlink/path escape, malformed or
+    oversized Whisper output, and derivative-MP3 discovery suppression.
 
 Before handoff run focused Tool 5/portal tests, the complete project suite,
 shell checks, package build, and required GitHub CI. A practical local smoke
