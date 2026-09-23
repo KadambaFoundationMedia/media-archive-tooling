@@ -13,6 +13,12 @@ Status: `ACCEPTED`
 Implementation branch: `tool-5-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/55
 
+## Planner-authored maintenance / coordination - 2026-09-23
+
+PR [#56](https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/56), commit `b0cf379`, corrects a real Tool 5 transcription failure on the user's WMA sample. This Homebrew `whisper-cli` supports FLAC/MP3/OGG/WAV but not WMA; Tool 5 now decodes unsupported audio formats with FFmpeg to a temporary 16 kHz mono WAV before transcription. The archive input remains unchanged, and the temporary WAV is removed after the call. `TranscriptArtifact.input_path` and source SHA-256 still refer to the original media; `raw_metadata.audio_preprocessing` records the temporary decoder step. No Baserow or registry schema is changed. The Builder must preserve this input-adaptation behavior and provenance when continuing Tool 5 or related audio tools.
+
+Verification: full local suite 466 passed; a 12-second excerpt from the reported WMA file successfully transcribed on Metal with temporary WAV preprocessing. The full 6,217-second WMA also completed through `ContentDiscovererService.discover_content(..., dry_run=True)`: `KIRTAN_AND_CLASS`, `HIGH`, `review_required=False`, transcript SHA-256 `866d1b6cc538262f701aff3662a49f78a7cb6cbe6c014871d0a9a9dddd9e5919`. No source file, registry content review, or Baserow row was changed by the dry-run test. The temporary excerpt was removed afterward.
+
 ## Verification Summary
 - Test Suite: 463/463 passed across repository.
 - Dedicated Tool 5 Test Suite: 33/33 passed in `tests/test_content_discoverer.py`.
