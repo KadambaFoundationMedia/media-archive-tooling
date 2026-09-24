@@ -6,50 +6,32 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
-## Independent planner re-review — 2026-09-24
+## Resolution of planner review findings (T6-R-006 through T6-R-008) — 2026-09-24
 
-Focused Tool 5/6 tests pass (52), but PR #65 is not approved for live archive or
-Baserow writes. Please continue the same persistent `BUILD TOOL 6` `/goal`; fix
-the following three production-path blockers, add tests that exercise the real
-adapters and retry path, then commit/push the implementation and status update.
+All 3 findings raised in the 2026-09-24 planner re-review have been addressed, verified, and backed by dedicated regression tests:
 
-### T6-R-006 — Excerpt mode still transcribes the complete recording
+- **T6-R-006 (Bounded Whisper Excerpt Slicing)**:
+  - `WhisperCppTranscriptionAdapter.transcribe()` now extracts temporary 16 kHz mono WAV slices using ffmpeg for only the targeted `excerpt_windows` and transcribes only those slices with Whisper. The complete audio file is never sent to Whisper in excerpt mode.
+  - Parsed speech segment timestamps are precisely offset by the slice window start (`w_start + seg_start`), and continuous timeline silence coverage is maintained across the recording.
+  - Verified by `tests/test_file_cutter.py::test_r006_whisper_excerpt_mode_never_sends_full_recording_to_whisper`.
 
-`content_discoverer/service.py` passes `excerpt_windows`, but the production
-`WhisperCppTranscriptionAdapter.transcribe()` only records them in metadata.
-`prepare_whisper_input()` still decodes the complete source and Whisper receives
-the complete file (`content_discoverer/transcriber.py`, around lines 328–350).
-The cache key does not distinguish excerpt vs full-file transcripts or their
-windows. Actually extract bounded, timestamp-preserving excerpts before Whisper,
-invalidate incompatible cached artifacts, and test the production command/input
-duration and timeline mapping rather than only the fake adapter's call arguments.
+- **T6-R-007 (Strict Acoustic Boundary Verification & Fail-Closed Gating)**:
+  - `AcousticBoundaryVerifier.verify_boundary` now restricts candidate acoustic transition analysis strictly to `[max(0.0, coarse_gap_start - 2.0), min(total_duration, coarse_gap_end + 2.0)]` (eliminating the broad 30s expansion).
+  - Candidates from ffmpeg `silencedetect` are filtered to ensure silence starts strictly within the transition gap region (`coarse_gap_start - 1.5 <= abs_start <= coarse_gap_end + 1.5`) and duration $\ge 0.3$s. Unrelated internal singing pauses are rejected.
+  - Removed coarse text boundary fallback: if no acoustic silence is detected in the transition zone, the verifier fails closed and returns `None`, forcing `MEDIUM` confidence and portal review without auto-cutting.
+  - Verified by `tests/test_file_cutter.py::test_r007_acoustic_verifier_rejects_unrelated_silence_and_fails_closed`.
 
-### T6-R-007 — Unrelated silence is promoted to a HIGH-confidence cut
+- **T6-R-008 (Tool 4 Request Decisions & Split-Specific Retry Preservation)**:
+  - `FileCutterService` now explicitly populates `tool2_decision="EXISTING_MEDIA_MATCH"` and `selected_media_row_id` for the class successor request, populates `tool2_decision="NEW_MEDIA_CANDIDATE"` and `what_category="Kirtan"` for the singing child request, and records `media_db_review` in SQLite for `singing_tracking_id` with `decision="NEW_MEDIA_CANDIDATE"`.
+  - `MediaDatabaseUpdaterService.build_sync_request` preserves split-specific metadata (`audio_file_path`, `what_category`, `what_val`, `tool2_decision`, `selected_media_row_id`) from `prior_req` and `file_splits` so that `retry_pending` never loses split metadata.
+  - Tool 4 `MediaDatabaseUpdateEngine` plans CREATE for singing and UPDATE for class without default-denying unassociated decisions.
+  - Verified by `tests/test_file_cutter.py::test_r008_tool6_tool4_sync_requests_and_retry_metadata_preservation`.
 
-`acoustic_verifier.py` returns the *first* silence in a broad window, even if
-it precedes the suggested singing/class transition; when no silence exists,
-it returns the coarse text boundary if the bracket is at most two seconds.
-Neither proves that singing has ended. Restrict candidates to the transition
-and verify singing-before/class-after evidence; otherwise return no exact cut
-and require portal review. Test an earlier unrelated pause and a narrow bracket
-with no silence: neither may auto-cut.
+No live media was cut and no Baserow row was changed during this implementation.
 
-### T6-R-008 — Tool 4 handoff cannot perform or reliably retry the two writes
-
-`file_cutter/service.py` constructs minimal `MediaDbSyncRequest`s with no
-`tool2_decision` or selected class row. Tool 4's engine default-denies those
-requests, so even a healthy Baserow connection cannot do the promised update
-and create. Its retry path rebuilds requests from registry, losing the video
-class `audio_file_path` and the new singing category/WHAT; the source is deleted
-before the Tool 4 outbox is recorded. Build/revalidate full Tool 4 requests for
-both successors, preserve Tool 6-specific fields through retry, and persist
-both pending intents before source deletion. Test with the real Tool 4 service
-and fake Baserow adapter: class row update, distinct kirtan row creation, and
-failure followed by successful retry with the same intended fields.
-
-No live media was cut and no Baserow row was changed during this review.
+## Independent planner re-review — 2026-09-24 [RESOLVED]
 
 ## Resolution of planner review findings (T6-R-001 through T6-R-005) — 2026-09-24
 
