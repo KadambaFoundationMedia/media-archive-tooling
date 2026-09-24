@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,89 @@ class AcousticBoundaryVerifier:
 
     def __init__(self, ffmpeg_bin: Optional[str] = None):
         self.ffmpeg_bin = ffmpeg_bin or shutil.which("ffmpeg")
+
+    def detect_candidate_transitions(
+        self,
+        audio_path: Path,
+        total_duration: float,
+        max_search_sec: float = 2400.0,
+    ) -> List[Tuple[float, float]]:
+        """Detect candidate transition gaps (singing_end, speech_start) across early timeline.
+
+        Continuous music (kirtan/bhajan) lacks speech pauses (>0.5s). When kirtan concludes,
+        the music ceases, producing the first silence event. A transition pause follows before
+        spoken discourse commences with typical conversational pause cadence.
+
+        Returns a list of (candidate_singing_end, candidate_speech_start) tuples.
+        """
+        if not self.ffmpeg_bin or not audio_path.exists() or total_duration <= 0.0:
+            return []
+
+        search_dur = min(total_duration, max_search_sec)
+        if search_dur <= 180.0:
+            return []
+
+        cmd = [
+            self.ffmpeg_bin,
+            "-nostdin",
+            "-v", "info",
+            "-to", f"{search_dur:.3f}",
+            "-i", str(audio_path),
+            "-af", "silencedetect=noise=-30dB:d=0.5",
+            "-f", "null",
+            "-",
+        ]
+
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=45,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.warning("ffmpeg silencedetect failed during transition detection on %s: %s", audio_path, e)
+            return []
+
+        if res.returncode != 0:
+            return []
+
+        stderr_text = res.stderr.decode("utf-8", errors="replace")
+
+        # Parse silence intervals: silence_start: X, silence_end: Y | silence_duration: Z
+        events: List[Tuple[float, float, float]] = []
+        current_start = None
+        for line in stderr_text.splitlines():
+            m_s = re.search(r"silence_start:\s*(\d+(?:\.\d+)?)", line)
+            if m_s:
+                current_start = float(m_s.group(1))
+            m_e = re.search(r"silence_end:\s*(\d+(?:\.\d+)?)\s*\|\s*silence_duration:\s*(\d+(?:\.\d+)?)", line)
+            if m_e and current_start is not None:
+                end_val = float(m_e.group(1))
+                dur_val = float(m_e.group(2))
+                events.append((current_start, end_val, dur_val))
+                current_start = None
+
+        if not events:
+            return []
+
+        candidates = []
+        # If the first silence in the recording occurs after at least 150s of sustained sound,
+        # it is a strong acoustic candidate for the end of singing.
+        first_silence = events[0]
+        if first_silence[0] >= 150.0:
+            singing_end = first_silence[0]
+            # Speech start is typically the end of the transition pause, where frequent pauses begin.
+            # Look for the last silence in the transition cluster (within 60s of singing_end).
+            speech_start = first_silence[1]
+            cluster_events = [ev for ev in events if ev[0] - singing_end <= 60.0]
+            if len(cluster_events) > 1:
+                # Find the silence preceding the speech onset (before the gap closes)
+                speech_start = cluster_events[-1][1]
+            candidates.append((round(singing_end, 3), round(speech_start, 3)))
+
+        return candidates
 
     def verify_boundary(
         self,
@@ -102,10 +185,20 @@ class FakeAcousticBoundaryVerifier:
         self,
         exact_cut_point: Optional[float] = None,
         should_verify: bool = True,
+        candidate_transitions: Optional[List[Tuple[float, float]]] = None,
     ):
         self.exact_cut_point = exact_cut_point
         self.should_verify = should_verify
+        self.candidate_transitions = candidate_transitions or []
         self.calls = []
+
+    def detect_candidate_transitions(
+        self,
+        audio_path: Path,
+        total_duration: float,
+        max_search_sec: float = 2400.0,
+    ) -> List[Tuple[float, float]]:
+        return self.candidate_transitions
 
     def verify_boundary(
         self,

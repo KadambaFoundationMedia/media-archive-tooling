@@ -70,6 +70,29 @@ MAHA_MANTRA_PATTERNS = [
     r"\brama\s+rama\s+hare\s+hare\b",
 ]
 
+SINGING_INDICATOR_PATTERNS = [
+    r"\b\*dies\s+singing\*\b",
+    r"[\*\[\(]?(?:singing|music|singing\s+continues|applause)[\*\]\)]?",
+    r"\bsatsang\s+with\s+mooji\b",
+    r"\b(i'?m\s+sorry\.?\s*){2,}",
+    r"\b(thank\s+you\.?\s*){2,}",
+]
+
+SPOKEN_DISCOURSE_PATTERNS = [
+    r"\bwe\s+are\s+reading\b",
+    r"\bfirst\s+canto\b",
+    r"\bsecond\s+canto\b",
+    r"\bthird\s+canto\b",
+    r"\bfourth\s+canto\b",
+    r"\bfifth\s+canto\b",
+    r"\bsixth\s+canto\b",
+    r"\bseventh\s+canto\b",
+    r"\beighth\s+canto\b",
+    r"\bninth\s+canto\b",
+    r"\btenth\s+canto\b",
+    r"\bappearance\s+of\s+sukadeva\b",
+]
+
 # ---------------------------------------------------------------------------
 # Class Structure Matchers
 # ---------------------------------------------------------------------------
@@ -224,9 +247,10 @@ class ContentClassifier:
 
         evidence: List[ContentEvidence] = []
 
-        # 1. Detect Mantras
+        # 1. Detect Mantras and Singing Indicators
         detected_mantra = MantraType.NONE
         mantra_ranges: List[Tuple[float, float, str]] = []
+        singing_ranges: List[Tuple[float, float, str]] = []
 
         for seg in speech_segments:
             norm = normalize_text(seg.text)
@@ -285,6 +309,18 @@ class ContentClassifier:
                         normalized_text=norm,
                     )
                 )
+            # Whisper singing / music / hallucination indicators
+            elif any(re.search(pat, norm) for pat in SINGING_INDICATOR_PATTERNS):
+                singing_ranges.append((seg.start_seconds, seg.end_seconds, "singing_indicator"))
+                evidence.append(
+                    ContentEvidence(
+                        kind="singing_detected",
+                        start_seconds=seg.start_seconds,
+                        end_seconds=seg.end_seconds,
+                        raw_excerpt=seg.text,
+                        normalized_text=norm,
+                    )
+                )
 
         # 2. Detect Class Indicators
         class_ranges: List[Tuple[float, float, str]] = []
@@ -301,7 +337,7 @@ class ContentClassifier:
                         normalized_text=norm,
                     )
                 )
-            if any(re.search(pat, norm) for pat in READING_INTRO_PATTERNS):
+            if any(re.search(pat, norm) for pat in READING_INTRO_PATTERNS + SPOKEN_DISCOURSE_PATTERNS):
                 class_ranges.append((seg.start_seconds, seg.end_seconds, "reading_intro"))
                 evidence.append(
                     ContentEvidence(
@@ -332,6 +368,19 @@ class ContentClassifier:
                         end_seconds=seg.end_seconds,
                         raw_excerpt=seg.text,
                         normalized_text=norm,
+                    )
+                )
+            # Sustained spoken discourse (> 20 words without music/singing or home/festival patterns)
+            words = norm.split()
+            if len(words) >= 20 and not any(re.search(pat, norm) for pat in SINGING_INDICATOR_PATTERNS + MAHA_MANTRA_PATTERNS + JAYA_RADHA_MADHAVA_PATTERNS + HOME_PROGRAM_PATTERNS + FESTIVAL_PATTERNS):
+                class_ranges.append((seg.start_seconds, seg.end_seconds, "spoken_discourse"))
+                evidence.append(
+                    ContentEvidence(
+                        kind="spoken_discourse",
+                        start_seconds=seg.start_seconds,
+                        end_seconds=seg.end_seconds,
+                        raw_excerpt=seg.text[:100] + ("..." if len(seg.text) > 100 else ""),
+                        normalized_text=norm[:100],
                     )
                 )
 
@@ -485,10 +534,66 @@ class ContentClassifier:
             )
 
         # Check for Kirtan and Class combination (Section 7.3)
-        if has_mantra_evidence and has_class_evidence:
+        cand_transitions = meta.get("candidate_transitions") or []
+        has_combination_clue = meta.get("has_combination_clue", False)
+        mantra_hint = meta.get("mantra_hint")
+
+        has_singing_evidence = (
+            has_mantra_evidence
+            or len(singing_ranges) >= 1
+            or (has_combination_clue and len(cand_transitions) >= 1 and cand_transitions[0][0] >= 150.0)
+        )
+
+        if has_singing_evidence and has_class_evidence:
             earliest_class = min(r[0] for r in class_ranges)
+
+            # Resolve mantra type from hint if not detected from Sanskrit lyric text
+            if detected_mantra == MantraType.NONE:
+                if mantra_hint:
+                    try:
+                        detected_mantra = MantraType(mantra_hint)
+                    except Exception:
+                        try:
+                            detected_mantra = MantraType[mantra_hint]
+                        except Exception:
+                            detected_mantra = MantraType.KIRTAN
+                else:
+                    detected_mantra = MantraType.KIRTAN
+
+            # If acoustic candidate transition verified singing end and speech start:
+            if cand_transitions:
+                singing_end, speech_start = cand_transitions[0]
+                coarse_gap = (singing_end, speech_start)
+                cutter_prop = CutterBoundaryProposal(
+                    kirtan_range=(0.0, singing_end),
+                    class_range=(speech_start, total_duration),
+                    coarse_gap_bracket=coarse_gap,
+                    singing_end_seconds=singing_end,
+                    source_duration_seconds=total_duration,
+                    source_sha256=artifact.input_sha256,
+                    method="acoustic_silence_transition",
+                    confidence="HIGH",
+                )
+                return ContentDiscoveryResult(
+                    tracking_id=artifact.tracking_id,
+                    classification=ContentType.KIRTAN_AND_CLASS,
+                    confidence=ConfidenceLevel.HIGH,
+                    mantra_type=detected_mantra,
+                    process_by_tool_6=True,
+                    cutter_proposal=cutter_prop,
+                    transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
+                    transcript_sha256=artifact.transcript_sha256,
+                    input_sha256=artifact.input_sha256,
+                    source_path=artifact.input_path,
+                    evidence=evidence,
+                    review_required=False,
+                    runtime_provenance=meta,
+                )
+
+            # Otherwise, use text-segment coarse boundaries
+            all_singing = mantra_ranges + singing_ranges
             latest_kirtan_before_class = max(
-                (r[1] for r in mantra_ranges if r[1] <= earliest_class + 60.0),
+                (r[1] for r in all_singing if r[1] <= earliest_class + 60.0),
                 default=0.0,
             )
 
@@ -524,7 +629,18 @@ class ContentClassifier:
 
         # Check for Pure KIRTAN (singing only, no lecture/class discourse)
         # Even if filename suggested a class or combination (Section 7.3)
-        if has_mantra_evidence and not has_class_evidence and not has_festival_evidence:
+        if (has_mantra_evidence or len(singing_ranges) >= 1) and not has_class_evidence and not has_festival_evidence:
+            if detected_mantra == MantraType.NONE:
+                if mantra_hint:
+                    try:
+                        detected_mantra = MantraType(mantra_hint)
+                    except Exception:
+                        try:
+                            detected_mantra = MantraType[mantra_hint]
+                        except Exception:
+                            detected_mantra = MantraType.KIRTAN
+                else:
+                    detected_mantra = MantraType.KIRTAN
             # Singing dominates recording
             return ContentDiscoveryResult(
                 tracking_id=artifact.tracking_id,
@@ -539,25 +655,6 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
-                runtime_provenance=meta,
-            )
-
-        # Check for Pure CLASS (e.g. partial or full class structure)
-        if has_class_evidence:
-            confidence = ConfidenceLevel.HIGH if len(class_ranges) >= 2 else ConfidenceLevel.MEDIUM
-            return ContentDiscoveryResult(
-                tracking_id=artifact.tracking_id,
-                classification=ContentType.CLASS,
-                confidence=confidence,
-                mantra_type=detected_mantra,
-                process_by_tool_6=False,
-                cutter_proposal=None,
-                transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
-                transcript_sha256=artifact.transcript_sha256,
-                input_sha256=artifact.input_sha256,
-                source_path=artifact.input_path,
-                evidence=evidence,
-                review_required=(confidence != ConfidenceLevel.HIGH),
                 runtime_provenance=meta,
             )
 
@@ -594,6 +691,25 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
+                runtime_provenance=meta,
+            )
+
+        # Check for Pure CLASS (e.g. partial or full class structure)
+        if has_class_evidence:
+            confidence = ConfidenceLevel.HIGH if len(class_ranges) >= 2 else ConfidenceLevel.MEDIUM
+            return ContentDiscoveryResult(
+                tracking_id=artifact.tracking_id,
+                classification=ContentType.CLASS,
+                confidence=confidence,
+                mantra_type=detected_mantra,
+                process_by_tool_6=False,
+                cutter_proposal=None,
+                transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
+                transcript_sha256=artifact.transcript_sha256,
+                input_sha256=artifact.input_sha256,
+                source_path=artifact.input_path,
+                evidence=evidence,
+                review_required=(confidence != ConfidenceLevel.HIGH),
                 runtime_provenance=meta,
             )
 

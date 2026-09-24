@@ -293,19 +293,92 @@ class ContentDiscovererService:
         if duration_sec <= 0.0:
             duration_sec = 600.0
 
+        # Extract metadata hints for combination and mantra clues
+        has_combination_clue = False
+        mantra_hint = None
+        category_hint = None
+        orig_fn = ""
+
+        if resolved_tid:
+            file_rec = self.registry.get_file(resolved_tid)
+            if file_rec:
+                orig_fn = file_rec.get("original_filename") or ""
+                pjson = file_rec.get("parser_result_json")
+                if pjson:
+                    try:
+                        pdata = json.loads(pjson)
+                        fmeta = pdata.get("file_metadata") or {}
+                        if fmeta.get("possible_combination"):
+                            has_combination_clue = True
+                        wdata = pdata.get("what") or {}
+                        category_hint = wdata.get("category")
+                        unclass = pdata.get("unclassified_text") or []
+                        unclass_str = " ".join(unclass).lower()
+                        if "radha" in unclass_str or "madhava" in unclass_str:
+                            mantra_hint = MantraType.JAYA_RADHA_MADHAVA.value
+                        elif "kirtan" in unclass_str or "bhajan" in unclass_str:
+                            mantra_hint = MantraType.KIRTAN.value
+                        elif "caitanya" in unclass_str:
+                            mantra_hint = MantraType.JAYA_JAYA_SRI_CAITANYA.value
+                        elif "nrsimha" in unclass_str or "narasimha" in unclass_str:
+                            mantra_hint = MantraType.NRISHMADEVA.value
+                    except Exception:
+                        pass
+
+        if phase1_context:
+            pres = getattr(phase1_context, "parser_result", None)
+            if pres:
+                fmeta = getattr(pres, "file_metadata", None)
+                if fmeta and getattr(fmeta, "possible_combination", False):
+                    has_combination_clue = True
+
+        fn_target = (orig_fn or media_path.name).lower()
+        if any(term in fn_target for term in ["with radha madhava", "radha madhava", "radhamadhava", "radha-madhava"]):
+            has_combination_clue = True
+            mantra_hint = MantraType.JAYA_RADHA_MADHAVA.value
+        elif any(term in fn_target for term in ["with kirtan", "+ kirtan", "& kirtan", "and kirtan"]):
+            has_combination_clue = True
+            if not mantra_hint:
+                mantra_hint = MantraType.KIRTAN.value
+        elif re.search(r"\b(with|and|&|\+|plus|followed\s+by)\b", fn_target):
+            has_combination_clue = True
+
+        # Detect candidate acoustic transitions (continuous music ending in silence)
+        candidate_transitions: List[Tuple[float, float]] = []
+        if duration_sec > 180.0 and self.acoustic_verifier and hasattr(self.acoustic_verifier, "detect_candidate_transitions"):
+            try:
+                candidate_transitions = self.acoustic_verifier.detect_candidate_transitions(
+                    actual_audio,
+                    total_duration=duration_sec,
+                    max_search_sec=min(duration_sec, 2400.0),
+                )
+            except Exception:
+                candidate_transitions = []
+
         excerpt_windows: List[Tuple[float, float]] = []
         if duration_sec <= 120.0:
             excerpt_windows.append((0.0, duration_sec))
         else:
             excerpt_windows.append((0.0, min(120.0, duration_sec)))
+
+            if candidate_transitions:
+                # Add targeted excerpt around speech onset
+                for _, speech_start in candidate_transitions[:2]:
+                    t_start = max(120.0, speech_start - 10.0)
+                    t_end = min(duration_sec, t_start + 60.0)
+                    if t_start < duration_sec and not any(abs(w[0] - t_start) < 20.0 for w in excerpt_windows):
+                        excerpt_windows.append((t_start, t_end))
+
             mid_s = max(120.0, duration_sec * 0.4)
             mid_e = min(duration_sec, mid_s + 60.0)
-            if mid_s < duration_sec:
+            if mid_s < duration_sec and not any(abs(w[0] - mid_s) < 30.0 for w in excerpt_windows):
                 excerpt_windows.append((mid_s, mid_e))
             if duration_sec > 600.0:
                 end_s = max(mid_e, duration_sec - 120.0)
-                if end_s < duration_sec:
+                if end_s < duration_sec and not any(abs(w[0] - end_s) < 30.0 for w in excerpt_windows):
                     excerpt_windows.append((end_s, duration_sec))
+
+        excerpt_windows.sort(key=lambda w: w[0])
 
         try:
             artifact = self.transcription_adapter.transcribe(
@@ -344,6 +417,14 @@ class ContentDiscovererService:
                 self.registry.save_content_review(err_result)
             return err_result
 
+        # Populate context in artifact metadata for classification
+        if artifact.raw_metadata is None:
+            artifact.raw_metadata = {}
+        artifact.raw_metadata["candidate_transitions"] = candidate_transitions
+        artifact.raw_metadata["has_combination_clue"] = has_combination_clue
+        artifact.raw_metadata["mantra_hint"] = mantra_hint
+        artifact.raw_metadata["category_hint"] = category_hint
+
         # 4. Classification from Excerpts
         result = self.classifier.classify(artifact)
         result.source_path = str(media_path)
@@ -358,31 +439,38 @@ class ContentDiscovererService:
             coarse_e = result.cutter_proposal.class_range[0]
             dur = result.cutter_proposal.source_duration_seconds or duration_sec
 
-            exact_cut = None
-            if self.acoustic_verifier:
-                exact_cut = self.acoustic_verifier.verify_boundary(
-                    actual_audio,
-                    coarse_s,
-                    coarse_e,
-                    dur,
-                )
-
-            if exact_cut is not None and exact_cut > 0:
-                result.cutter_proposal.singing_end_seconds = exact_cut
-                result.cutter_proposal.confidence = "HIGH"
-                result.cutter_proposal.method = "acoustic_local_boundary_verified"
+            if result.cutter_proposal.singing_end_seconds is not None and result.cutter_proposal.confidence == "HIGH":
+                # Already verified acoustically via transition detection
                 result.process_by_tool_6 = True
                 result.confidence = ConfidenceLevel.HIGH
                 result.review_required = False
                 result.review_reason = None
             else:
-                result.cutter_proposal.singing_end_seconds = None
-                result.cutter_proposal.confidence = "LOW"
-                result.cutter_proposal.method = "acoustic_verification_failed"
-                result.process_by_tool_6 = False
-                result.confidence = ConfidenceLevel.MEDIUM
-                result.review_required = True
-                result.review_reason = "Exact singing end boundary could not be verified acoustically from local audio; manual review required"
+                exact_cut = None
+                if self.acoustic_verifier:
+                    exact_cut = self.acoustic_verifier.verify_boundary(
+                        actual_audio,
+                        coarse_s,
+                        coarse_e,
+                        dur,
+                    )
+
+                if exact_cut is not None and exact_cut > 0:
+                    result.cutter_proposal.singing_end_seconds = exact_cut
+                    result.cutter_proposal.confidence = "HIGH"
+                    result.cutter_proposal.method = "acoustic_local_boundary_verified"
+                    result.process_by_tool_6 = True
+                    result.confidence = ConfidenceLevel.HIGH
+                    result.review_required = False
+                    result.review_reason = None
+                else:
+                    result.cutter_proposal.singing_end_seconds = None
+                    result.cutter_proposal.confidence = "LOW"
+                    result.cutter_proposal.method = "acoustic_verification_failed"
+                    result.process_by_tool_6 = False
+                    result.confidence = ConfidenceLevel.MEDIUM
+                    result.review_required = True
+                    result.review_reason = "Exact singing end boundary could not be verified acoustically from local audio; manual review required"
 
         # 5. Persistence
         if not dry_run:

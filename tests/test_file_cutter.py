@@ -1332,3 +1332,85 @@ def test_split_does_not_promote_unconfirmed_date_or_location(env):
     plan = updater.engine.plan_and_revalidate(request, updater.write_adapter.fields)
     assert "Date" not in {diff.field_name for diff in plan.field_diffs if diff.action == FieldAction.SET}
     assert "Place, location" not in {diff.field_name for diff in plan.field_diffs if diff.action == FieldAction.SET}
+
+
+def test_in_place_split_destination_collision_resolution(env):
+    """When source file already occupies the planned canonical class destination filename,
+    Tool 6 must stage cleanly, replace the class file in-place, and produce the singing file."""
+    src = make_audio_file(
+        env["media_dir"] / "2008-04-13_KKS_SB-01-02-19_Oslo.mp3",
+        duration=6.0,
+    )
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_inplace",
+        what_val="SB-01-02-19",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=2.5,
+        source_duration_seconds=6.0,
+    )
+
+    fn_singing, fn_class = env["cutter_service"].plan_output_filenames(tid, "Jaya-Radha-Madhava")
+    assert fn_class == "2008-04-13_KKS_SB-01-02-19_Oslo.mp3"
+    assert (env["media_dir"] / fn_class).resolve() == src.resolve()
+
+    # Dry run must succeed without collision failure
+    dry_res = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert dry_res.success is True
+    assert dry_res.review_required is False
+    assert dry_res.class_output_path == str(src)
+
+    # Live cut must succeed without collision failure
+    res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert res.success is True
+    assert res.review_required is False
+    assert Path(res.singing_output_path).is_file()
+    assert Path(res.class_output_path).is_file()
+    assert Path(res.class_output_path).resolve() == src.resolve()
+
+    info_c = env["audio_cutter"].inspect_audio(Path(res.class_output_path))
+    assert 3.0 <= info_c["duration"] <= 4.0
+
+    info_s = env["audio_cutter"].inspect_audio(Path(res.singing_output_path))
+    assert 2.0 <= info_s["duration"] <= 3.0
+
+
+def test_in_place_split_rollback_restores_original_source(env):
+    """If publication fails during in-place cut, rollback must restore the original source file."""
+    src = make_audio_file(
+        env["media_dir"] / "2008-04-13_KKS_SB-01-02-19_Oslo.mp3",
+        duration=6.0,
+    )
+    orig_bytes = src.read_bytes()
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_inplace_rb",
+        what_val="SB-01-02-19",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=2.5,
+        source_duration_seconds=6.0,
+    )
+
+    call_count = 0
+    original_publish = _atomic_publish_file
+
+    def mock_publish(staged, target):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:  # Fail on class publication
+            raise RuntimeError("Simulated class publish failure during in-place split")
+        original_publish(staged, target)
+
+    with patch("media_archive_tooling.file_cutter.service._atomic_publish_file", side_effect=mock_publish):
+        res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+
+    assert res.success is False
+    assert res.review_required is True
+    # Working input retained and restored!
+    assert src.is_file()
+    assert src.read_bytes() == orig_bytes
+    # Singing output was rolled back
+    singing_dest = env["media_dir"] / "2008-04-13_KKS_Jaya-Radha-Madhava_Oslo.mp3"
+    assert not singing_dest.exists()
+
+

@@ -604,8 +604,17 @@ class FileCutterService:
                 review_reason="Tool 1 produced identical filenames for singing and class portions; review required",
             )
 
-        # Collision preflight: check that neither target path already exists
-        if singing_dest.exists():
+        # Detect if one of the targets is the source/working audio file being split in-place
+        source_resolved = {source_path.resolve(), working_audio_path.resolve()}
+        in_place_target: Optional[Path] = None
+        if singing_dest.resolve() in source_resolved:
+            in_place_target = singing_dest
+        elif class_dest.resolve() in source_resolved:
+            in_place_target = class_dest
+
+        # Collision preflight: check that neither target path already exists,
+        # unless it is the source/working audio file being split in-place.
+        if singing_dest.exists() and singing_dest.resolve() not in source_resolved:
             return FileCutterResult(
                 tracking_id=tracking_id,
                 source_path=str(source_path),
@@ -618,7 +627,7 @@ class FileCutterService:
                 review_required=True,
                 review_reason=f"Target singing output path already exists: {singing_dest}",
             )
-        if class_dest.exists():
+        if class_dest.exists() and class_dest.resolve() not in source_resolved:
             return FileCutterResult(
                 tracking_id=tracking_id,
                 source_path=str(source_path),
@@ -721,9 +730,34 @@ class FileCutterService:
             )
 
         # 8. Safe Atomic Publication & Rollback
+        in_place_backup_path: Optional[Path] = None
+        if in_place_target is not None and in_place_target.exists():
+            in_place_backup_path = scratch_dir / f"backup_{in_place_target.name}"
+            try:
+                shutil.move(in_place_target, in_place_backup_path)
+            except Exception as e:
+                shutil.rmtree(scratch_dir, ignore_errors=True)
+                self.registry.remove_scratch_artifact(scratch_dir)
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=current_sha256,
+                    source_duration_seconds=duration,
+                    cut_point_seconds=cut_point,
+                    success=False,
+                    review_required=True,
+                    review_reason=f"Failed to stage in-place source backup: {e}",
+                    error_message=str(e),
+                )
+
         try:
             _atomic_publish_file(cut_res.singing_staged_path, singing_dest)
         except Exception as e:
+            if in_place_backup_path and in_place_backup_path.exists():
+                try:
+                    shutil.move(in_place_backup_path, in_place_target)
+                except Exception:
+                    pass
             shutil.rmtree(scratch_dir, ignore_errors=True)
             self.registry.remove_scratch_artifact(scratch_dir)
             return FileCutterResult(
@@ -743,6 +777,11 @@ class FileCutterService:
         except Exception as e:
             # Ownership-checked rollback of singing output
             _safe_rollback_output(singing_dest, cut_res.singing_sha256)
+            if in_place_backup_path and in_place_backup_path.exists():
+                try:
+                    shutil.move(in_place_backup_path, in_place_target)
+                except Exception:
+                    pass
             shutil.rmtree(scratch_dir, ignore_errors=True)
             self.registry.remove_scratch_artifact(scratch_dir)
             return FileCutterResult(
@@ -764,6 +803,11 @@ class FileCutterService:
         if not valid_s or not valid_c:
             _safe_rollback_output(singing_dest, hash_s or cut_res.singing_sha256)
             _safe_rollback_output(class_dest, hash_c or cut_res.class_sha256)
+            if in_place_backup_path and in_place_backup_path.exists():
+                try:
+                    shutil.move(in_place_backup_path, in_place_target)
+                except Exception:
+                    pass
             shutil.rmtree(scratch_dir, ignore_errors=True)
             self.registry.remove_scratch_artifact(scratch_dir)
             return FileCutterResult(
@@ -957,20 +1001,21 @@ class FileCutterService:
         )
 
         # 10. Clean up Input Audio (Only AFTER durable lineage persistence)
-        if is_video:
-            # Video source: keep original video! Delete ONLY the owned extracted MP3
-            try:
-                working_audio_path.unlink(missing_ok=True)
-                logger.info("Removed owned video-extracted MP3 after verified split: %s", working_audio_path)
-            except Exception as e:
-                logger.warning("Could not remove owned extracted MP3 %s: %s", working_audio_path, e)
-        else:
-            # Audio source: remove original working audio file
-            try:
-                working_audio_path.unlink(missing_ok=True)
-                logger.info("Removed working audio input after verified split: %s", working_audio_path)
-            except Exception as e:
-                logger.warning("Could not remove working audio %s: %s", working_audio_path, e)
+        if in_place_target is None:
+            if is_video:
+                # Video source: keep original video! Delete ONLY the owned extracted MP3
+                try:
+                    working_audio_path.unlink(missing_ok=True)
+                    logger.info("Removed owned video-extracted MP3 after verified split: %s", working_audio_path)
+                except Exception as e:
+                    logger.warning("Could not remove owned extracted MP3 %s: %s", working_audio_path, e)
+            else:
+                # Audio source: remove original working audio file
+                try:
+                    working_audio_path.unlink(missing_ok=True)
+                    logger.info("Removed working audio input after verified split: %s", working_audio_path)
+                except Exception as e:
+                    logger.warning("Could not remove working audio %s: %s", working_audio_path, e)
 
         # Clean scratch directory
         shutil.rmtree(scratch_dir, ignore_errors=True)

@@ -1229,3 +1229,145 @@ def test_36_transcription_heartbeat_reports_slow_subprocess(monkeypatch):
     assert progress[0] == ("transcribe_metal", "start")
     assert ("transcribe_metal", "heartbeat") in progress
     assert progress[-1] == ("transcribe_metal", "done")
+
+
+def test_37_detect_candidate_transitions(tmp_path, monkeypatch):
+    """AcousticBoundaryVerifier discovers continuous music boundary (first silence >= 150s)."""
+    from media_archive_tooling.content_discoverer.acoustic_verifier import (
+        AcousticBoundaryVerifier,
+        FakeAcousticBoundaryVerifier,
+    )
+
+    audio_file = tmp_path / "test.mp3"
+    audio_file.write_bytes(b"dummy")
+
+    verifier = AcousticBoundaryVerifier(ffmpeg_bin="/usr/bin/ffmpeg")
+
+    # 1. First silence >= 150s with subsequent speech onset
+    stderr_sim = (
+        "[silencedetect @ 0x1] silence_start: 703.956\n"
+        "[silencedetect @ 0x1] silence_end: 708.500 | silence_duration: 4.544\n"
+        "[silencedetect @ 0x1] silence_start: 715.000\n"
+        "[silencedetect @ 0x1] silence_end: 742.120 | silence_duration: 27.120\n"
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=stderr_sim.encode()),
+    )
+
+    candidates = verifier.detect_candidate_transitions(audio_file, total_duration=6000.0)
+    assert len(candidates) == 1
+    assert candidates[0] == (703.956, 742.12)
+
+    # 2. First silence < 150s -> rejected as normal conversational pause
+    stderr_early = (
+        "[silencedetect @ 0x1] silence_start: 45.0\n"
+        "[silencedetect @ 0x1] silence_end: 46.0 | silence_duration: 1.0\n"
+    )
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=stderr_early.encode()),
+    )
+    assert verifier.detect_candidate_transitions(audio_file, total_duration=6000.0) == []
+
+    # 3. Short file <= 180s -> returns [] without running ffmpeg
+    assert verifier.detect_candidate_transitions(audio_file, total_duration=150.0) == []
+
+    # 4. FakeAcousticBoundaryVerifier test double
+    fake_verifier = FakeAcousticBoundaryVerifier(candidate_transitions=[(700.0, 740.0)])
+    assert fake_verifier.detect_candidate_transitions(audio_file, 6000.0) == [(700.0, 740.0)]
+
+
+def test_38_whisper_singing_hallucination_and_filename_combination_detection():
+    """Classifier handles Whisper hallucinated text (*Dies singing*) combined with filename prior."""
+    classifier = ContentClassifier()
+
+    segments = [
+        TranscriptSegment(
+            start_seconds=10.0,
+            end_seconds=70.0,
+            text="*Dies singing* Thank you for watching! Thank you for watching!",
+        ),
+        TranscriptSegment(
+            start_seconds=745.0,
+            end_seconds=820.0,
+            text="It is verse thirty-one. First Canto Chapter nineteen. Today we are reading Srimad Bhagavatam.",
+        ),
+    ]
+
+    from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+
+    artifact = TranscriptArtifact(
+        tracking_id="trk_comb1",
+        input_path="/media/KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA",
+        input_sha256="fake_sha",
+        transcript_sha256="fake_tx_sha",
+        duration_seconds=6000.0,
+        segments=segments,
+        raw_metadata={
+            "candidate_transitions": [(703.956, 742.0)],
+            "has_combination_clue": True,
+            "mantra_hint": "JAYA_RADHA_MADHAVA",
+        },
+    )
+
+    result = classifier.classify(artifact)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.mantra_type == MantraType.JAYA_RADHA_MADHAVA
+    assert result.process_by_tool_6 is True
+    assert result.cutter_proposal is not None
+    assert result.cutter_proposal.singing_end_seconds == 703.956
+    assert result.review_required is False
+
+
+def test_39_adaptive_excerpt_window_around_candidate_transition(env, monkeypatch):
+    """ContentDiscovererService adapts excerpt windows to bracket candidate transition."""
+    media_file = env["media_dir"] / "KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.mp3"
+    media_file.write_text("audio dummy bytes")
+
+    tid = env["register_media"](media_file, tracking_id="trk_adaptive")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.956,
+        candidate_transitions=[(703.956, 742.0)],
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 6000.0,
+    )
+
+    windows_requested = []
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        nonlocal windows_requested
+        windows_requested = list(excerpt_windows or [])
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="dummy_sha",
+            transcript_sha256="tx_dummy",
+            duration_seconds=6000.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=60.0, text="*Dies singing*"),
+                TranscriptSegment(start_seconds=745.0, end_seconds=790.0, text="First Canto Chapter nineteen verse thirty-one Srimad Bhagavatam"),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.mantra_type == MantraType.JAYA_RADHA_MADHAVA
+    assert result.cutter_proposal.singing_end_seconds == 703.956
+
+    # Verify that an excerpt window specifically targeted the speech onset around 742.0s
+    has_onset_window = any(730.0 <= w[0] <= 745.0 for w in windows_requested)
+    assert has_onset_window, f"Expected window around speech onset 742s, got: {windows_requested}"
+
