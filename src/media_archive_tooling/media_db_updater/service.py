@@ -201,6 +201,12 @@ class MediaDatabaseUpdaterService:
         # Retain prior field approvals, association approvals, and review notes if present
         prior_sync = self.registry.get_media_db_sync(tracking_id)
         prior_req = prior_sync.get("request") if prior_sync else None
+        if isinstance(prior_req, str):
+            try:
+                prior_req = json.loads(prior_req)
+            except Exception:
+                prior_req = None
+
         field_approvals = {}
         association_approval = None
         reviewer_notes = None
@@ -214,6 +220,44 @@ class MediaDatabaseUpdaterService:
         eff_current_fn = projected_filename or file_rec["current_filename"]
         eff_current_path = projected_path or file_rec["current_path"]
 
+        # Preserve split-specific metadata from prior requests and file_splits
+        split_child = self.registry.get_file_split_by_child(tracking_id)
+        split_source = self.registry.get_file_split_by_source(tracking_id)
+        is_singing_split = bool(split_child and split_child.get("singing_tracking_id") == tracking_id)
+        is_class_split = bool(
+            (split_child and split_child.get("class_tracking_id") == tracking_id)
+            or (split_source and split_source.get("source_tracking_id") == tracking_id)
+        )
+
+        eff_audio_file_path = None
+        if prior_req and prior_req.get("audio_file_path"):
+            eff_audio_file_path = prior_req.get("audio_file_path")
+        elif is_class_split and split_source:
+            if file_rec.get("current_path", "").lower().endswith((".mp4", ".mov", ".mkv", ".avi")):
+                eff_audio_file_path = split_source.get("class_path")
+
+        eff_what_category = what_data.get("category")
+        if prior_req and prior_req.get("what_category"):
+            eff_what_category = prior_req.get("what_category")
+        elif is_singing_split:
+            eff_what_category = "Kirtan"
+
+        eff_what_val = what_data.get("selected_value") or file_rec.get("what_val")
+        if prior_req and prior_req.get("what_val"):
+            eff_what_val = prior_req.get("what_val")
+
+        eff_t2_decision = t2_decision
+        eff_selected_row_id = selected_row_id
+
+        if is_singing_split:
+            eff_t2_decision = "NEW_MEDIA_CANDIDATE"
+            eff_selected_row_id = None
+        else:
+            if not eff_t2_decision or eff_t2_decision == "DATABASE_UNAVAILABLE":
+                if prior_req and prior_req.get("tool2_decision"):
+                    eff_t2_decision = prior_req.get("tool2_decision")
+                    eff_selected_row_id = eff_selected_row_id or prior_req.get("selected_media_row_id")
+
         return MediaDbSyncRequest(
             tracking_id=tracking_id,
             current_filename=eff_current_fn,
@@ -222,14 +266,15 @@ class MediaDatabaseUpdaterService:
             original_path=file_rec.get("original_path"),
             previous_filename=previous_fn or None,
             previous_path=previous_path or None,
+            audio_file_path=eff_audio_file_path,
             request_id=req_id,
             request_fingerprint=req_fingerprint,
             table_id=table_id,
             when_val=when_data.get("selected_value") or file_rec.get("when_val"),
             when_state=when_data.get("state"),
             when_provenance=when_prov,
-            what_val=what_data.get("selected_value") or file_rec.get("what_val"),
-            what_category=what_data.get("category"),
+            what_val=eff_what_val,
+            what_category=eff_what_category,
             what_verse=what_data.get("verse"),
             what_state=what_data.get("state"),
             what_provenance=what_prov,
@@ -241,10 +286,10 @@ class MediaDatabaseUpdaterService:
             where_state=where_data.get("state"),
             where_provenance=where_prov,
             parent_folder_context=parent_ctx,
-            tool2_decision=t2_decision,
+            tool2_decision=eff_t2_decision,
             tool2_timestamp=t2_timestamp,
             tool2_database_state=t2_db_state,
-            selected_media_row_id=selected_row_id,
+            selected_media_row_id=eff_selected_row_id,
             association_approval=association_approval,
             tool3_decision=t3_rec.get("decision") if t3_rec else None,
             tool3_evidence=t3_rec.get("result") if t3_rec else None,

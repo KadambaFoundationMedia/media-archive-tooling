@@ -954,3 +954,202 @@ def test_r005_unknown_song_title_and_tool4_outbox_pending_sync(env):
     assert res.singing_tracking_id in pending
     assert pending[tid] == "PENDING_SYNC"
     assert pending[res.singing_tracking_id] == "PENDING_SYNC"
+
+
+def test_r006_whisper_excerpt_mode_never_sends_full_recording_to_whisper(env, monkeypatch):
+    """T6-R-006: Excerpt mode must only slice and send targeted windows to Whisper, never the full recording."""
+    from media_archive_tooling.content_discoverer.transcriber import WhisperCppTranscriptionAdapter
+
+    audio_file = make_audio_file(env["media_dir"] / "r006_long_audio.mp3", duration=300.0)
+    fake_model = env["tmp_path"] / "fake_model.bin"
+    fake_model.write_bytes(b"MODEL_BYTES")
+
+    adapter = WhisperCppTranscriptionAdapter(
+        whisper_executable=Path("/bin/echo"),
+        default_model_path=fake_model,
+    )
+
+    whisper_cli_invocations = []
+
+    def mock_run_whisper_cli(wav_input, tmp_stem, resolved_model, device_mode, progress_callback=None):
+        whisper_cli_invocations.append({
+            "wav_input": Path(wav_input),
+            "size": wav_input.stat().st_size if Path(wav_input).exists() else 0,
+            "tmp_stem": tmp_stem,
+        })
+        json_path = Path(f"{tmp_stem}.json")
+        json_path.write_text(json.dumps({
+            "result": {"language": "en"},
+            "transcription": [
+                {"timestamps": {"from": "00:00:01.000", "to": "00:00:04.000"}, "text": "excerpt speech"},
+            ]
+        }), encoding="utf-8")
+        return True, "cpu", None
+
+    monkeypatch.setattr(adapter, "_run_whisper_cli", mock_run_whisper_cli)
+
+    # Call with excerpt windows: [0, 10] and [200, 210]
+    artifact = adapter.transcribe(
+        audio_path=audio_file,
+        tracking_id="trk_r006",
+        root_dir=env["tmp_path"],
+        excerpt_windows=[(0.0, 10.0), (200.0, 210.0)],
+        model_path=fake_model,
+    )
+
+    # Whisper CLI must be invoked exactly twice (once per excerpt slice), NEVER on the full audio file!
+    assert len(whisper_cli_invocations) == 2
+    for inv in whisper_cli_invocations:
+        wav_name = inv["wav_input"].name
+        assert "excerpt_" in wav_name
+        assert wav_name != audio_file.name
+
+    # Check that speech segments are properly offset by window starts (0.0 + 1.0 = 1.0, 200.0 + 1.0 = 201.0)
+    speech_segs = [s for s in artifact.segments if not s.is_silence]
+    assert len(speech_segs) == 2
+    assert speech_segs[0].start_seconds == 1.0
+    assert speech_segs[0].end_seconds == 4.0
+    assert speech_segs[1].start_seconds == 201.0
+    assert speech_segs[1].end_seconds == 204.0
+    assert artifact.raw_metadata.get("is_full_file") is False
+
+
+def test_r007_acoustic_verifier_rejects_unrelated_silence_and_fails_closed(env, monkeypatch):
+    """T6-R-007: Acoustic verifier strictly narrows window around coarse gap, rejects unrelated silence, and fails closed without fallback."""
+    from media_archive_tooling.content_discoverer.acoustic_verifier import AcousticBoundaryVerifier
+
+    audio_file = make_audio_file(env["media_dir"] / "r007_audio.mp3", duration=120.0)
+    verifier = AcousticBoundaryVerifier()
+
+    captured_cmds = []
+
+    # Case 1: Unrelated silence earlier in singing portion
+    def fake_subprocess_run_outside(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        # Silence at relative 0.2s: win_start + 0.2 = 28.0 + 0.2 = 28.2 (coarse_gap_start - 1.5 = 28.5, so 28.2 is outside)
+        stderr_sim = "[silencedetect @ 0x123] silence_start: 0.2\n[silencedetect @ 0x123] silence_end: 0.8 | silence_duration: 0.6\n"
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=stderr_sim.encode())
+
+    monkeypatch.setattr("media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run", fake_subprocess_run_outside)
+
+    res_outside = verifier.verify_boundary(
+        audio_path=audio_file,
+        coarse_gap_start=30.0,
+        coarse_gap_end=34.0,
+        total_duration=120.0,
+    )
+    # Must reject silence outside transition zone and return None
+    assert res_outside is None
+
+    # Verify command analyzed strictly bounded window: win_start = 30.0 - 2.0 = 28.0, NOT 30 - 30 = 0.0!
+    cmd = captured_cmds[-1]
+    ss_idx = cmd.index("-ss")
+    assert float(cmd[ss_idx + 1]) == 28.0
+
+    # Case 2: Clean transition silence within coarse gap [30.0, 34.0] (e.g. at abs 31.0s -> rel 3.0s)
+    def fake_subprocess_run_inside(cmd, **kwargs):
+        stderr_sim = "[silencedetect @ 0x123] silence_start: 3.0\n[silencedetect @ 0x123] silence_end: 5.0 | silence_duration: 2.0\n"
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=stderr_sim.encode())
+
+    monkeypatch.setattr("media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run", fake_subprocess_run_inside)
+
+    res_inside = verifier.verify_boundary(
+        audio_path=audio_file,
+        coarse_gap_start=30.0,
+        coarse_gap_end=34.0,
+        total_duration=120.0,
+    )
+    assert res_inside == 31.0  # 28.0 + 3.0 = 31.0s
+
+    # Case 3: No silence detected at all, gap <= 2.0s: must FAIL CLOSED and return None (NO fallback to coarse_gap_start!)
+    def fake_subprocess_run_nosilence(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=b"no silence detected\n")
+
+    monkeypatch.setattr("media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run", fake_subprocess_run_nosilence)
+
+    res_nosilence = verifier.verify_boundary(
+        audio_path=audio_file,
+        coarse_gap_start=30.0,
+        coarse_gap_end=31.0,  # Narrow gap (<= 2s)
+        total_duration=120.0,
+    )
+    assert res_nosilence is None  # Never fall back to 30.0!
+
+
+def test_r008_tool6_tool4_sync_requests_and_retry_metadata_preservation(env):
+    """T6-R-008: Tool 6 populates valid Tool 2 decisions for Tool 4, and retry preserves all split-specific metadata."""
+    from media_archive_tooling.media_db_updater.service import MediaDatabaseUpdaterService
+    from media_archive_tooling.media_db_updater.models import SyncOperation
+
+    src = make_audio_file(env["media_dir"] / "2008-04-13_KKS_JRM_Lecture_Oslo.mp3", duration=6.0)
+    tid = env["register_test_file"](src, tracking_id="trk_r008", singing_end_seconds=2.5)
+
+    # Record Tool 2 review for parent file matching Baserow row 42
+    env["registry"].save_media_db_review(
+        tracking_id=tid,
+        decision="EXISTING_MEDIA_MATCH",
+        database_state="MATCHED",
+        selected_media_row_id=42,
+        snapshot_timestamp="2026-09-24T12:00:00Z",
+        result_json=json.dumps({"decision": "EXISTING_MEDIA_MATCH"}),
+    )
+
+    # 1. Execute cut with failing Tool 4 service (to test durable pending outbox)
+    updater_service = MediaDatabaseUpdaterService(
+        registry=env["registry"],
+        write_adapter=MagicMock(),
+        tool2_service=None,
+    )
+    mock_db = MagicMock()
+    mock_db.synchronize.side_effect = ConnectionError("Baserow temporarily offline")
+    env["cutter_service"].media_db_service = mock_db
+
+    res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res.success is True
+
+    # 2. Check requests passed to Tool 4 in mock_db.synchronize calls
+    sync_calls = mock_db.synchronize.call_args_list
+    assert len(sync_calls) == 2
+    # Call 1: Class successor
+    req_class = sync_calls[0].kwargs.get("request") or sync_calls[0][1].get("request")
+    assert req_class.tool2_decision == "EXISTING_MEDIA_MATCH"
+    assert req_class.selected_media_row_id == 42
+
+    # Call 2: Singing child
+    req_singing = sync_calls[1].kwargs.get("request") or sync_calls[1][1].get("request")
+    assert req_singing.tool2_decision == "NEW_MEDIA_CANDIDATE"
+    assert req_singing.what_category == "Kirtan"
+    assert req_singing.tracking_id == res.singing_tracking_id
+
+    # 3. Check SQLite media_db_reviews has entry for singing child
+    singing_t2 = env["registry"].get_media_db_review(res.singing_tracking_id)
+    assert singing_t2 is not None
+    assert singing_t2["decision"] == "NEW_MEDIA_CANDIDATE"
+
+    # 4. Now test MediaDbUpdaterService.build_sync_request() across refresh:
+    # Both pending syncs should be rebuilt without losing split metadata:
+    # - singing keeps what_category="Kirtan", tool2_decision="NEW_MEDIA_CANDIDATE"
+    # - class keeps tool2_decision="EXISTING_MEDIA_MATCH", selected_media_row_id=42
+    req_singing_rebuilt = updater_service.build_sync_request(res.singing_tracking_id, force_refresh=True)
+    assert req_singing_rebuilt is not None
+    assert req_singing_rebuilt.what_category == "Kirtan"
+    assert req_singing_rebuilt.tool2_decision == "NEW_MEDIA_CANDIDATE"
+
+    req_class_rebuilt = updater_service.build_sync_request(tid, force_refresh=True)
+    assert req_class_rebuilt is not None
+    assert req_class_rebuilt.tool2_decision == "EXISTING_MEDIA_MATCH"
+    assert req_class_rebuilt.selected_media_row_id == 42
+
+    # Verify that plan_and_revalidate does NOT reject with "Unrecognized or unassociated Tool 2 decision"
+    from media_archive_tooling.media_db_updater.write_adapter import FakeBaserowWriteAdapter
+    live_fields = FakeBaserowWriteAdapter().fields
+    # Singing plan -> CREATE (not blocked by missing decision)
+    singing_plan = updater_service.engine.plan_and_revalidate(req_singing_rebuilt, live_fields)
+    assert singing_plan.operation == SyncOperation.CREATE
+    assert "Unrecognized or unassociated Tool 2 decision" not in str(singing_plan.diagnostic_notes)
+
+    # Class plan -> UPDATE (not blocked by missing decision)
+    live_row = {"id": 42, "Filename": req_class_rebuilt.current_filename, "Title": "Old Title"}
+    class_plan = updater_service.engine.plan_and_revalidate(req_class_rebuilt, live_fields, live_row=live_row)
+    assert class_plan.operation == SyncOperation.UPDATE
+    assert "Unrecognized or unassociated Tool 2 decision" not in str(class_plan.diagnostic_notes)

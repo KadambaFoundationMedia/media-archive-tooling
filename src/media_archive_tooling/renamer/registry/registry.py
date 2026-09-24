@@ -444,8 +444,9 @@ class LocalRegistry:
         status: Optional[str] = None,
         current_path: Optional[Union[str, Path]] = None,
         proposed_filename: Optional[str] = None,
+        what_val: Optional[str] = None,
     ):
-        """Update file status, current_path, and/or proposed_filename in files table."""
+        """Update file status, current_path, proposed_filename, and/or what_val in files table."""
         now = datetime.now(timezone.utc).isoformat()
         updates = ["updated_at = ?"]
         params: List[Any] = [now]
@@ -461,6 +462,9 @@ class LocalRegistry:
         if proposed_filename is not None:
             updates.append("proposed_filename = ?")
             params.append(proposed_filename)
+        if what_val is not None:
+            updates.append("what_val = ?")
+            params.append(what_val)
         params.append(tracking_id)
         with self._get_conn() as conn:
             cursor = conn.cursor()

@@ -36,10 +36,10 @@ class AcousticBoundaryVerifier:
 
         # Guard: check if file is decodable
         audio_path = audio_path.resolve()
-        win_start = max(0.0, coarse_gap_start - 30.0)
-        win_end = min(total_duration, max(coarse_gap_end, coarse_gap_start + 10.0) + 30.0)
+        win_start = max(0.0, coarse_gap_start - 2.0)
+        win_end = min(total_duration, max(coarse_gap_end, coarse_gap_start + 0.5) + 2.0)
         win_dur = win_end - win_start
-        if win_dur <= 0.5:
+        if win_dur <= 0.3:
             return None
 
         cmd = [
@@ -72,26 +72,26 @@ class AcousticBoundaryVerifier:
 
         stderr_text = res.stderr.decode("utf-8", errors="replace")
 
-        # Parse silence intervals: silence_start: X, silence_end: Y
+        # Parse silence intervals: silence_start: X
         silence_starts = [
             float(m.group(1))
             for m in re.finditer(r"silence_start:\s*(\d+(?:\.\d+)?)", stderr_text)
         ]
 
-        if silence_starts:
-            # First silence start within the transition window represents the end of singing
-            candidate_silence = silence_starts[0]
-            exact_timestamp = win_start + candidate_silence
-            if 0.0 < exact_timestamp < total_duration:
-                return round(exact_timestamp, 3)
+        valid_candidates = []
+        for rel_start in silence_starts:
+            abs_start = win_start + rel_start
+            # Must fall strictly within the transition gap region +/- 1.5s
+            if (coarse_gap_start - 1.5) <= abs_start <= (coarse_gap_end + 1.5):
+                if 0.0 < abs_start < total_duration:
+                    valid_candidates.append(abs_start)
 
-        # Fallback: check if coarse gap has a clean midpoint that is plausible
-        # If no silence was detected at -30dB, check if transition falls in narrow window
-        if 0.0 < coarse_gap_start < total_duration and coarse_gap_end >= coarse_gap_start:
-            # If coarse gap is very narrow (e.g. <= 2s), use coarse_gap_start as verified acoustic boundary
-            if coarse_gap_end - coarse_gap_start <= 2.0:
-                return round(coarse_gap_start, 3)
+        if valid_candidates:
+            # Pick candidate silence closest to coarse_gap_start
+            best = min(valid_candidates, key=lambda s: abs(s - coarse_gap_start))
+            return round(best, 3)
 
+        # Fail closed: never fall back to coarse text boundaries without acoustic verification
         return None
 
 

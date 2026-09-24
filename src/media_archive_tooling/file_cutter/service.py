@@ -1,5 +1,6 @@
 """Application service layer for Tool 6 — File Cutter."""
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import logging
 import math
@@ -776,6 +777,7 @@ class FileCutterService:
 
         # 9. Update Local Registry Lineage & Checkpoints FIRST (Durable before deletion)
         singing_tracking_id = uuid.uuid4().hex[:8]
+        clean_singing_what, clean_class_what = derive_split_whats(file_rec.get("what_val"), mantra_str)
 
         # Register singing file in registry
         self.registry.register_file(
@@ -785,7 +787,7 @@ class FileCutterService:
             original_filename=singing_dest.name,
             current_filename=singing_dest.name,
             proposed_filename=singing_dest.name,
-            what_val=derive_split_whats(file_rec.get("what_val"), mantra_str)[0],
+            what_val=clean_singing_what,
             status="committed",
             source_hash=hash_s,
         )
@@ -798,6 +800,7 @@ class FileCutterService:
                 status="committed",
                 proposed_filename=source_path.name,
                 current_path=str(source_path),
+                what_val=clean_class_what,
             )
         else:
             self.registry.update_file_status(
@@ -805,6 +808,7 @@ class FileCutterService:
                 status="committed",
                 proposed_filename=class_dest.name,
                 current_path=str(class_dest),
+                what_val=clean_class_what,
             )
 
         # Record file split in registry
@@ -873,22 +877,53 @@ class FileCutterService:
 
         from ..media_db_updater.models import MediaDbSyncRequest
 
-        clean_class_what = derive_split_whats(file_rec.get("what_val"), mantra_str)[1]
+        # Resolve Tool 2 decision for class successor: check SQLite media_db_reviews or prior sync
+        class_t2_rec = self.registry.get_media_db_review(tracking_id)
+        class_t2_decision = "EXISTING_MEDIA_MATCH"
+        class_selected_row_id = None
+        if class_t2_rec:
+            class_t2_decision = class_t2_rec.get("decision") or "EXISTING_MEDIA_MATCH"
+            class_selected_row_id = class_t2_rec.get("selected_media_row_id")
+        else:
+            prior_s = self.registry.get_media_db_sync(tracking_id)
+            if prior_s:
+                class_selected_row_id = prior_s.get("media_row_id")
+                if not class_selected_row_id and prior_s.get("request"):
+                    class_selected_row_id = prior_s["request"].get("selected_media_row_id")
+                    if prior_s["request"].get("tool2_decision"):
+                        class_t2_decision = prior_s["request"].get("tool2_decision")
+
         req_class = MediaDbSyncRequest(
             tracking_id=tracking_id,
             current_filename=source_path.name if is_video else class_dest.name,
             current_path=str(source_path) if is_video else str(class_dest),
             audio_file_path=str(class_dest) if is_video else None,
             what_val=clean_class_what,
+            tool2_decision=class_t2_decision,
+            selected_media_row_id=class_selected_row_id,
         )
 
-        clean_singing_what = derive_split_whats(file_rec.get("what_val"), mantra_str)[0]
         req_singing = MediaDbSyncRequest(
             tracking_id=singing_tracking_id,
             current_filename=singing_dest.name,
             current_path=str(singing_dest),
             what_val=clean_singing_what,
             what_category="Kirtan",
+            tool2_decision="NEW_MEDIA_CANDIDATE",
+        )
+
+        # Record Tool 2 review for singing child in local registry
+        self.registry.save_media_db_review(
+            tracking_id=singing_tracking_id,
+            decision="NEW_MEDIA_CANDIDATE",
+            database_state="CLEAN",
+            selected_media_row_id=None,
+            snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
+            result_json=json.dumps({
+                "decision": "NEW_MEDIA_CANDIDATE",
+                "proposed_tool4_action": "CREATE",
+                "reason": "Tool 6 split singing portion",
+            }),
         )
 
         if self.media_db_service is not None:
