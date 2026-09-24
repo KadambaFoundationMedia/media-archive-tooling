@@ -432,6 +432,22 @@ A populated value should not normally enter this workflow because none of Tools 
 
 Write the full actual archive filesystem path for the synchronized file.
 
+### Tool 7 verified scripture link — `description` amendment
+
+The owner confirms that the live Media table has a lowercase `description`
+column. Tool 7 supplies only a Vedabase URL verified against the recording's
+announced reference and reading; it does not write Baserow. Tool 4 must
+discover and validate the live `description` field and compatible text type
+before adding the canonical URL. Preserve existing human description text,
+avoid duplicate links on retry, and revalidate the field value before PATCH.
+If a different scripture link is already present, or the live field is
+missing/incompatible, route this field to review instead of overwriting or
+creating schema. Never put the URL in `Youtube descr` or an invented field.
+Other Tool 7 category/title/tag updates remain subject to the existing
+confirmed-data and field-specific approval rules. The repository's fake
+Baserow schema must include `description` so these cases can be tested, but
+it is not a substitute for live schema validation.
+
 ### Tool 6 video-derived class audio — `audio_file_path` amendment
 
 When Tool 6 cuts a combination recording whose original source is video, the

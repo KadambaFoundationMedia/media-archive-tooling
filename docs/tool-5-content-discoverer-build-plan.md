@@ -1,6 +1,6 @@
 # Tool 5 - Content Discoverer Build Plan
 
-Status: **FINALIZED - implementation-ready**
+Status: **FINALIZED — revised Tool 5/7 transcription handoff (2026-09-24)**
 
 This document is the authoritative implementation specification for Tool 5.
 Progress, questions, review findings, verification evidence, and commit
@@ -15,6 +15,7 @@ Required project context:
 - `docs/alpha-beta-test-data-purge-build-plan.md`
 - `docs/baserow-access-boundary-amendment.md`
 - `docs/full-pipeline-workflow-amendment.md`
+- `docs/tool-7-class-type-discoverer-build-plan.md`
 - `assets/verse-structure.md`
 - `assets/original-and-edited-recording-structure.md`
 - accepted Tool 1-4 statuses and implementations
@@ -25,8 +26,11 @@ Required project context:
 
 Tool 5 is the local **Content Discoverer**. It analyzes the actual audio of a
 Phase 1 archive file to establish its broad content type, identify any opening
-mantra/kirtan, retain reusable timestamped transcription data, and record the
-next processing route.
+mantra/kirtan, locate a trustworthy singing-end cut point when applicable,
+and record the next processing route. The owner moved **full transcription**
+to Tool 7, after Tool 6's optional cut. Tool 5 may use audio/acoustic features
+and short, targeted local transcription excerpts as evidence, but must not
+transcribe the whole recording as its normal classification step.
 
 It exists because filename, folder, Media database, and travel-schedule
 evidence can still leave the nature of a recording unknown. Tool 5 supplies
@@ -76,16 +80,18 @@ Tool 5 must:
 
 - operate on the original archive file **in situ**;
 - preserve the original media file, its filename, and its directory;
-- save a reusable transcript outside the archive during active processing;
+- save bounded, timestamped classification/cut evidence outside the archive;
 - extract an MP3 beside a video only when video input requires it;
 - create no Baserow reads, writes, schema mutations, or deletions;
 - never rename a file - Tool 1 remains the canonical renderer and committer;
 - never update Baserow - Tool 4 remains the sole writer/deleter;
 - never call Tool 6, cut, trim, boost gain, or organize files;
 - record review-required uncertainty in the existing local registry/portal;
-- fail closed: a missing transcription runtime/model, extraction failure,
-  unreadable media, or ambiguous classification cannot produce a confident
-  type or downstream destructive action.
+- fail closed: an unavailable required local analysis runtime, extraction
+  failure, unreadable media, or ambiguous classification cannot produce a
+  confident type or downstream destructive action. A missing Whisper model
+  blocks only decisions that need excerpt transcription; it need not block a
+  result independently supported by adequate acoustic evidence.
 
 Tool 5 must preserve the alpha/beta registry/fingerprint rules. Its source and
 template changes must participate in review-data invalidation. Tool 5 itself
@@ -101,7 +107,8 @@ The illustrative whole-project dependencies are:
 Phase 1: Tool 1 -> Tool 2 -> Tool 3 -> Tool 1 final proposal -> Tool 4
 Phase 2: Tool 5 -> Tool 6 when a confirmed combination needs cutting
           -> Tool 4 creates/updates the singing item after a cut
-          -> applicable Tools 7-10 -> latest Tool 1 naming
+          -> Tool 7 fully transcribes current non-kirtan files
+          -> applicable Tools 8-10 -> latest Tool 1 naming
           -> Tool 11 move -> Tool 4 path synchronization
 ```
 
@@ -116,30 +123,35 @@ cutting rules remain for its own finalized build plan. The user-confirmed
 full-pipeline order and row-identity rules are recorded in
 `docs/full-pipeline-workflow-amendment.md`.
 
-The first Tool 5 implementation must be usable independently through a typed
-service and CLI command. Per the user's later direction, also integrate Tool 5
-into the Main Tooling Script's `all` and `processing` workflows while preserving
-the Phase 1-to-Phase 2 order and the Phase 1 eligibility requirement. Tools 6-11
-remain pending; Tool 5 only records their future routing decisions.
+Tool 5 must remain independently callable through a typed service and CLI,
+and integrated into the Main Tooling Script's `all` and `processing` workflows
+after Phase 1 eligibility checks. Tool 6 and Tool 7 integration follows their
+separate finalized plans; Tool 5 records their routing decisions but does not
+invoke them itself.
 
 Tool 5 records declarative routing; it does not invoke pending tools:
 
 | Classification | Required route state |
 |---|---|
-| `KIRTAN_AND_CLASS` | `process_by_tool_6=true` |
-| `INITIATION` | retain multi-part ceremony evidence for review; no automatic two-part cutter route |
-| `VYASA_PUJA` | retain multi-part offering/address evidence for review; no automatic two-part cutter route |
-| `CLASS` | retain class evidence; do not call Tool 7 yet |
-| `KIRTAN` | retain kirtan/mantra metadata; no cutter route |
-| `EVENT_OR_FESTIVAL_ADDRESS` / `HOME_PROGRAM` | retain type metadata; no invented later route |
-| `UNKNOWN_REVIEW` or uncertain result | no automatic downstream route; add to portal review queue |
+| `KIRTAN_AND_CLASS` | `process_by_tool_6=true`; Tool 7 follows the cut for the class output |
+| `INITIATION` | retain multi-part ceremony evidence for review; no automatic two-part cutter route; proceed to Tool 7 full transcription |
+| `VYASA_PUJA` | retain multi-part offering/address evidence for review; no automatic two-part cutter route; proceed to Tool 7 full transcription |
+| `CLASS` | retain class evidence; route to Tool 7 for full transcription, even when WHAT is known |
+| `KIRTAN` | retain kirtan/mantra metadata; no cutter route or full Tool 7 transcription |
+| `EVENT_OR_FESTIVAL_ADDRESS` / `HOME_PROGRAM` | retain type metadata; proceed to Tool 7 full transcription |
+| `UNKNOWN_REVIEW` or uncertain result | add to portal review; allow Tool 7 full transcription of an intact unknown unless a possible combination needs cut review first |
 
 `process_by_tool_6` is a durable machine-readable handoff flag, not a folder
 move. Tool 6 will consume it when its definition is accepted. The schema must
 leave room for later routes without inventing behavior for Tools 6-11.
 
-After all relevant Phase 2 tools are complete, Tool 1 consumes trustworthy Tool
-5/6-11 metadata for a new final naming pass; Tool 4 then synchronizes the
+Every non-kirtan type, including initiation, Vyasa-puja, event/address, and
+home program, proceeds to Tool 7 once any required Tool 6 decision is
+resolved. An uncertain `UNKNOWN_REVIEW` remains in place but may use Tool 7
+transcription as further evidence; it is not treated as kirtan for skipping
+Tool 7. A suspected unresolved combination first needs cut review. After all relevant Phase 2 tools
+are complete, Tool 1 consumes trustworthy Tool 5–11 metadata for a new final
+naming pass; Tool 4 then synchronizes the
 resulting metadata. Tool 5 must not perform either action directly.
 
 ---
@@ -175,116 +187,69 @@ fallback to an online service.
 The derived MP3 is a Tool 5 video-audio derivative, not a new archive media
 item. Persist its source-video tracking ID and fingerprints in the registry so
 normal archive discovery skips it and cannot process it a second time as an
-independent Phase 1 file. Tool 5 may use it internally for transcription; a
+independent Phase 1 file. Tool 5 may use it internally for limited analysis; a
 later explicit policy must decide whether it becomes a retained archive asset.
 
 Audio input is used directly and no derivative audio file is created.
 
 ---
 
-## 5. Local transcription runtime
+## 5. Local classification runtime
 
-Use the project-local binding around Homebrew `whisper-cli` from `whisper.cpp`.
-The production default is:
+Tool 5 must inspect the **whole recording's structure without fully
+transcribing it**. Use bounded acoustic/music/speech analysis across the
+timeline, then short, targeted local Whisper excerpts where speech content is
+needed to distinguish class, kirtan, combination, and the multi-part event
+patterns. A fixed set of early windows alone cannot justify a confident
+whole-file decision; adaptively inspect later portions and the transition
+zone. Acoustic detection alone cannot identify the precise book/verse, and a
+short transcript alone cannot establish the exact end of singing. Preserve
+timestamped evidence and the method used for each claim.
 
-```text
-model: large-v3-turbo GGML
-default model path: ~/.cache/whisper.cpp/ggml-large-v3-turbo.bin
-language: automatic detection
-temperature: 0
-context carry-over: disabled
-timestamps: JSON segments
-backend: auto (Metal first on Apple Silicon, local CPU fallback only)
-flash attention: enabled when supported
-threads: hardware-aware, six on the established M1 Max path while preserving CPU headroom
-```
+Where excerpts are needed, reuse the project's local `whisper.cpp` adapter:
+Large v3 Turbo, Metal first on Apple Silicon, local CPU fallback for `auto`,
+hardware-aware threads, and flash attention when supported. Explicit `metal`
+must not silently fall back. Reuse the accepted WMA-to-temporary-WAV decoder
+path. Probe required components before use, record actual backend/fallback,
+and never use an online transcription API or upload archive audio. A failed
+required excerpt or unusable audio evidence yields a blocked/review result,
+not a confident automatic Tool 6 route. CI uses fake adapters; it must not
+require FFmpeg, Whisper, a model, or Metal.
 
-Required runtime behavior:
-
-1. Probe tool/model availability before decode.
-2. With device `auto`, attempt Metal and record the selected backend; if it
-   fails, retry locally on CPU and record the exact fallback reason.
-3. With explicit `metal`, fail rather than silently changing the requested
-   execution contract.
-4. A missing model, missing executable, non-zero decoder/transcriber exit,
-   malformed JSON, or unusable timestamps is `TRANSCRIPTION_BLOCKED` and goes
-   to review without any confident classification.
-5. Never download a model automatically, use an online API, send archive audio
-   outside the machine, or commit model files/transcripts to Git.
-6. Preserve a compatibility adapter boundary for older private executable/model
-   jobs, but do not make it the default path.
-
-Hermetic tests must use a fake transcription adapter and fixture JSON. CI must
-not require `whisper-cli`, a model, Metal, `ffmpeg`, or real audio.
+The accepted old Tool 5 implementation currently transcribes full recordings.
+That is now a **migration target**, not the desired behavior. Move/reuse the
+full-transcript runtime and cache contract in Tool 7 rather than retaining
+two full-transcription passes. Do not make Tool 6 wait for Tool 7 output:
+Tool 7 runs after Tool 6.
 
 ---
 
-## 6. Transcript artifact contract
+## 6. Timed evidence artifact and safety
 
-The complete recording must be transcribed, not merely sampled. The transcript
-artifact is a reusable local sidecar during processing:
+Tool 5 owns a bounded classification/cut-evidence artifact, **not** the
+complete transcript at `.renamer/transcripts/<tracking-id>.json`. Tool 7
+owns that full transcript sidecar. Tool 5's evidence must record tracking ID,
+source path/hash/duration, video derivative identity when applicable,
+classification and mantra, audio-feature ranges, any short excerpt text with
+source timestamps, analysis/model/config versions, exact singing-end point
+and confidence if available, and redacted failures. Store it atomically,
+locally, and privately. It must be distinguishable from a full Tool 7
+transcript so a later stage cannot mistake a few excerpts for complete
+coverage. Historical full Tool 5 transcripts may be retained as provenance
+but may not certify a new Tool 7 result, especially after a Tool 6 cut.
 
-```text
-.renamer/transcripts/<tracking-id>.json
-```
+Bind cached evidence to current input SHA-256 and analysis configuration.
+Preflight duration and scratch space; recheck the source fingerprint before
+accepting a result. Reject changed sources, path/symlink escape, malformed or
+oversized output, and unsupported decodes safely. Use argument-array
+subprocess calls, bounded output/timeouts, and owned temporary files; do not
+write excerpts into the archive or Git. Audio intervals not analyzed are
+**unknown**, not implicitly silence or proof that no later class exists.
 
-Do not write a transcript into the source archive directory. Tool 11 later
-moves completed transcripts to:
-
-```text
-processed-files/transcriptions/<media-category>/
-```
-
-where `<media-category>` is the final media category. Until it is determined,
-the temporary `.renamer/transcripts/` artifact is authoritative.
-
-Artifact fields must include:
-
-- contract/version and tracking ID;
-- original/current input path and input SHA-256;
-- source type (`audio` or `video`) and derived MP3 details if applicable;
-- total duration and detected language(s), with confidence when supplied;
-- timestamped normalized segments (`start_seconds`, `end_seconds`, `text`);
-- raw-tool metadata: whisper.cpp version, model path/name, model SHA-256,
-  selected backend, requested device, thread count, and fallback evidence;
-- transcription timestamp and redacted errors/warnings;
-- transcript SHA-256 and classification linkage/version.
-
-Write atomically. Reuse a sidecar only when its input fingerprint and
-transcription configuration/model fingerprint match; otherwise regenerate.
-An existing valid transcript enables classification retry without rerunning
-Whisper.
-
-Before transcribing, calculate the input fingerprint and duration with safe
-local preflight (`ffprobe`/decoder metadata). Recalculate the input fingerprint
-after transcription; if it changed, discard/quarantine the result and block
-classification as a changed source. Do not follow a symlink outside the
-requested archive target and do not construct shell commands from filename
-text. Subprocesses must use argument arrays, `-nostdin`, bounded output,
-timeouts, and a minimal inherited environment.
-
-Normalize the raw Whisper JSON into a bounded project segment contract with
-timeline coverage from `00:00` to the measured end. Preserve explicit blank
-intervals for non-speech/silence rather than silently omitting gaps. This lets
-later Tools 6, 8, and 10 distinguish an observed silent/ambience interval from
-an unreviewed part of the recording. Store private transcript artifacts with
-owner-only permissions where the platform supports them.
-
-### Reference implementation patterns (Audio-Editing review, 2026-09-23)
-
-The independent `/Users/maced/dev/audio-editing` project is a **reference only**:
-Tool 5 must not import it, share its private job database, or require its
-working-root layout. The Builder should adapt these proven local patterns:
-
-- `whisper.cpp` capability probing, hardware-aware thread selection, recorded
-  real-time factor/load metrics, and visible Metal-to-CPU fallback;
-- source SHA-256, analysis-profile/configuration digest, and transcript digest
-  binding before cache reuse or later handoff;
-- 1/2/5/10-minute plus tail windows as explanatory evidence derived from the
-  full transcript, not as a substitute for it;
-- normalized Sanskrit/mantra aliases while retaining raw excerpts and timing;
-- strict malformed/oversized transcript rejection and fixture-backed adapters
-  so CI never requires media hardware or model assets.
+The independent `/Users/maced/dev/audio-editing` project remains a reference
+for capability probing, Metal/CPU fallback, source/config digest binding,
+timed cue normalization, and fixture-backed adapters. Tool 5 must not import
+that project or require its private job database or working-root layout.
 
 ---
 
@@ -292,9 +257,9 @@ working-root layout. The Builder should adapt these proven local patterns:
 
 The assets define a useful class pattern, not a rigid universal template. A
 class can omit opening/oblation steps or interleave a long purport with the
-speaker's explanation. Classification must combine transcript evidence,
-timestamps, music/singing indicators from the local transcription output when
-available, and existing Tool 1 filename/folder clues as *supporting* evidence.
+speaker's explanation. Classification must combine targeted excerpt evidence,
+timestamps, acoustic/music/singing indicators, and existing Tool 1
+filename/folder clues as *supporting* evidence.
 Filename words alone must never create a confident audio classification.
 
 ### 7.1 Recognizable class evidence
@@ -329,19 +294,20 @@ mislabel an uncertain song as a known named mantra.
 
 ### 7.3 Timed combination decision — Tool 6 handoff amendment
 
-Use the full transcript and inspect classification windows around 1, 2, 5, and
-10 minutes. If unresolved, adaptively inspect later timestamped regions rather
-than returning a confident result from a fixed four-window sample.
+Inspect bounded classification windows across the **whole timeline**, using
+short excerpts where needed. If unresolved, adaptively inspect later regions
+rather than returning a confident result from a fixed early sample or running
+full-file Whisper as a shortcut.
 
 A confident `KIRTAN_AND_CLASS` requires distinct ordered time ranges:
 
 1. an initial sustained kirtan/mantra range; and
 2. later class-pattern/sustained explanatory speech evidence;
 3. the recording-specific, **exact numeric timestamp at the end of singing**,
-   with confidence and audio/transcript evidence for the intended Tool 6
+   with confidence and acoustic/excerpt evidence for the intended Tool 6
    handoff. A coarse transition bracket may be retained for explanation, but
    it does not authorize a cut. Analyze local audio around the transition; a
-   transcript-segment edge alone is insufficient evidence of the precise end
+   excerpt-segment edge alone is insufficient evidence of the precise end
    of singing.
 
 An `INITIATION` requires positive multi-part ceremony evidence, not merely a
@@ -352,7 +318,7 @@ recognition guides, not guaranteed segments or fixed timing rules. Neither
 multi-part type enters the initial two-part Tool 6 cutter automatically;
 retain evidence and flag it for review pending specific cutting rules.
 
-A file whose filename suggests a combination but whose full audio evidence is
+A file whose filename suggests a combination but whose reviewed audio evidence is
 only singing is `KIRTAN`, not a combination. It remains in place and receives
 no cutter flag.
 
@@ -369,12 +335,12 @@ human-adjusted cut point. Tool 5 itself never cuts or deletes media.
 Return a typed confidence (`HIGH`, `MEDIUM`, `LOW`, `BLOCKED`) and structured
 evidence. Automatic `process_by_tool_6=true` requires `HIGH` confidence and a
 validated exact singing-end timestamp. `MEDIUM`/`LOW`, competing types,
-transcript failure,
+required excerpt/analysis failure,
 ambiguous mantra, or a type contradicted by strong existing evidence requires
 portal review but keeps the media in place.
 
 The portal may let a human select a type/mantra/cut point later, but must retain
-the automatic evidence and never rewrite a transcript. Human decisions are
+the automatic evidence and never rewrite a Tool 7 transcript. Human decisions are
 durably audited and must be consumable by Tool 6 and the later Tool 1 pass.
 
 ---
@@ -382,37 +348,38 @@ durably audited and must be consumable by Tool 6 and the later Tool 1 pass.
 ## 8. Service, registry, CLI, and portal interfaces
 
 Add a module such as `media_archive_tooling.content_discoverer` with typed
-models, transcription adapter, classifier, service, and test double. Keep
+models, limited-excerpt adapter, classifier, service, and test double. Keep
 Whisper/ffmpeg subprocess code behind adapters.
 
 Persist Tool 5 result/history against `tracking_id` in the local registry. It
-must contain the classification, confidence, mantra type, transcript artifact
-path/fingerprints, evidence ranges, the exact singing-end timestamp and
+must contain the classification, confidence, mantra type, bounded evidence
+artifact path/fingerprints, evidence ranges, the exact singing-end timestamp and
 confidence when available, routing flags,
-review state, runtime provenance, and redacted failures. Never put transcript
+review state, runtime provenance, and redacted failures. Never put excerpt
 text, raw paths beyond required existing provenance, model binaries, or secrets
 in Baserow.
 
 Provide a separate command that accepts a registry-backed tracking ID or media
 path, supports `--dry-run`, `--device auto|metal|cpu`, `--model-path`, and
-`--force-retranscribe`. It must print a concise result:
+an explicit reanalyze option. It must print a concise result:
 
 ```text
 Tool 5 - Content Discoverer
 Type: Kirtan and Class (HIGH)
 Mantra: Jaya-radha-madhava
 Singing ends: 00:11:41 (recording-specific, verified)
-Transcript: .renamer/transcripts/<tracking-id>.json
+Evidence: bounded timed audio/excerpt analysis
 Route: process_by_tool_6
 ```
 
-`--dry-run` may read/reuse an existing transcript but must not create audio,
-transcript, registry, portal, Baserow, or filesystem mutations. If no valid
-transcript exists, report the transcription/classification that would be run.
+`--dry-run` may read/reuse valid existing evidence but must not create audio,
+excerpts, registry, portal, Baserow, or filesystem mutations. If no valid
+evidence exists, report the analysis that would be run without inventing a
+classification.
 
 Extend the review portal with a Tool 5 section on file detail and an actionable
 filter for content-discovery review. Show type, confidence, mantra, timed
-evidence/boundaries, transcript runtime provenance, `process_by_tool_6`, and
+evidence/boundaries, local analysis provenance, `process_by_tool_6`, and
 the reason for uncertainty. It must not auto-play audio or expose absolute
 local paths to a network listener; portal remains loopback-only.
 
@@ -430,19 +397,21 @@ Add hermetic fixtures and tests for at least:
 5. initiation and Vyasa-puja with multiple distinct sections, both retained
    for review rather than fed to the two-part cutter;
 6. event/festival address and home program classifications;
-7. ambiguous/transcription-failed input: in place, review required, no route;
+7. ambiguous/required-analysis-failed input: in place, review required, no route;
 8. video MP3 extraction path, source fingerprint reuse, collision protection,
    and `ffmpeg` failure;
 9. Metal success, auto CPU fallback, and explicit-metal failure;
-10. transcript sidecar reuse/invalidation/atomic write and complete provenance;
+10. bounded evidence reuse/invalidation/atomic write and complete provenance;
 11. zero Baserow access/mutation by Tool 5;
 12. no original-file rename/move/delete by Tool 5;
 13. portal rendering and audited human review decisions;
 14. dry-run zero mutation;
 15. Tool 5 registry data is cleared by the existing alpha/beta fresh-slate/
     purge flow only after Tool 4 test-row cleanup succeeds.
-16. source changes during transcription, symlink/path escape, malformed or
-    oversized Whisper output, and derivative-MP3 discovery suppression.
+16. source changes during analysis, symlink/path escape, malformed or
+    oversized excerpt output, and derivative-MP3 discovery suppression;
+17. no full-file Tool 5 transcription; Tool 7 receives the current non-kirtan
+    file after an optional Tool 6 cut, and kirtan-only files skip Tool 7.
 
 Before handoff run focused Tool 5/portal tests, the complete project suite,
 shell checks, package build, and required GitHub CI. A practical local smoke
@@ -456,13 +425,15 @@ only redacted, reproducible evidence in the status file.
 
 Tool 5 is ready for review only when it:
 
-- transcribes complete local audio with the specified Whisper default and
-  recorded Mac backend/fallback provenance;
+- classifies from bounded acoustic and targeted excerpt evidence without
+  fully transcribing the source; records Mac backend/fallback provenance when
+  short local Whisper excerpts are used;
 - supports safe local audio extraction for video;
 - classifies and distinguishes class, kirtan, combination, initiation, event,
   home program, and uncertainty from actual timed evidence;
 - retains canonical mantra metadata and evidence;
-- stores valid reusable temporary transcripts outside the archive;
+- stores valid bounded timed evidence outside the archive and leaves full
+  transcript creation to Tool 7;
 - leaves Phase 1 media in place and makes no Baserow call or mutation;
 - gives only high-confidence kirtan/class combinations with a validated exact
   singing-end timestamp a `process_by_tool_6` handoff;

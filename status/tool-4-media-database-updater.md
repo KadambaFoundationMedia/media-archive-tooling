@@ -12,6 +12,18 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 Status: `READY_FOR_REVIEW`
 
+## Tool 7 `description` coordination — future integration (2026-09-24)
+
+The owner confirms an existing lowercase `description` column in the live
+Media table. Tool 7's verified Vedabase URL is passed to Tool 4, which alone
+validates the live field/type and writes an idempotent, non-destructive link
+while preserving human text and existing confirmed metadata. The current
+fake schema omits this field; the Tool 7 implementation must update the
+fixture and Tool 4's field handling. See
+`docs/tool-7-class-type-discoverer-build-plan.md` Section 6 and the Tool 4
+plan's new `description` amendment. This does not authorize Tool 7 to query
+or write Baserow directly.
+
 ## Tool 6 video-audio integration amendment — pending implementation (2026-09-23)
 
 For a retained video combination, the owner specified that the existing
