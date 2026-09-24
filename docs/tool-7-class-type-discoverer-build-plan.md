@@ -4,7 +4,7 @@ Status: **FINALIZED — implementation-ready**
 
 Revision 2026-09-24: this plan now has a concrete pre-build/acceptance gate to
 reduce avoidable planner–builder correction cycles. It does not change Tool
-7's owner-confirmed behavior or the Tool 6 build already in progress.
+7's owner-confirmed behavior or the accepted Tool 6 implementation.
 
 This is the authoritative Tool 7 specification. The Builder is a separate
 Antigravity model, started by the owner with `BUILD TOOL 7`. It must use

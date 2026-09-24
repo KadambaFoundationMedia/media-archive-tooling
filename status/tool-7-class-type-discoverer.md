@@ -22,9 +22,9 @@ Tool 4 after live schema validation.
 ## Builder action
 
 Start Tool 7 through `./scripts/builder-start.sh 7` after the finalized
-planning revision is on `main`. Prefer completing Tool 6 first so its child
-identity and Tool 5 cut-evidence contracts are available. Work only on
-`tool-7-implementation`; follow `BUILDER.md` for commits, push, PR, CI, and
+planning revision is on `main`. Tool 6 is accepted and merged in PR #65;
+inspect its actual child-identity and Tool 5 cut-evidence contracts. Work
+only on `tool-7-implementation`; follow `BUILDER.md` for commits, push, PR, CI, and
 review handoff. Never use SSH or read `.env` manually for GitHub access.
 
 ## Review checkpoint
@@ -38,10 +38,10 @@ Open policy questions: none for the first build
 The owner asked to reduce repeated correction cycles. The Tool 7 plan now
 opens with a concrete acceptance matrix and a builder self-review gate. Before
 coding against a Tool 6 child, inspect its **merged implementation** and
-record the actual output/lineage fields here. Tool 6 is currently being
-built; do not interrupt or alter its branch. Map every acceptance row to a
-test and record observed results before `READY_FOR_REVIEW`. Passing CI alone
-does not prove the Tool 7 workflow, especially the full-transcript exception
+record the actual output/lineage fields here. Tool 6 is now merged in PR #65.
+Map every acceptance row to a test and record observed results before
+`READY_FOR_REVIEW`. Passing CI alone does not prove the Tool 7 workflow,
+especially the full-transcript exception
 for kirtan, post-cut class identity, and Tool 4-only `description` writes.
 Treat the entire `BUILD TOOL 7` request as a persistent `/goal` under
 `BUILDER.md`; continue until the acceptance and PR/CI handoff are complete or
