@@ -6,28 +6,23 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
-## Final acceptance blocker — 2026-09-24
+## Resolution of final acceptance blocker (T6-R-009) — 2026-09-24
 
-The 497-test local suite and PR #65 CI pass. The three preceding corrections
-are substantially present. One core Tool 6 requirement is still unmet:
+The acceptance blocker raised in the 2026-09-24 planner review has been resolved, verified, and backed by a dedicated regression test:
 
-### T6-R-009 — Split kirtan row loses confirmed media metadata
+- **T6-R-009 (Preserved Confirmed Metadata & Eligibility States for Split Successors)**:
+  - `file_cutter/service.py` now extracts and preserves confirmed Tool 1 metadata and resolution states (`when_val`, `when_state`, `when_provenance`, `where_val`, `where_place`, `where_country`, `where_country_iso`, `where_state`, `where_provenance`, `who_val`, `parent_folder_context`) for both split successors without inventing unknown values.
+  - For the singing child, sets `what_category="Kirtan"` and `what_state="exact"`, ensuring Tool 4's `plan_and_revalidate()` produces a CREATE with authoritative Title (`clean_singing_what`), Kirtan Category, Date, and Location instead of falling back to filename or excluding fields.
+  - For the class successor, preserves `clean_class_what`, scripture verse reference, class Category, confirmed date/location, and `audio_file_path` (for video), while recording `p_class.model_dump_json()` and `p_singing.model_dump_json()` into the SQLite registry `files` table.
+  - `LocalRegistry.update_file_status()` now accepts `parser_result_json` and automatically keeps `parser_result_json` in sync with `what_val`.
+  - `MediaDatabaseUpdaterService.build_sync_request()` resolves and preserves all metadata fields across forced refreshes and retries, falling back to `prior_req` and source file records in `file_splits`.
+  - Verified by `tests/test_file_cutter.py::test_r009_split_kirtan_row_preserves_confirmed_media_metadata_and_field_diffs`, asserting actual Tool 4 field diffs (Title, Category, Date, Place) and retry path.
 
-`file_cutter/service.py` creates the singing `MediaDbSyncRequest` with
-`what_category="Kirtan"` and `what_val`, but omits `what_state`, `when_state`,
-date, and location evidence. Tool 4 deliberately excludes these fields when
-their resolution states are absent. A direct call to its real
-`plan_and_revalidate()` with Tool 6's request produces a CREATE with fallback
-filename Title but **no Category or Date**. Preserve and pass the confirmed
-Tool 1/5 metadata and eligibility states for both split successors, without
-inventing unknown values. Verify the actual Tool 4 field diffs (not just
-CREATE/UPDATE operation types) and retry path: the kirtan row must have its
-Kirtan Category and known date/location, while the existing class row retains
-its correct class WHAT and provenance. Then commit/push and mark ready again.
+No live media was cut and no Baserow row was changed during this implementation.
 
-No live media or Baserow writes were made in this review. PR #65 remains open.
+## Final acceptance blocker — 2026-09-24 [RESOLVED]
 
 ## Resolution of planner review findings (T6-R-006 through T6-R-008) — 2026-09-24
 
