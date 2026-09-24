@@ -9,6 +9,18 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
 
+## Tool 5–7 future integration — pending implementation (2026-09-24)
+
+The accepted runner still reflects the accepted Tool 5 implementation, which
+fully transcribes current inputs. The owner has now moved full transcription
+to Tool 7. When Tool 6 and Tool 7 are built, Main Script must call Tool 5 for
+bounded classification/cut evidence, Tool 6 for a confirmed combination,
+and Tool 7 on each resulting non-kirtan working file. Kirtan-only inputs and
+singing children skip Tool 7. New Tool 7 category/verse/link evidence must
+trigger Tool 1 re-evaluation and Tool 4 synchronization without assuming that
+a rename is always needed. This is a new downstream implementation contract,
+not a claim that PR #60 already implements Tools 6–7.
+
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
 

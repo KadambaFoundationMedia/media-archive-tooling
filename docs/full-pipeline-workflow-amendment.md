@@ -30,9 +30,11 @@ an automatic rename or database write.
 3. Tool 1 and Tool 4 recur whenever later accepted evidence changes a
    filename-relevant or database-relevant field, respectively. A Tool 1
    rename is not a precondition for every Tool 4 metadata-only update.
-4. Tool 5 transcribes and classifies the file as class, singing, combination,
-   or another supported content type. Uncertain results remain in place for
-   review; they must not trigger a destructive downstream step.
+4. Tool 5 classifies the file as class, singing, combination, or another
+   supported content type using acoustic analysis and, when needed, short
+   targeted local transcription excerpts. It does **not** fully transcribe
+   the working file. Uncertain results remain in place for review; they must
+   not trigger a destructive downstream step.
 5. For a confirmed singing-and-class combination, Tool 6 cuts the working
    audio input into two resulting files: a singing part and a class part. On
    successful completion, the full-length working **audio** input no longer
@@ -54,11 +56,16 @@ an automatic rename or database write.
    retained video, preserve its filename/archive path and use
    `audio_file_path` for the class MP3's full local path; do not overwrite the
    video path or write a local path into the `Audio link` URL field.
-7. Tool 7 discovers class type. Tools 8 (class trimming), 9 (class gain), and
-   10 (questions gain) act only on the applicable class part/evidence. The
-   singing part does not pass through class-only processing merely because it
-   originated in the same recording. Exact applicability and processing rules
-   belong to each later tool's build plan.
+7. Tool 7 fully transcribes **every current non-kirtan recording**, including
+   classes whose filename already states WHAT, uncut initiation/Vyasa-puja
+   ceremonies, and event/address recordings. For a Tool 6 combination, it
+   transcribes the class output only. Kirtan-only inputs and singing outputs
+   skip Tool 7 full transcription. Tool 7 uses the transcript to discover or
+   corroborate category and verse, and requests Tool 1/Tool 4 action through
+   the orchestrator whenever trustworthy metadata changes. Tools 8 (class
+   trimming), 9 (class gain), and 10 (questions gain) act only on applicable
+   class audio/evidence. The singing part does not pass through class-only
+   processing merely because it originated in the same recording.
 8. Tool 1 performs the latest canonical naming for each resulting file before
    Tool 11 chooses a destination from the latest WHAT/category metadata. Tool
    11 moves each processed file and its applicable transcript. Tool 4 then

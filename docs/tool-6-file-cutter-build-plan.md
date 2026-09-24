@@ -5,6 +5,7 @@ Status: **FINALIZED — implementation-ready**
 This plan incorporates the owner's Tool 6 decisions of 2026-09-23. The
 Builder must read `BUILDER.md`, `docs/full-pipeline-workflow-amendment.md`,
 `docs/tool-5-content-discoverer-build-plan.md`,
+`docs/tool-7-class-type-discoverer-build-plan.md`,
 `docs/tool-4-media-database-updater-build-plan.md`,
 `assets/file-naming-convention.md`,
 `assets/original-and-edited-recording-structure.md`, and
@@ -38,18 +39,19 @@ script orchestrates these service calls rather than duplicating their logic.
 The Tool 5 plan and implementation currently provide only a coarse gap
 bracket. This build must upgrade the handoff to a typed, numeric
 `singing_end_seconds` (or equivalent) with source duration/hash, timestamped
-audio/transcript evidence, method/version, and confidence. This is a single
+acoustic and any short-excerpt evidence, method/version, and confidence. This is a single
 recording-specific cut point, not the timestamps from the illustrative asset.
-Use the local audio around the transition as well as transcript evidence;
-text-only mention of a mantra or a convenient transcript segment boundary is
-not, by itself, evidence of the exact end of singing. If Tool 5 cannot locate
+Use the local audio around the transition as well as any targeted speech
+evidence; text-only mention of a mantra or a convenient short-excerpt boundary
+is not, by itself, evidence of the exact end of singing. Tool 5 must **not**
+fully transcribe the combination before cutting. If Tool 5 cannot locate
 that point reliably, it must not mark it high-confidence or authorize an
 automatic cut. Preserve the coarse bracket as diagnostic evidence if useful,
 but it is not a substitute for the exact numeric value.
 
 Automatic Tool 6 cutting is allowed only when Tool 5 has confirmed
 `KIRTAN_AND_CLASS`, its cut point is `HIGH` confidence, the point lies strictly
-inside the verified source duration, the input/transcript fingerprints still
+inside the verified source duration, the input/analysis fingerprints still
 match, and there are no contradictory or pending human-review decisions. A
 reviewer may instead confirm the content type and set/adjust a cut point in
 the portal; record that as an audited human decision bound to the same source
@@ -67,8 +69,8 @@ this two-part cutter.
 ## 3. Input, media format, and cut behavior
 
 Operate on the current registered Phase 1/Tool 5 working file in place. Reuse
-the existing Tool 5 transcript and source identity; do not re-transcribe just
-to cut. For an audio input, both outputs keep the source's container/extension
+Tool 5's bounded timed evidence and source identity; do not fully transcribe
+just to cut. For an audio input, both outputs keep the source's container/extension
 (lowercase): a WMA yields two `.wma` files, an MP3 yields two `.mp3` files.
 Do not silently convert every output to MP3. Select a compatible, high-quality
 local FFmpeg encoding/cutting mode where exact boundaries require decoding and
@@ -128,7 +130,7 @@ inherits its durable class lineage/Tool 4 row association where one exists.
 The singing output has a distinct tracking ID and lineage back to the same
 source. Persist the one-to-two mapping, original filename/path, source SHA-256,
 cut point, trim offsets, output paths/hashes/durations, tool version, and
-related transcript IDs. A repeated run must find the same completed split,
+related Tool 5 evidence IDs. A repeated run must find the same completed split,
 not split a child again or create another singing item.
 
 Until Tool 11 has its own approved implementation, **both results stay beside
@@ -138,7 +140,7 @@ or implement a private organizer. Once Tool 11 is available, the main script
 calls it using the latest Tool 1 names and WHAT/category metadata, then Tool 4
 synchronizes final paths.
 
-## 5. Safe publication, interruption, and transcripts
+## 5. Safe publication, interruption, and Tool 7 handoff
 
 Stage only the two outputs for the current file within a bounded scratch
 budget on the same filesystem when possible. Verify both are decodable,
@@ -152,13 +154,14 @@ leave a recoverable manifest/state so retry can distinguish staged, partially
 published, and completed splits without deleting unrelated files. No archive-
 wide copy and no deletion based merely on matching filenames.
 
-Associate Tool 5's transcript with the two child identities. Produce child
-transcript sidecars or equivalent references with timestamps mapped to each
-output after the cut and leading trim, preserving the original transcript and
-source provenance for audit. Do not silently duplicate a segment spanning the
-cut; retain that evidence for review. Tool 11 later moves applicable completed
-transcripts under the approved category destinations. Dry-run creates no
-transcript derivative.
+Associate Tool 5's bounded analysis and source provenance with both child
+identities, mapping only relevant timed evidence to each output after the cut
+and leading trim. Preserve an excerpt spanning the cut as ambiguous evidence;
+do not call it a full transcript or silently assign it to both children. Tool
+6 does **not** create child transcript sidecars. The verified class output
+enters Tool 7 for its first complete transcript; the singing output skips
+Tool 7. Tool 11 later moves the class transcript to its approved category
+destination. Dry-run creates no evidence derivative.
 
 ## 6. Tool 4 synchronization and video-derived audio path
 
@@ -223,7 +226,8 @@ where appropriate. Cover at least:
 2. Audio outputs retain the input format (`.wma` to `.wma`), while a video-
    derived MP3 yields MP3 parts and the video remains untouched.
 3. Singing and class outputs receive distinct Tool 1 names, identities,
-   transcript mappings, and row associations.
+   bounded evidence mappings, and row associations; only the class output
+   proceeds to Tool 7 full transcription.
 4. Only actual leading silence is trimmed; spoken class introductions are
    retained; a recording-specific example time is never hard-coded.
 5. Exact cut, output-duration/decodability validation, source-change check,

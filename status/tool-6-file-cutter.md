@@ -8,6 +8,14 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 Status: `NOT_STARTED`
 
+The Main Script PR #60 was accepted and merged on 2026-09-24. Tool 6 may now
+start after the Tool 5/7 transcription-boundary plan revision is on `main`.
+Its build includes converting Tool 5 from full transcription to bounded
+analysis/short excerpts, then cutting from verified audio evidence. Tool 6
+must not require or split a pre-cut full transcript. Tool 7 later transcribes
+the class child; the singing child skips full transcription. Read the revised
+Tool 5 and Tool 7 plans before implementation.
+
 The finalized plan specifies automatic high-confidence kirtan/class cutting
 at the exact end-of-singing timestamp provided by Tool 5; conservative leading-
 silence trimming; source-format audio outputs; Tool 1 naming; Tool 4 class-row
@@ -62,8 +70,7 @@ needed for this first-build video mapping.
 
 ## Builder action
 
-Do not start `BUILD TOOL 6` until the Main Script Builder's active branch is
-accepted/merged. Then start via
+After the transcription-boundary planning PR is merged, start via
 `./scripts/builder-start.sh 6`, implement on `tool-6-implementation`, and
 follow `BUILDER.md` for status, tests, commits, push, PR, and CI. Tool 5's
 exact-cut handoff and Vyasa-puja recognition amendment are included in this

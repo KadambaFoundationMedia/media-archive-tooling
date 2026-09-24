@@ -10,12 +10,25 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 Status: `ACCEPTED`
 
+## Tool 5-to-7 transcription boundary — pending implementation (2026-09-24)
+
+The owner moved **full transcription** out of Tool 5. Tool 5 must classify
+using bounded acoustic analysis plus short targeted local transcription
+excerpts only when needed, and provide a high-confidence exact singing-end
+point for Tool 6. The accepted Tool 5 code still transcribes entire inputs;
+that is historical current behavior, not the new target. Tool 6's build must
+revise Tool 5 and its tests before cutting. Tool 7 will fully transcribe every
+post-Tool-6 non-kirtan file; kirtan-only and singing outputs skip it. Do not
+make Tool 6 depend on a Tool 7 full transcript. Read the revised Tool 5/6
+plans and `docs/tool-7-class-type-discoverer-build-plan.md` before changing
+the shared adapter, cache, or Main Script integration.
+
 ## Tool 6 integration amendment — pending implementation (2026-09-23)
 
 The owner's Tool 6 requirements supersede the accepted coarse-boundary-only
 handoff. `docs/tool-5-content-discoverer-build-plan.md` Section 7.3 now
 requires a recording-specific exact numeric end-of-singing timestamp with
-audio/transcript evidence and source-fingerprint binding. High-confidence
+acoustic/short-excerpt evidence and source-fingerprint binding. High-confidence
 `KIRTAN_AND_CLASS` may be cut automatically by Tool 6; uncertain points stay
 intact for waveform/audio portal review. The existing `CutterBoundaryProposal`
 does **not** yet provide this contract. Tool 6 implementation must include
@@ -30,7 +43,8 @@ Tool 5 implementation already performs exact cutting.
 
 Downstream coordination (2026-09-23): The user-confirmed future sequence is
 `docs/full-pipeline-workflow-amendment.md`. Tool 5 itself continues to
-transcribe/classify in situ without deleting its input. Later Tool 6, only
+classify in situ without deleting its input; the accepted full-transcription
+behavior is to be replaced under the boundary above. Later Tool 6, only
 after a confirmed combination route, replaces that working input with class
 and singing outputs. The original full-length working file is not retained
 after a successful split. The singing output gets a distinct Tool 4 Media row;

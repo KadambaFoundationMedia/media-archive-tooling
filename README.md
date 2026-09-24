@@ -16,9 +16,11 @@ Tool 1: interpret filename
 → Tool 5: transcribe and discover the recording's content in place
 ```
 
-Tools 1–5 are available. Tool 6 has a finalized build plan but is not yet
-implemented; Tools 7–11 still need their individual build plans. The Main
-Tooling Script has an active correction pass for archive-scale operation.
+Tools 1–5 and the Main Tooling Script are available. Tools 6 and 7 have
+finalized build plans but are not yet implemented; Tools 8–11 still need
+individual build plans. The current Tool 5 code fully transcribes recordings.
+Its planned revision will use bounded classification analysis instead; Tool 7
+will then fully transcribe every non-kirtan recording after any Tool 6 cut.
 
 ## Quick start
 
@@ -186,13 +188,15 @@ planner reviews/tests the result and merges it only after approval and CI.
 | Tool 4 — Media database updater | [Tool 4 plan](docs/tool-4-media-database-updater-build-plan.md) | `BUILD TOOL 4` |
 | Tool 5 — Content discoverer | [Tool 5 plan](docs/tool-5-content-discoverer-build-plan.md) | `BUILD TOOL 5` |
 | Tool 6 — File cutter | [Tool 6 plan](docs/tool-6-file-cutter-build-plan.md) | `BUILD TOOL 6` |
+| Tool 7 — Class type discoverer and full transcription | [Tool 7 plan](docs/tool-7-class-type-discoverer-build-plan.md) | `BUILD TOOL 7` |
 
 Tools 1–5 already have implementations; their prompts are for directed
-corrections or resumption, not an instruction to rebuild them. Wait until the
-current Main Script correction is accepted and merged before sending
-`BUILD TOOL 6`. Tool 6's plan includes the required Tool 5 exact-cut handoff
-and Tool 4 video-audio path extension. Tools 7–11 have no finalized plans or
-build prompts yet.
+corrections or resumption, not an instruction to rebuild them. After this
+planning revision is merged, send `BUILD TOOL 6` first: its plan includes
+the revised Tool 5 exact-cut handoff without full transcription and the Tool
+4 video-audio path extension. Then send `BUILD TOOL 7` for full non-kirtan
+transcription, category/verse discovery, and the Tool 4 `description` link
+handoff. Tools 8–11 have no finalized plans or build prompts yet.
 
 ## Project documentation
 
@@ -200,6 +204,7 @@ build prompts yet.
 - [Main Tooling Script walkthrough](docs/main-tooling-script-walkthrough.md)
 - [Main Tooling Script acceptance status](status/main-tooling-script.md)
 - [Tool 6 implementation status](status/tool-6-file-cutter.md)
+- [Tool 7 implementation status](status/tool-7-class-type-discoverer.md)
 - [Full pipeline workflow](docs/full-pipeline-workflow-amendment.md)
 - [Alpha/beta test-data purge plan](docs/alpha-beta-test-data-purge-build-plan.md)
 - [Project implementation architecture](docs/project-implementation-architecture.md)
