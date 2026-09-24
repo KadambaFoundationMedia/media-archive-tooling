@@ -159,7 +159,6 @@ FESTIVAL_PATTERNS = [
     r"\bgaura\s+purnima\b",
     r"\brama\s+navami\b",
     r"\bradhastami\b",
-    r"\bvyasa\s+puja\b",
     r"\bratha\s+yatra\b",
     r"\btemple\s+opening\b",
     r"\bappearance\s+day\b",
@@ -168,6 +167,18 @@ FESTIVAL_PATTERNS = [
     r"\bwelcome\s+address\b",
     r"\binterfaith\b",
     r"\banniversary\s+celebration\b",
+]
+
+# ---------------------------------------------------------------------------
+# Vyasa-Puja Matchers
+# ---------------------------------------------------------------------------
+
+VYASA_PUJA_PATTERNS = [
+    r"\bvyasa\s+puja\b",
+    r"\bvyasapuja\b",
+    r"\bofferings?\s+to\s+guru\b",
+    r"\bguru\s+puja\b",
+    r"\bhomage\b",
 ]
 
 # ---------------------------------------------------------------------------
@@ -368,7 +379,23 @@ class ContentClassifier:
                     )
                 )
 
-        # 5. Detect Home Program Indicators
+        # 5. Detect Vyasa-Puja Indicators
+        vyasa_puja_ranges: List[Tuple[float, float, str]] = []
+        for seg in speech_segments:
+            norm = normalize_text(seg.text)
+            if any(re.search(pat, norm) for pat in VYASA_PUJA_PATTERNS):
+                vyasa_puja_ranges.append((seg.start_seconds, seg.end_seconds, "vyasa_puja"))
+                evidence.append(
+                    ContentEvidence(
+                        kind="vyasa_puja",
+                        start_seconds=seg.start_seconds,
+                        end_seconds=seg.end_seconds,
+                        raw_excerpt=seg.text,
+                        normalized_text=norm,
+                    )
+                )
+
+        # 6. Detect Home Program Indicators
         home_program_ranges: List[Tuple[float, float, str]] = []
         for seg in speech_segments:
             norm = normalize_text(seg.text)
@@ -391,48 +418,69 @@ class ContentClassifier:
         has_class_evidence = len(class_ranges) >= 1
         has_mantra_evidence = len(mantra_ranges) >= 1
         has_initiation_evidence = len(initiation_ranges) >= 2  # multiple ceremony vows/names
+        has_vyasa_puja_evidence = len(vyasa_puja_ranges) >= 1
         has_festival_evidence = len(festival_ranges) >= 1
         has_home_evidence = len(home_program_ranges) >= 1
 
-        # Check for Initiation (Section 7.3)
+        # Check for Initiation (Section 7.3 & Tool 6 build plan)
         if has_initiation_evidence:
             first_vow = min(r[0] for r in initiation_ranges)
             last_vow = max(r[1] for r in initiation_ranges)
-            cutter_prop = None
-            process_tool6 = False
-            # Check if multi-part (e.g. multiple ceremony stages, discourse before, or singing after)
-            if len(initiation_ranges) >= 2 or total_duration > last_vow + 30.0 or first_vow > 60.0:
-                process_tool6 = True
-                split_point = first_vow if first_vow > 60.0 else last_vow
-                # Build rich multi-stage description
-                stage_desc_parts = []
-                seen_stages = set()
-                for stage, sec in initiation_stages:
-                    if stage not in seen_stages:
-                        seen_stages.add(stage)
-                        stage_desc_parts.append(f"{stage} at {int(sec)//60:02d}:{int(sec)%60:02d}")
-                stage_desc = "; ".join(stage_desc_parts) if stage_desc_parts else f"initiation vows at {int(first_vow)//60:02d}:{int(first_vow)%60:02d}"
+            split_point = first_vow if first_vow > 60.0 else last_vow
+            stage_desc_parts = []
+            seen_stages = set()
+            for stage, sec in initiation_stages:
+                if stage not in seen_stages:
+                    seen_stages.add(stage)
+                    stage_desc_parts.append(f"{stage} at {int(sec)//60:02d}:{int(sec)%60:02d}")
+            stage_desc = "; ".join(stage_desc_parts) if stage_desc_parts else f"initiation vows at {int(first_vow)//60:02d}:{int(first_vow)%60:02d}"
 
-                cutter_prop = CutterBoundaryProposal(
-                    kirtan_range=(0.0, split_point),
-                    class_range=(split_point, total_duration),
-                    coarse_gap_bracket=(max(0.0, split_point - 10.0), split_point),
-                    confidence="HIGH",
-                    description=stage_desc,
-                )
+            cutter_prop = CutterBoundaryProposal(
+                kirtan_range=(0.0, split_point),
+                class_range=(split_point, total_duration),
+                coarse_gap_bracket=(max(0.0, split_point - 10.0), split_point),
+                singing_end_seconds=split_point,
+                source_duration_seconds=total_duration,
+                source_sha256=artifact.input_sha256,
+                method="initiation_ceremony_stages",
+                confidence="HIGH",
+                description=stage_desc,
+            )
+            # Per Tool 6 build plan: initiation ceremonies must NOT be auto-cut by two-part Tool 6.
+            # Retain multi-part ceremony evidence for review; proceed to Tool 7.
             return ContentDiscoveryResult(
                 tracking_id=artifact.tracking_id,
                 classification=ContentType.INITIATION,
                 confidence=ConfidenceLevel.HIGH,
                 mantra_type=detected_mantra,
-                process_by_tool_6=process_tool6,
+                process_by_tool_6=False,
                 cutter_proposal=cutter_prop,
                 transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
                 transcript_sha256=artifact.transcript_sha256,
                 input_sha256=artifact.input_sha256,
                 source_path=artifact.input_path,
                 evidence=evidence,
-                review_required=False,
+                review_required=True,
+                review_reason="Initiation ceremonies require multi-part specification and review; not auto-cut by Tool 6",
+                runtime_provenance=meta,
+            )
+
+        # Check for Vyasa-Puja (Tool 6 build plan)
+        if has_vyasa_puja_evidence:
+            return ContentDiscoveryResult(
+                tracking_id=artifact.tracking_id,
+                classification=ContentType.VYASA_PUJA,
+                confidence=ConfidenceLevel.HIGH,
+                mantra_type=detected_mantra,
+                process_by_tool_6=False,
+                cutter_proposal=None,
+                transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
+                transcript_sha256=artifact.transcript_sha256,
+                input_sha256=artifact.input_sha256,
+                source_path=artifact.input_path,
+                evidence=evidence,
+                review_required=True,
+                review_reason="Vyasa-puja recordings require multi-part specification and review; not auto-cut by Tool 6",
                 runtime_provenance=meta,
             )
 
@@ -451,6 +499,10 @@ class ContentClassifier:
                     kirtan_range=(0.0, latest_kirtan_before_class),
                     class_range=(earliest_class, total_duration),
                     coarse_gap_bracket=coarse_gap,
+                    singing_end_seconds=latest_kirtan_before_class,
+                    source_duration_seconds=total_duration,
+                    source_sha256=artifact.input_sha256,
+                    method="acoustic_transcript_boundary",
                     confidence="HIGH",
                 )
                 return ContentDiscoveryResult(

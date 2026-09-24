@@ -520,6 +520,7 @@ DEFAULT_MEDIA_TABLE_FIELDS = [
     {"id": 123, "name": "Transcript Archive link", "type": "url"},
     {"id": 124, "name": "Media Archive link", "type": "url"},
     {"id": 125, "name": "media_archive_path", "type": "text"},
+    {"id": 130, "name": "audio_file_path", "type": "text"},
     {
         "id": 126,
         "name": "Country",

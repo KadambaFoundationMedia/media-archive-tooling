@@ -17,6 +17,7 @@ class StageName(str, Enum):
     TOOL_1_FINALIZE = "tool_1_finalize"
     TOOL_4_SYNC = "tool_4_media_sync"
     TOOL_5_CONTENT_DISCOVERY = "tool_5"
+    TOOL_6_FILE_CUTTER = "tool_6"
 
 
 class FileExecutionStatus(str, Enum):
@@ -55,6 +56,7 @@ class FileRunResult(BaseModel):
     tool4_sync_status: Optional[str] = None
     tool4_live_row: Optional[Dict[str, Any]] = None
     content_discovery_result: Optional[Any] = None
+    file_cutter_result: Optional[Any] = None
     error: Optional[str] = None
 
 

@@ -192,6 +192,45 @@ class LocalRegistry:
                 created_at TEXT NOT NULL
             )
             """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_splits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_tracking_id TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL,
+                source_duration_seconds REAL NOT NULL,
+                cut_point_seconds REAL NOT NULL,
+                singing_tracking_id TEXT NOT NULL,
+                singing_path TEXT NOT NULL,
+                singing_sha256 TEXT NOT NULL,
+                singing_duration_seconds REAL NOT NULL,
+                singing_leading_silence_seconds REAL NOT NULL DEFAULT 0.0,
+                singing_pending_tool_11_move INTEGER NOT NULL DEFAULT 1,
+                class_tracking_id TEXT NOT NULL,
+                class_path TEXT NOT NULL,
+                class_sha256 TEXT NOT NULL,
+                class_duration_seconds REAL NOT NULL,
+                class_leading_silence_seconds REAL NOT NULL DEFAULT 0.0,
+                class_pending_tool_11_move INTEGER NOT NULL DEFAULT 1,
+                tool_version TEXT NOT NULL,
+                evidence_ids_json TEXT,
+                split_details_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (source_tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS human_cut_decisions (
+                tracking_id TEXT PRIMARY KEY,
+                source_sha256 TEXT NOT NULL,
+                cut_point_seconds REAL NOT NULL,
+                reviewer TEXT NOT NULL,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tracking_id) REFERENCES files (tracking_id)
+            )
+            """)
             try:
                 cursor.execute("ALTER TABLE travel_reviews ADD COLUMN tool2_decision TEXT")
             except Exception:
@@ -213,6 +252,10 @@ class LocalRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_audio_derivatives_source ON video_audio_derivatives(source_video_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_stage_checkpoints_tid ON stage_checkpoints(tracking_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_scratch_artifacts_run_id ON scratch_artifacts(run_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_splits_source ON file_splits(source_tracking_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_splits_singing ON file_splits(singing_tracking_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_splits_class ON file_splits(class_tracking_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_human_cut_decisions_tid ON human_cut_decisions(tracking_id)")
             conn.commit()
 
     def get_file(self, tracking_id: str) -> Optional[Dict[str, Any]]:
@@ -394,6 +437,37 @@ class LocalRegistry:
             UPDATE files SET status = ?, updated_at = ? WHERE tracking_id = ?
             """, (new_status, now, tracking_id))
             conn.commit()
+
+    def update_file_status(
+        self,
+        tracking_id: str,
+        status: Optional[str] = None,
+        current_path: Optional[Union[str, Path]] = None,
+        proposed_filename: Optional[str] = None,
+    ):
+        """Update file status, current_path, and/or proposed_filename in files table."""
+        now = datetime.now(timezone.utc).isoformat()
+        updates = ["updated_at = ?"]
+        params: List[Any] = [now]
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if current_path is not None:
+            cp = Path(current_path)
+            updates.append("current_path = ?")
+            params.append(str(cp))
+            updates.append("current_filename = ?")
+            params.append(cp.name)
+        if proposed_filename is not None:
+            updates.append("proposed_filename = ?")
+            params.append(proposed_filename)
+        params.append(tracking_id)
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"UPDATE files SET {', '.join(updates)} WHERE tracking_id = ?", params)
+            conn.commit()
+
+    update_file_path = update_file_status
 
     def record_review_action(
         self,
@@ -907,6 +981,8 @@ class LocalRegistry:
             cursor.execute("DELETE FROM video_audio_derivatives")
             cursor.execute("DELETE FROM stage_checkpoints")
             cursor.execute("DELETE FROM scratch_artifacts")
+            cursor.execute("DELETE FROM file_splits")
+            cursor.execute("DELETE FROM human_cut_decisions")
             cursor.execute("DELETE FROM files")
             cursor.execute("DELETE FROM test_row_ledger")
             conn.commit()
@@ -920,6 +996,12 @@ class LocalRegistry:
         classification_val = res_dict["classification"].value if hasattr(res_dict["classification"], "value") else str(res_dict["classification"])
         confidence_val = res_dict["confidence"].value if hasattr(res_dict["confidence"], "value") else str(res_dict["confidence"])
         mantra_val = res_dict["mantra_type"].value if hasattr(res_dict["mantra_type"], "value") else str(res_dict["mantra_type"])
+
+        input_sha = res_dict.get("input_sha256") or res_dict.get("source_sha256", "")
+        if not res_dict.get("input_sha256"):
+            res_dict["input_sha256"] = input_sha
+        if not res_dict.get("source_sha256"):
+            res_dict["source_sha256"] = input_sha
 
         with self._get_conn() as conn:
             cursor = conn.cursor()
@@ -939,7 +1021,7 @@ class LocalRegistry:
                 cutter_json,
                 res_dict.get("transcript_path", ""),
                 res_dict.get("transcript_sha256", ""),
-                res_dict.get("input_sha256", ""),
+                input_sha,
                 res_dict.get("source_path", ""),
                 res_dict.get("derived_audio_path"),
                 json.dumps(res_dict),
@@ -962,6 +1044,8 @@ class LocalRegistry:
                 d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
                 d["cutter_proposal"] = json.loads(d["cutter_proposal_json"]) if d.get("cutter_proposal_json") else None
                 d["human_decision"] = json.loads(d["human_decision_json"]) if d.get("human_decision_json") else None
+                if d.get("input_sha256") and not d.get("source_sha256"):
+                    d["source_sha256"] = d["input_sha256"]
                 return d
         return None
 
@@ -1393,3 +1477,99 @@ class LocalRegistry:
             else:
                 cursor.execute("DELETE FROM scratch_artifacts")
             conn.commit()
+
+    def record_file_split(self, split_data: Dict[str, Any]) -> int:
+        """Record a completed, verified Tool 6 file split."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO file_splits (
+                source_tracking_id, source_path, source_sha256, source_duration_seconds,
+                cut_point_seconds, singing_tracking_id, singing_path, singing_sha256,
+                singing_duration_seconds, singing_leading_silence_seconds, singing_pending_tool_11_move,
+                class_tracking_id, class_path, class_sha256, class_duration_seconds,
+                class_leading_silence_seconds, class_pending_tool_11_move, tool_version,
+                evidence_ids_json, split_details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                split_data["source_tracking_id"],
+                split_data["source_path"],
+                split_data["source_sha256"],
+                float(split_data["source_duration_seconds"]),
+                float(split_data["cut_point_seconds"]),
+                split_data["singing_tracking_id"],
+                split_data["singing_path"],
+                split_data["singing_sha256"],
+                float(split_data["singing_duration_seconds"]),
+                float(split_data.get("singing_leading_silence_seconds", 0.0)),
+                1 if split_data.get("singing_pending_tool_11_move", True) else 0,
+                split_data["class_tracking_id"],
+                split_data["class_path"],
+                split_data["class_sha256"],
+                float(split_data["class_duration_seconds"]),
+                float(split_data.get("class_leading_silence_seconds", 0.0)),
+                1 if split_data.get("class_pending_tool_11_move", True) else 0,
+                split_data.get("tool_version", "1.0.0"),
+                json.dumps(split_data.get("evidence_ids", [])) if isinstance(split_data.get("evidence_ids"), list) else split_data.get("evidence_ids_json"),
+                json.dumps(split_data.get("details", {})) if isinstance(split_data.get("details"), dict) else split_data.get("split_details_json"),
+                now,
+            ))
+            row_id = cursor.lastrowid
+            conn.commit()
+            return row_id
+
+    def get_file_split_by_source(self, source_tracking_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve split record for a source tracking ID."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM file_splits WHERE source_tracking_id = ? ORDER BY id DESC LIMIT 1", (source_tracking_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_file_split_by_child(self, child_tracking_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve split record where tracking ID is either singing or class child."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM file_splits WHERE singing_tracking_id = ? OR class_tracking_id = ? ORDER BY id DESC LIMIT 1", (child_tracking_id, child_tracking_id))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def list_file_splits(self) -> List[Dict[str, Any]]:
+        """List all completed file splits."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM file_splits ORDER BY id ASC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def save_human_cut_decision(
+        self,
+        tracking_id: str,
+        source_sha256: str,
+        cut_point_seconds: float,
+        reviewer: str = "human_reviewer",
+        notes: Optional[str] = None,
+    ) -> None:
+        """Persist or update audited human cut decision bound to source SHA-256."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO human_cut_decisions (tracking_id, source_sha256, cut_point_seconds, reviewer, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracking_id) DO UPDATE SET
+                source_sha256 = excluded.source_sha256,
+                cut_point_seconds = excluded.cut_point_seconds,
+                reviewer = excluded.reviewer,
+                notes = excluded.notes,
+                updated_at = excluded.updated_at
+            """, (tracking_id, source_sha256, float(cut_point_seconds), reviewer, notes, now, now))
+            conn.commit()
+
+    def get_human_cut_decision(self, tracking_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve human cut decision for a tracking ID."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM human_cut_decisions WHERE tracking_id = ?", (tracking_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None

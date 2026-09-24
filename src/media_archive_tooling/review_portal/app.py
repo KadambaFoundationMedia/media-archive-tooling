@@ -34,6 +34,7 @@ _review_root: Optional[Path] = None
 _media_db_service: Optional[Any] = None
 _media_db_provider: Optional[Any] = None
 _media_db_updater_service: Optional[Any] = None
+_file_cutter_service: Optional[Any] = None
 
 
 def configure_review_context(
@@ -43,9 +44,10 @@ def configure_review_context(
     media_db_provider: Optional[Any] = None,
     media_db_updater_service: Optional[Any] = None,
     registry: Optional[LocalRegistry] = None,
+    file_cutter_service: Optional[Any] = None,
 ) -> None:
     """Configure the portal to use the same local review registry/root as the scan."""
-    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider, _media_db_updater_service
+    global _service, _commit_service, _review_root, _media_db_service, _media_db_provider, _media_db_updater_service, _file_cutter_service
     config = load_config()
     if registry is None:
         selected_registry = Path(registry_path) if registry_path else config.registry_path
@@ -54,12 +56,21 @@ def configure_review_context(
     _media_db_service = media_db_service
     _media_db_provider = media_db_provider
     _media_db_updater_service = media_db_updater_service or get_media_db_updater_service()
+    _file_cutter_service = file_cutter_service
     _commit_service = RenameCommitService(
         registry=registry,
         mode=RenameMode.INITIAL,
         media_db_updater_service=_media_db_updater_service,
     )
     _review_root = Path(review_root).expanduser().resolve() if review_root else None
+
+
+def get_file_cutter_service() -> Any:
+    global _file_cutter_service
+    if _file_cutter_service is None:
+        from ..file_cutter.service import FileCutterService
+        _file_cutter_service = FileCutterService(registry=get_service().registry)
+    return _file_cutter_service
 
 
 def get_service() -> RenamerApplicationService:
@@ -231,6 +242,18 @@ def stream_audio(tracking_id: str):
         raise HTTPException(status_code=404, detail="Audio file not found for tracking ID")
 
     suffix = audio_path.suffix.lower()
+    if suffix == ".wma":
+        cutter_svc = get_file_cutter_service()
+        try:
+            playable_path = cutter_svc.get_audio_preview_path(tracking_id)
+            return FileResponse(
+                path=str(playable_path),
+                media_type="audio/mpeg",
+                filename=playable_path.name,
+            )
+        except Exception as e:
+            logger.warning("Could not transcode preview for WMA file %s: %s", audio_path, e)
+
     media_types = {
         ".mp3": "audio/mpeg",
         ".wav": "audio/wav",
@@ -266,6 +289,8 @@ def file_detail(request: Request, tracking_id: str):
     travel_review = service.registry.get_travel_review(tracking_id)
     media_db_sync = service.registry.get_media_db_sync(tracking_id)
     content_review = service.registry.get_content_review(tracking_id)
+    file_split = service.registry.get_file_split_by_source(tracking_id)
+    human_cut_decision = service.registry.get_human_cut_decision(tracking_id)
     audio_path = _resolve_audio_path(service.registry, tracking_id)
     has_audio = audio_path is not None and audio_path.exists()
     return templates.TemplateResponse(
@@ -277,9 +302,45 @@ def file_detail(request: Request, tracking_id: str):
             "travel_review": travel_review,
             "media_db_sync": media_db_sync,
             "content_review": content_review,
+            "file_split": file_split,
+            "human_cut_decision": human_cut_decision,
             "has_audio": has_audio,
         },
     )
+
+
+@app.get("/api/file/{tracking_id}/waveform")
+def get_waveform_endpoint(tracking_id: str):
+    """Retrieve normalized waveform peak summary for interactive visualization."""
+    cutter_svc = get_file_cutter_service()
+    try:
+        summary = cutter_svc.get_waveform(tracking_id)
+        return summary.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/file/{tracking_id}/cut")
+def execute_cut_endpoint(
+    tracking_id: str,
+    cut_point: Optional[float] = Form(None),
+    dry_run: bool = Form(False),
+    reviewer: str = Form("portal_reviewer"),
+    notes: Optional[str] = Form(None),
+):
+    """Execute Tool 6 cut or dry-run simulation from the review portal."""
+    cutter_svc = get_file_cutter_service()
+    try:
+        res = cutter_svc.cut_file(
+            tracking_id,
+            dry_run=dry_run,
+            cut_point_override=cut_point,
+            reviewer=reviewer,
+            notes=notes,
+        )
+        return res.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/file/{tracking_id}/content-review-action")

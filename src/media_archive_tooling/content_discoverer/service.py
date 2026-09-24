@@ -129,6 +129,9 @@ def validate_coarse_boundary(boundary_str: str, duration: float = 0.0) -> Option
         kirtan_range=(t0, t1),
         class_range=(class_start, class_end),
         coarse_gap_bracket=(gap_start, gap_end),
+        singing_end_seconds=t1,
+        source_duration_seconds=duration,
+        method="manual_boundary_validation",
         confidence="HIGH",
         description=clean,
     )
