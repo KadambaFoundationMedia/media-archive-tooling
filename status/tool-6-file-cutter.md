@@ -6,34 +6,27 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `READY_FOR_REVIEW`
 
-The Main Script PR #60 was accepted and merged on 2026-09-24. Tool 6 may now
-start after the Tool 5/7 transcription-boundary plan revision is on `main`.
-Its build includes converting Tool 5 from full transcription to bounded
-analysis/short excerpts, then cutting from verified audio evidence. Tool 6
-must not require or split a pre-cut full transcript. Tool 7 later transcribes
-the class child; the singing child skips full transcription. Read the revised
-Tool 5 and Tool 7 plans before implementation.
-
-The finalized plan specifies automatic high-confidence kirtan/class cutting
-at the exact end-of-singing timestamp provided by Tool 5; conservative leading-
-silence trimming; source-format audio outputs; Tool 1 naming; Tool 4 class-row
-update and distinct singing-row synchronization; in-place outputs pending
-Tool 11; and a portal waveform/player/adjustable cut point for flagged cases.
-The original full-length working audio is removed only after both outputs are
-verified. A video source remains; its owned full-length extracted MP3 is
-removed after successful splitting into two MP3s. The video class row keeps
-its `Filename` and `media_archive_path`; Tool 4 writes the class MP3's full
-local path to `audio_file_path`, validating that column first. The singing
-MP3 has its own row.
+Tool 6 (File Cutter) has been implemented and verified.
+Automatic cutting is supported for high-confidence `KIRTAN_AND_CLASS` recordings
+at the exact boundary timestamp provided by Tool 5.
+Gating safely routes `INITIATION` and `VYASA_PUJA` to human review without modifying files.
+Output formats and container codecs are preserved (`wmav2` for WMA, `libmp3lame` for MP3).
+Video inputs remain untouched; owned extracted MP3 derivatives are split and cleaned up.
+Leading silence is trimmed conservatively via `silencedetect` (threshold -40dB, min 0.5s).
+Outputs are canonically named via Tool 1 planner and remain in-place pending Tool 11 category move.
+Class output inherits source tracking ID and Media row; singing output receives a new tracking ID and separate Kirtan row.
+Tool 4 synchronization updates class row (writing `audio_file_path` for video sources) and creates singing row.
+Review portal provides interactive waveform, seekable playback with on-demand WMA-to-MP3 transcoding, and manual cut adjustment.
+CLI `media-archive cut` enables standalone execution and dry-run inspection.
 
 ## Review checkpoint
 
 Last planning/review commit: `66854fe` (planning PR #61)
-Current implementation HEAD: none
+Current implementation HEAD: `45e57c1` (PR #65)
 Fundamental-change review pending: no
-Relevant commits since last review: none
+Relevant commits since last review: `45e57c1`
 
 ## Open questions / contradictions
 
@@ -86,3 +79,12 @@ build; do not treat the accepted coarse-bracket implementation as sufficient.
 - 2026-09-23 — Build plan and cross-tool amendments committed as `66854fe`,
   pushed to `planner/tool-6-build-plan`, and opened as PR #61. No media or
   Baserow data was changed.
+- 2026-09-24 — Implemented Tool 6 (File Cutter) in `src/media_archive_tooling/file_cutter/`:
+  - `AudioCutter`: format preservation (`wmav2`, `libmp3lame`), conservative leading-silence trimming via `silencedetect`, verify audio streams, atomic publication, rollback on failure.
+  - `WaveformGenerator`: 500-sample normalized peaks calculation bound to SHA-256 hash, cached on-demand WMA-to-MP3 transcoding for browser playback.
+  - `FileCutterService`: exact boundary cut point handoff from Tool 5, gating `INITIATION` and `VYASA_PUJA`, Tool 1 canonical naming for split outputs, lineage persistence in `file_splits`, Tool 4 Media DB synchronization (including `audio_file_path` for retained videos), and dry-run simulation.
+  - Review portal: interactive waveform display, seekable audio playback with on-demand transcoding, and manual cut adjustment endpoint.
+  - Orchestrator: integrated Tool 6 execution into `WorkflowType.ALL` and `WorkflowType.PROCESSING`.
+  - CLI: registered `media-archive cut` with `--dry-run`, `--cut-point`, and `--json`.
+  - Test evidence: `tests/test_file_cutter.py` (10 passed), full test suite (489 passed).
+  - Pushed to `tool-6-implementation` and opened PR #65.
