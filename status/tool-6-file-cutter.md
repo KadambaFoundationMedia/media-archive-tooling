@@ -6,7 +6,13 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `ACCEPTED` — planner approved for merge on 2026-09-24
+
+Planner's small safety adjustment before merge: Tool 6 no longer promotes a
+date-shaped value, a present location, or an unspecified class WHAT state to
+`exact` without Tool 1 evidence. Confirmed states still pass through to Tool 4.
+`test_split_does_not_promote_unconfirmed_date_or_location` covers this case.
+The builder should retain this rule in subsequent Tool 6/7 work.
 
 ## Resolution of final acceptance blocker (T6-R-009) — 2026-09-24
 

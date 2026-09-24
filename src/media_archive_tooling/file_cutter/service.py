@@ -822,12 +822,8 @@ class FileCutterService:
             return clean if clean and clean != "none" else None
 
         clean_when_state = _clean_st(raw_when_state)
-        if not clean_when_state and when_val and re.match(r"^\d{4}-\d{2}-\d{2}$", str(when_val).strip().replace("/", "-")):
-            clean_when_state = "exact"
 
         clean_where_state = _clean_st(raw_where_state)
-        if not clean_where_state and (where_place or country_name):
-            clean_where_state = "exact"
 
         # Resolve category for class successor
         class_cat = what_data.get("category")
@@ -840,7 +836,7 @@ class FileCutterService:
                 class_cat = "Caitanya caritamrta"
 
         raw_what_state = what_data.get("state")
-        clean_class_what_state = _clean_st(raw_what_state) or "exact"
+        clean_class_what_state = _clean_st(raw_what_state)
 
         class_what_prov = list(what_data.get("evidence") or what_data.get("provenance") or [])
         if crev:

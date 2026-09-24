@@ -1306,3 +1306,29 @@ def test_r009_split_kirtan_row_preserves_confirmed_media_metadata_and_field_diff
     assert req_class_retry.what_val == "SB-01-02-19"
     assert req_class_retry.what_category == "Srimad Bhagavatam"
     assert req_class_retry.selected_media_row_id == 42
+
+
+def test_split_does_not_promote_unconfirmed_date_or_location(env):
+    """A date-shaped value or named place is not proof of an exact Tool 1 resolution."""
+    from media_archive_tooling.media_db_updater.service import MediaDatabaseUpdaterService
+    from media_archive_tooling.media_db_updater.write_adapter import FakeBaserowWriteAdapter
+
+    src = make_audio_file(env["media_dir"] / "unconfirmed.mp3", duration=6.0)
+    tid = env["register_test_file"](src, tracking_id="trk_unconfirmed", singing_end_seconds=2.5)
+    parser = env["registry"].get_file(tid)["parser_result"]
+    parser["when"]["state"] = "unresolved"
+    parser["where"]["state"] = "provisional"
+    env["registry"].update_file_status(tid, parser_result_json=json.dumps(parser))
+
+    result = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert result.success is True
+
+    updater = MediaDatabaseUpdaterService(
+        registry=env["registry"], write_adapter=FakeBaserowWriteAdapter(), tool2_service=None
+    )
+    request = updater.build_sync_request(result.singing_tracking_id, force_refresh=True)
+    assert request.when_state == "unresolved"
+    assert request.where_state == "provisional"
+    plan = updater.engine.plan_and_revalidate(request, updater.write_adapter.fields)
+    assert "Date" not in {diff.field_name for diff in plan.field_diffs if diff.action == FieldAction.SET}
+    assert "Place, location" not in {diff.field_name for diff in plan.field_diffs if diff.action == FieldAction.SET}
