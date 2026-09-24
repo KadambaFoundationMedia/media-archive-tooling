@@ -6,7 +6,28 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
+
+## Final acceptance blocker — 2026-09-24
+
+The 497-test local suite and PR #65 CI pass. The three preceding corrections
+are substantially present. One core Tool 6 requirement is still unmet:
+
+### T6-R-009 — Split kirtan row loses confirmed media metadata
+
+`file_cutter/service.py` creates the singing `MediaDbSyncRequest` with
+`what_category="Kirtan"` and `what_val`, but omits `what_state`, `when_state`,
+date, and location evidence. Tool 4 deliberately excludes these fields when
+their resolution states are absent. A direct call to its real
+`plan_and_revalidate()` with Tool 6's request produces a CREATE with fallback
+filename Title but **no Category or Date**. Preserve and pass the confirmed
+Tool 1/5 metadata and eligibility states for both split successors, without
+inventing unknown values. Verify the actual Tool 4 field diffs (not just
+CREATE/UPDATE operation types) and retry path: the kirtan row must have its
+Kirtan Category and known date/location, while the existing class row retains
+its correct class WHAT and provenance. Then commit/push and mark ready again.
+
+No live media or Baserow writes were made in this review. PR #65 remains open.
 
 ## Resolution of planner review findings (T6-R-006 through T6-R-008) — 2026-09-24
 
