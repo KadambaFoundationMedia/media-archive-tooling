@@ -6,7 +6,82 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
+
+## Independent planner review of PR #65 — 2026-09-24
+
+The pushed head `c8b5fb4` is on PR #65. Required GitHub CI passes; an
+independent hermetic run from a writable temporary directory passed 47 focused
+Tool 5/6 tests and 489 full-suite tests. The existing tests do not cover the
+blocking paths below. No archive original or live Baserow row was changed.
+
+Treat this correction pass as the same persistent `BUILD TOOL 6` `/goal`:
+continue until these blockers and the original acceptance criteria are met,
+tested, committed/pushed, and re-reviewed. Do not stop at a partial test pass
+or try live archive/Baserow writes as a workaround.
+
+### T6-R-001 — Pre-cut full transcript and unverified automatic boundary
+
+`content_discoverer/service.py` still calls the full transcription adapter
+before classification; `classifier.py` makes a `HIGH` exact boundary from
+transcript segment endpoints; `file_cutter/service.py` can fall back from a
+missing `singing_end_seconds` to the coarse kirtan range. This contradicts
+the revised Tool 5/6/7 plans and risks cutting meaningful audio. Implement
+bounded whole-timeline acoustic analysis with only short targeted excerpts,
+verify the precise end of singing from local audio, and **never** auto-cut
+from a coarse bracket or text segment edge alone. Test that Tool 5 does not
+run full-file transcription and that missing/weak exact-cut evidence blocks.
+
+### T6-R-002 — Unowned video audio and wrong retained-video identity
+
+`file_cutter/service.py` merely warns when the adjacent video-derived MP3 is
+not in the derivative registry, then later deletes it. It also updates the
+video source tracking record's `current_path` to the class MP3, although the
+owner requires the retained video to remain the row's Filename/archive path
+and the class MP3 to use `audio_file_path`. Require verified ownership and
+source/derivative fingerprints before cutting or deleting an MP3; preserve
+the video identity/path and track the class audio separately. Add a regression
+with an unrelated adjacent MP3 that must survive untouched.
+
+### T6-R-003 — Dry-run/manual cut bypasses approval state
+
+`cut_file(..., dry_run=True, cut_point_override=...)` calls
+`save_human_cut_decision` before the dry-run branch or cut-point validation.
+The portal POST passes a slider value straight into this live path. A cut
+point alone must not approve a non-combination file for a two-part cut.
+Separate preview, audited approval, and execution; make dry-run completely
+read-only; validate source hash, content type, cut point and reviewer decision
+before persisting or cutting. Test registry immutability with a dry-run
+override and refusal of a class/kirtan-only source given only a cut point.
+
+### T6-R-004 — Publication/recovery can clobber or lose lineage
+
+`_atomic_publish_file` falls back to `shutil.move` after its existence check,
+which can overwrite a concurrently created target. Rollback unlinks output
+paths without proving they still contain this attempt's bytes. The source is
+deleted before durable split lineage/checkpoint writes; interruption there
+leaves outputs with an obsolete registry path and no completed split record.
+Use exclusive no-clobber publication and ownership-checked rollback; persist
+a recoverable split state before deleting the source. Test target races and
+interruption after output publication but before lineage completion.
+
+### T6-R-005 — Tool 1/4 handoff invents metadata or loses pending sync
+
+`derive_split_whats` defaults an unknown singing title to
+`Jaya-radha-madhava`; `plan_output_filenames` strips Tool 1's ID suffix by
+regex, and the service writes registry paths directly rather than using the
+accepted Tool 1 commit boundary. This can invent a mantra or bypass naming
+collision/commit safeguards. On a Tool 4 exception, the service only logs a
+warning and returns a successful split without durable pending-sync state.
+Use confirmed singing metadata or route naming to review, keep Tool 1 the
+canonical naming/commit owner, and persist Tool 4 failure for retry without
+rolling back a verified local split. Test unknown song, collision, and
+class/singing Tool 4 failure paths.
+
+These are correction findings against the existing plan, not a request for
+new Tool 6 features. Keep the video and input files intact whenever safety
+cannot be proven. Update the relevant regression tests and rerun focused,
+full, package, and CI checks before `READY_FOR_REVIEW`.
 
 Tool 6 (File Cutter) has been implemented and verified.
 Automatic cutting is supported for high-confidence `KIRTAN_AND_CLASS` recordings
