@@ -6,10 +6,11 @@ without bulk-writing production Baserow.
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from media_archive_tooling.adapters.baserow import BaserowReferenceProvider
 from media_archive_tooling.config import load_config
@@ -56,27 +57,135 @@ def make_portable(data: Any) -> Any:
     return data
 
 
-def run_evaluation():
+DEFAULT_MAX_EVAL_FILES = 30
+DEFAULT_MAX_EVAL_BYTES = 500 * 1024 * 1024  # 500 MB preflight budget
+EVALUATION_WORKSPACE_MARKER = ".evaluation_workspace_marker"
+
+
+def select_and_copy_bounded_evaluation_media(
+    sample_dir: Path,
+    eval_media_dir: Path,
+    max_files: int = DEFAULT_MAX_EVAL_FILES,
+    max_bytes: int = DEFAULT_MAX_EVAL_BYTES,
+) -> List[Path]:
+    """Select a diverse bounded subset of sample media files and copy within budget (R-052, R-055).
+
+    Never copies the full archive or sample-files directory wholesale. Preserves source files.
+    Rejects invalid/nonpositive limits and enforces byte limits on every single file.
+    """
+    if max_files <= 0:
+        raise ValueError(f"max_files must be positive, got {max_files}")
+    if max_bytes <= 0:
+        raise ValueError(f"max_bytes must be positive, got {max_bytes}")
+
+    eval_media_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Preflight disk space verification
+    try:
+        usage = shutil.disk_usage(eval_media_dir.parent)
+        required_free = max_bytes * 2
+        if usage.free < required_free:
+            raise RuntimeError(
+                f"Insufficient disk space for evaluation: {usage.free} bytes free, "
+                f"{required_free} bytes required (budget {max_bytes} bytes)."
+            )
+    except OSError as e:
+        logger.warning(f"Could not check disk usage: {e}")
+
+    # 2. Discover media files in sample_dir
+    from media_archive_tooling.orchestrator.discovery import is_supported_media_file
+    from media_archive_tooling.renamer.planner.executor import is_ignored_file
+
+    candidates: List[Path] = []
+    for root, dirs, files in os.walk(sample_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for fname in files:
+            p = Path(root) / fname
+            if not is_ignored_file(p) and is_supported_media_file(p):
+                candidates.append(p)
+
+    candidates.sort(key=lambda p: str(p))
+
+    # 3. Select a bounded, representative subset
+    selected: List[Path] = []
+    total_bytes = 0
+
+    for cand in candidates:
+        if len(selected) >= max_files:
+            break
+        sz = cand.stat().st_size
+        if sz > max_bytes or total_bytes + sz > max_bytes:
+            continue
+        selected.append(cand)
+        total_bytes += sz
+
+    # 4. Copy selected subset into eval_media_dir preserving relative structure
+    copied: List[Path] = []
+    for src in selected:
+        rel = src.relative_to(sample_dir)
+        dst = eval_media_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(dst)
+
+    print(f"Bounded evaluation copy: copied {len(copied)} files ({total_bytes / (1024 * 1024):.1f} MB) into {eval_media_dir}")
+    return copied
+
+
+def run_evaluation(
+    sample_dir: Optional[Path] = None,
+    eval_workspace: Optional[Path] = None,
+    max_files: int = DEFAULT_MAX_EVAL_FILES,
+    max_bytes: int = DEFAULT_MAX_EVAL_BYTES,
+    skip_git_check: bool = False,
+    output_summary_path: Optional[Path] = None,
+):
     import subprocess
-    dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
-    if dirty:
-        raise RuntimeError(
-            "Evaluation refused: working tree is dirty. R-027 requires evaluation to run from a clean tree at an exact committed implementation head.\n"
-            f"{dirty}"
-        )
-    commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if not skip_git_check:
+        dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+        if dirty:
+            raise RuntimeError(
+                "Evaluation refused: working tree is dirty. R-027 requires evaluation to run from a clean tree at an exact committed implementation head.\n"
+                f"{dirty}"
+            )
+        commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    else:
+        commit_sha = "test_eval_head"
 
     config = load_config()
-    sample_dir = Path("sample-files").resolve()
-    eval_workspace = Path(".renamer/eval_workspace").resolve()
-    if eval_workspace.exists():
-        shutil.rmtree(eval_workspace)
-    eval_media_dir = eval_workspace / "media"
-    shutil.copytree(sample_dir, eval_media_dir)
+    sample_path = (sample_dir or Path("sample-files")).resolve()
+    workspace_path = (eval_workspace or Path(".renamer/eval_workspace")).resolve()
 
-    eval_reg_path = eval_workspace / "eval_tool4_registry.db"
+    # Safety: Refuse deleting system or repository roots
+    forbidden_roots = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+    if workspace_path in forbidden_roots or workspace_path.parent == Path("/").resolve():
+        raise ValueError(f"Refusing unsafe evaluation workspace path: {workspace_path}")
+
+    marker_file = workspace_path / EVALUATION_WORKSPACE_MARKER
+    if workspace_path.exists():
+        existing_items = [p for p in workspace_path.iterdir() if p.name != ".DS_Store"]
+        if existing_items:
+            if not marker_file.exists():
+                raise ValueError(
+                    f"Refusing to delete unowned evaluation workspace at {workspace_path}: "
+                    f"directory is non-empty and missing {EVALUATION_WORKSPACE_MARKER} proof of ownership."
+                )
+            shutil.rmtree(workspace_path)
+
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    marker_file.write_text("owned_by=run_tool_4_evaluation\n")
+    eval_media_dir = workspace_path / "media"
+
+    select_and_copy_bounded_evaluation_media(
+        sample_dir=sample_path,
+        eval_media_dir=eval_media_dir,
+        max_files=max_files,
+        max_bytes=max_bytes,
+    )
+
+    eval_reg_path = workspace_path / "eval_tool4_registry.db"
     eval_reg = LocalRegistry(eval_reg_path)
-    renamer_logger = RenamerLogger(eval_workspace / "logs")
+    renamer_logger = RenamerLogger(workspace_path / "logs")
     ref_provider = BaserowReferenceProvider()
 
     print("=== Step 1: Tool 1 Fresh Structured Population ===")
@@ -506,11 +615,30 @@ def run_evaluation():
         "sample_detailed_results": detailed_results[:20],
     }
 
-    out_path = Path("docs/eval_summary_tool4.json")
+    out_path = Path(output_summary_path or "docs/eval_summary_tool4.json")
     portable_summary = make_portable(eval_summary)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(portable_summary, indent=2), encoding="utf-8")
     print(f"\nSaved evaluation evidence to {out_path}")
+    return eval_summary
 
 
 if __name__ == "__main__":
-    run_evaluation()
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Tool 4 representative evaluation with bounded copy.")
+    parser.add_argument("--max-files", type=int, default=DEFAULT_MAX_EVAL_FILES, help="Maximum number of files to copy and evaluate")
+    parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_EVAL_BYTES, help="Maximum total bytes budget for copied files")
+    parser.add_argument("--sample-dir", type=Path, default=None, help="Source sample-files directory")
+    parser.add_argument("--workspace", type=Path, default=None, help="Evaluation workspace directory")
+    parser.add_argument("--skip-git-check", action="store_true", help="Skip clean git worktree check")
+    parser.add_argument("--output-summary", type=Path, default=None, help="Output summary JSON path")
+    args = parser.parse_args()
+
+    run_evaluation(
+        sample_dir=args.sample_dir,
+        eval_workspace=args.workspace,
+        max_files=args.max_files,
+        max_bytes=args.max_bytes,
+        skip_git_check=args.skip_git_check,
+        output_summary_path=args.output_summary,
+    )

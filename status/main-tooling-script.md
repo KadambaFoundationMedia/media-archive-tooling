@@ -7,7 +7,100 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
+
+Implementation branch: `main-tooling-script-implementation`
+Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
+
+## Acceptance — 2026-09-24
+
+The owner explicitly accepted the current Main Script implementation and
+authorized merging PR #60. The planner reviewed its final implementation head
+and the required Python 3.12 CI check passed. The proposed move of full
+transcription from Tool 5 to Tool 7 remains a separate future workflow change
+to plan after the owner supplies the Tool 7 description; it does not block
+acceptance of this current Main Script milestone.
+
+## Planner review follow-up — 2026-09-24
+
+The planner made two small corrections on the builder branch and informed the
+builder through this status entry:
+
+- Discovery now keeps only explicit target paths for deduplication, prunes
+  overlapping directory roots, and retains at most 50 unsupported-file paths
+  while counting all skips. It no longer accumulates one path per archive file.
+- The Main Script no longer replays a Tool 5 classification solely because the
+  file hash matches an orchestration checkpoint. Tool 5 is called again and
+  its own model/config-aware transcript cache decides whether to reuse audio
+  analysis, avoiding stale classification after a Tool 5 update.
+
+Regression tests 61 and 62 cover these cases. Focused Main Script suite:
+62 passed. Full local suite: 477 passed, with two sandbox-only permission
+failures writing the repository's `.renamer` directory; GitHub CI is the
+authoritative full-suite check. No media files or Baserow rows were changed.
+
+The owner has proposed moving full transcription from Tool 5 to Tool 7 so
+combination recordings are cut first. This future redesign is not part of
+the accepted PR #60 milestone and will need its own plan and branch.
+
+## Independent planner review of PR #60 — 2026-09-23 [RESOLVED 2026-09-24]
+
+The focused Main Script suite passes (60 tests) and full local test suite passes (477 tests).
+All blocking findings R-054, R-055, and R-056 have been resolved and verified with targeted regression tests.
+
+### R-054 — Startup scratch recovery may delete user files [RESOLVED]
+
+- **Resolution**:
+  - Removed directory-wide prefix sweeping completely.
+  - Startup scratch cleanup is strictly confined to `scratch_dir` and deletes **only** artifacts proven owned by a durable per-run identity recorded in the registry's `scratch_artifacts` table.
+  - `clean_abandoned_scratch()` checks `dry_run` first and deletes nothing when `dry_run=True`.
+  - Added `scratch_artifacts` schema, index, and CRUD operations (`record_scratch_artifact`, `get_scratch_artifacts`, `remove_scratch_artifact`, `clear_scratch_artifacts`) in `LocalRegistry`.
+  - Wired `ScratchTracker` to register artifacts upon creation and remove them from the registry table upon tracked cleanup.
+  - Colliding user files and directories in target roots and unowned files in scratch directory are strictly preserved.
+- **Verification**:
+  - Regression tests in `tests/test_main_script.py`: `test_54_scratch_dir_containment_and_abandoned_recovery` and `test_57_scratch_cleanup_preserves_unowned_files_and_obeys_dry_run`.
+
+### R-055 — Bounds and evaluation workspace safety are incomplete [RESOLVED]
+
+- **Resolution**:
+  - In `scripts/run_tool_4_evaluation.py`:
+    - `select_and_copy_bounded_evaluation_media()` validates `max_files > 0 and max_bytes > 0` (raising `ValueError` on nonpositive limits).
+    - Enforces hard byte budget on **every** file, including the very first file (`if sz > max_bytes or total_bytes + sz > max_bytes: continue`).
+    - `run_evaluation()` verifies `eval_workspace` path safety (rejects root `/`, home, and cwd) and requires `.evaluation_workspace_marker` before cleaning any existing workspace.
+  - In `src/media_archive_tooling/orchestrator/discovery.py`:
+    - Implemented `validate_targets(targets)` pre-flight existence check failing fast with `RunSummary(exit_code=1)` on missing targets without directory traversal.
+    - Implemented `iter_discover_media_targets(targets)` yielding supported media files incrementally as directories are traversed without materializing the complete archive in memory.
+    - Preserved exact missing-target reporting and deduplication semantics.
+  - In `src/media_archive_tooling/orchestrator/service.py`:
+    - Wired streaming discovery in `MainToolingScriptService.run()` so each file is processed continuously as yielded.
+- **Verification**:
+  - Regression tests in `tests/test_main_script.py`: `test_58_bounded_evaluation_limits_and_workspace_safety` and `test_59_streaming_discovery_incremental_processing`.
+
+### R-056 — Checkpoints can replay stale remote decisions [RESOLVED]
+
+- **Resolution**:
+  - In `src/media_archive_tooling/orchestrator/service.py`:
+    - Stage 2: Removed cached checkpoint bypass; always performs a fresh, live Tool 2 review (`review_file(tracking_id, auto_enrich=True)`) so newly added collaborator rows in Baserow are discovered.
+    - Stage 5: Removed earlier `SYNCED` checkpoint short-circuit in live mode; always calls `self.tool4_service.synchronize(tracking_id, commit=True)` live so new metadata, path updates, and pending changes are evaluated and committed under Tool 4's safety gates.
+- **Verification**:
+  - Regression test in `tests/test_main_script.py`: `test_60_fresh_remote_review_and_metadata_sync` verifying that live Tool 2 discovers new collaborator rows and Tool 4 synchronizes metadata updates after an earlier `SYNCED` run.
+
+## Open questions / contradictions
+
+### Q-001 — Production-mode data retention and test-row purge separation policy
+
+Status: OPEN
+Build-plan section(s): Section 22 (`docs/main-tooling-script-build-plan.md`), Section 5 (`status/main-tooling-script.md`)
+Blocking scope: Live production processing of the full 15+ TB archive under `--production`. Normal test-mode runs and alpha/beta testing remain unaffected.
+
+Problem:
+The existing test harness automatically purges test rows and resets review state when the code fingerprint changes or `--purge` is invoked. In real archive production on 15+ TB of data, operator decisions, review approvals, and production Baserow entries must be permanently retained and isolated from automated test-slate resets.
+
+Why this matters:
+Running production data through the test-mode purge logic could inadvertently clear durable review actions or delete live rows if the code fingerprint changes.
+
+Implementation action:
+The runner retains existing alpha/beta purge and fresh-slate logic exclusively for test mode. Any invocation with `--production` fails closed with an explanatory error until an explicit production-mode data retention and purge separation policy is confirmed by the owner/planner.
 
 ## Builder action — archive-scale correction and future workflow contract (2026-09-23)
 

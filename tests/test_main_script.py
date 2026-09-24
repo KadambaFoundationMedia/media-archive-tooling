@@ -1503,3 +1503,521 @@ def test_52_tool5_progress_is_concise_and_visible(capsys):
         "  Tool 5 — Transcribing on Metal: 30s elapsed",
         "  Tool 5 — Reusing saved transcript",
     ]
+
+
+def test_53_bounded_evaluation_copy(tmp_path):
+    """53. Bounded evaluation helper enforces max_files, max_bytes, preflight space, and preserves sources (R-052)."""
+    import sys
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from scripts.run_tool_4_evaluation import (
+        DEFAULT_MAX_EVAL_BYTES,
+        DEFAULT_MAX_EVAL_FILES,
+        select_and_copy_bounded_evaluation_media,
+    )
+
+    src_dir = tmp_path / "sample_source"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "eval_dest"
+
+    created_files = []
+    for i in range(10):
+        f = src_dir / f"2022-09-19_KKS_Oslo_{i:02d}.mp3"
+        f.write_bytes(b"X" * 100)
+        created_files.append(f)
+
+    # 1. Enforce max_files
+    copied = select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=4, max_bytes=10000)
+    assert len(copied) == 4
+    assert len(list(dst_dir.glob("*.mp3"))) == 4
+    for f in created_files:
+        assert f.exists()
+        assert f.stat().st_size == 100
+
+    # 2. Enforce max_bytes
+    dst_dir_2 = tmp_path / "eval_dest_2"
+    copied_bytes = select_and_copy_bounded_evaluation_media(src_dir, dst_dir_2, max_files=10, max_bytes=250)
+    assert len(copied_bytes) == 2
+    assert len(list(dst_dir_2.glob("*.mp3"))) == 2
+
+    # 3. Preflight space check failure
+    dst_dir_3 = tmp_path / "eval_dest_3"
+    with patch("shutil.disk_usage", return_value=shutil._ntuple_diskusage(1000, 990, 50)):
+        with pytest.raises(RuntimeError, match="Insufficient disk space"):
+            select_and_copy_bounded_evaluation_media(src_dir, dst_dir_3, max_files=5, max_bytes=1000)
+
+
+def test_54_scratch_space_preflight_and_cleanup(tmp_path, env_setup):
+    """54. Preflight scratch space verification and safe abandoned scratch cleanup (R-053, R-054)."""
+    from media_archive_tooling.orchestrator.scratch import clean_abandoned_scratch
+
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    reg = env_setup["registry"]
+
+    s1 = scratch_dir / ".tmp_extract_123.wav"
+    s1.write_text("extract")
+    s2 = scratch_dir / ".tmp_whisper_abc.json"
+    s2.write_text("whisper")
+    s3 = scratch_dir / "tmp_main_run_xyz.tmp"
+    s3.write_text("run")
+
+    # Record these 3 artifacts as owned in registry
+    reg.record_scratch_artifact(s1, run_id="run-1", tracking_id="tid-1")
+    reg.record_scratch_artifact(s2, run_id="run-1", tracking_id="tid-1")
+    reg.record_scratch_artifact(s3, run_id="run-1", tracking_id="tid-1")
+
+    media_file = scratch_dir / "real_archive_audio.mp3"
+    media_file.write_text("audio")
+    user_file = scratch_dir / "notes.txt"
+    user_file.write_text("user notes")
+
+    # Dry run MUST delete nothing
+    dry_cleaned = clean_abandoned_scratch(scratch_dir, registry=reg, dry_run=True)
+    assert len(dry_cleaned) == 0
+    assert s1.exists()
+    assert s2.exists()
+    assert s3.exists()
+
+    # Live cleanup: removes only registered artifacts confined to scratch_dir
+    cleaned = clean_abandoned_scratch(scratch_dir, registry=reg, dry_run=False)
+    assert len(cleaned) == 3
+    assert not s1.exists()
+    assert not s2.exists()
+    assert not s3.exists()
+    assert media_file.exists()
+    assert user_file.exists()
+    assert len(reg.get_scratch_artifacts()) == 0
+
+    f_test = env_setup["media_dir"] / "test_scratch.mp3"
+    f_test.write_text("audio")
+    svc = env_setup["service"]
+
+    with patch("shutil.disk_usage", return_value=shutil._ntuple_diskusage(1000, 999, 10)):
+        summary = svc.run([f_test])
+        assert summary.failed_retryable == 1
+        assert summary.completed == 0
+        assert summary.file_results[0].status == FileExecutionStatus.FAILED_RETRYABLE
+        assert "Insufficient disk space" in summary.file_results[0].error
+        assert f_test.exists()
+
+
+
+def test_55_stage_checkpoint_resumability_and_retry(env_setup):
+    """55. Durable stage checkpoints allow resuming uncompleted stages and isolating file failures (R-053)."""
+    from media_archive_tooling.orchestrator.scratch import compute_file_sha256
+
+    media_dir = env_setup["media_dir"]
+    file1 = media_dir / "2022-09-19_KKS_Oslo.mp3"
+    file1.write_text("audio 1")
+    file2 = media_dir / "2017-04-10_KKS_Krsna-Dvur.mp3"
+    file2.write_text("audio 2")
+
+    svc = env_setup["service"]
+    reg = env_setup["registry"]
+
+    # First run: simulate failure in Tool 2
+    with patch.object(svc.tool2_service, "review_file", side_effect=RuntimeError("Simulated Tool 2 error")):
+        summary1 = svc.run([file1])
+        assert summary1.review_required == 1
+        assert summary1.completed == 0
+        tid1 = summary1.file_results[0].tracking_id
+        cp1 = reg.get_stage_checkpoint(tid1, StageName.TOOL_1_INITIAL.value)
+        assert cp1 is not None
+        assert cp1["status"] == "COMPLETED"
+        assert cp1["input_path"] == str(file1.resolve())
+
+    # Second run: resumes from Stage 2 using Stage 1 checkpoint
+    with patch.object(svc.logger, "info") as mock_info:
+        summary2 = svc.run([file1])
+        assert summary2.completed == 1
+        assert summary2.failed == 0
+        skipped_calls = [
+            c for c in mock_info.call_args_list
+            if c.args and c.args[0] == "STAGE_SKIPPED_CHECKPOINT"
+        ]
+        assert len(skipped_calls) >= 1
+        assert any(c.kwargs.get("tool") == "tool_1" for c in skipped_calls)
+
+    # File failure isolation: an errored file fails isolatedly without blocking other files
+    f_bad = media_dir / "2022-09-19_KKS_Bad_File.mp3"
+    f_bad.write_text("corrupted")
+    orig_sha = compute_file_sha256
+
+    def selective_sha(p):
+        if "Bad_File" in str(p):
+            raise RuntimeError("Corrupted file read error")
+        return orig_sha(p)
+
+    with patch("media_archive_tooling.orchestrator.service.compute_file_sha256", side_effect=selective_sha):
+        summary3 = svc.run([f_bad, file2])
+        assert summary3.failed == 1
+        assert summary3.review_required >= 1
+
+
+def test_56_long_folder_bounded_memory_and_logging(tmp_path, env_setup):
+    """56. Bounded in-memory results, bounded discovery logging, and fail-closed production flag (R-053)."""
+    media_dir = env_setup["media_dir"]
+    files = []
+    for i in range(25):
+        f = media_dir / f"2022-09-19_KKS_Oslo_{i:02d}.mp3"
+        f.write_text("audio")
+        files.append(f)
+
+    svc = create_main_tooling_service(
+        registry_path=env_setup["registry"].db_path,
+        log_file=tmp_path / "test.log",
+        workflow=WorkflowType.RENAMER,
+        dry_run=True,
+        max_retained_file_results=5,
+        registry=env_setup["registry"],
+        travel_service=env_setup["service"].travel_service,
+        tool2_service=env_setup["service"].tool2_service,
+        tool4_service=env_setup["service"].tool4_service,
+    )
+
+    with patch.object(svc.logger, "info") as mock_info:
+        summary = svc.run(files)
+        disc_calls = [c for c in mock_info.call_args_list if c.args and c.args[0] == "TARGETS_DISCOVERED"]
+        assert len(disc_calls) == 1
+        details = disc_calls[0].kwargs.get("details", {})
+        assert details["media_count"] == 25
+        assert len(details["sample_media_files"]) <= 10
+
+    assert summary.total_discovered == 25
+    assert summary.dry_run_previews == 25
+    assert len(summary.file_results) == 5
+
+    prod_svc = create_main_tooling_service(
+        registry_path=env_setup["registry"].db_path,
+        log_file=tmp_path / "test_prod.log",
+        workflow=WorkflowType.RENAMER,
+        production=True,
+        registry=env_setup["registry"],
+    )
+    prod_summary = prod_svc.run([files[0]])
+    assert prod_summary.exit_code == 1
+    assert prod_summary.completed == 0
+
+
+def test_57_scratch_cleanup_preserves_user_files_and_colliding_dirs(tmp_path, env_setup):
+    """57. Scratch cleanup strictly confined to scratch_dir and durable registry ownership (R-054)."""
+    from media_archive_tooling.orchestrator.scratch import clean_abandoned_scratch
+
+    media_dir = env_setup["media_dir"]
+    scratch_dir = tmp_path / "test_scratch_dir"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    reg = env_setup["registry"]
+
+    # 1. User media files and directories with colliding temporary prefixes in target roots
+    user_media_colliding = media_dir / ".tmp_extract_audio.mp3"
+    user_media_colliding.write_text("precious audio")
+    user_dir_colliding = media_dir / "tmp_main_archive_folder"
+    user_dir_colliding.mkdir(exist_ok=True)
+    (user_dir_colliding / "nested.mp3").write_text("nested audio")
+
+    # 2. Unowned file inside scratch_dir with a temporary prefix
+    unowned_scratch = scratch_dir / ".tmp_extract_unowned.wav"
+    unowned_scratch.write_text("unowned")
+
+    # 3. Registered owned scratch file inside scratch_dir
+    owned_scratch = scratch_dir / "tmp_main_run_owned.tmp"
+    owned_scratch.write_text("owned scratch")
+    reg.record_scratch_artifact(owned_scratch, run_id="test-run", tracking_id="tid-test")
+
+    # 4. Dry-run must delete nothing
+    dry_cleaned = clean_abandoned_scratch(scratch_dir=scratch_dir, registry=reg, dry_run=True, target_roots=[media_dir])
+    assert dry_cleaned == []
+    assert user_media_colliding.exists()
+    assert user_dir_colliding.exists()
+    assert (user_dir_colliding / "nested.mp3").exists()
+    assert unowned_scratch.exists()
+    assert owned_scratch.exists()
+
+    # 5. Live run: cleans only registered owned scratch confined to scratch_dir
+    cleaned = clean_abandoned_scratch(scratch_dir=scratch_dir, registry=reg, dry_run=False, target_roots=[media_dir])
+    assert cleaned == [owned_scratch.resolve()]
+    assert not owned_scratch.exists()
+    # User files/dirs in target roots MUST remain untouched
+    assert user_media_colliding.exists()
+    assert user_dir_colliding.exists()
+    assert (user_dir_colliding / "nested.mp3").exists()
+    # Unowned scratch in scratch_dir without registry proof MUST remain untouched
+    assert unowned_scratch.exists()
+
+
+def test_58_bounded_evaluation_limits_and_workspace_safety(tmp_path):
+    """58. Evaluation bounds reject nonpositive values, enforce byte limit on every file, and protect workspace (R-055)."""
+    from scripts.run_tool_4_evaluation import (
+        DEFAULT_MAX_EVAL_BYTES,
+        DEFAULT_MAX_EVAL_FILES,
+        EVALUATION_WORKSPACE_MARKER,
+        run_evaluation,
+        select_and_copy_bounded_evaluation_media,
+    )
+    from media_archive_tooling.media_db_reviewer.models import MediaDatabaseReviewResult, ReviewDecision
+
+    src_dir = tmp_path / "sample_src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    f1 = src_dir / "2020-01-01_large.mp3"
+    f1.write_bytes(b"X" * 1000)
+    f2 = src_dir / "2020-01-02_small.mp3"
+    f2.write_bytes(b"Y" * 200)
+
+    dst_dir = tmp_path / "dst"
+
+    # 1. Reject nonpositive limits
+    with pytest.raises(ValueError, match="max_files must be positive"):
+        select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=0, max_bytes=500)
+    with pytest.raises(ValueError, match="max_files must be positive"):
+        select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=-1, max_bytes=500)
+    with pytest.raises(ValueError, match="max_bytes must be positive"):
+        select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=5, max_bytes=0)
+    with pytest.raises(ValueError, match="max_bytes must be positive"):
+        select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=5, max_bytes=-500)
+
+    # 2. Hard byte limit enforced for EVERY file (including first file!)
+    # First file (1000 bytes) exceeds max_bytes (500 bytes). It must NOT be selected.
+    # Second file (200 bytes) fits within 500 bytes and should be selected.
+    copied = select_and_copy_bounded_evaluation_media(src_dir, dst_dir, max_files=5, max_bytes=500)
+    assert len(copied) == 1
+    assert copied[0].name == "2020-01-02_small.mp3"
+
+    # 3. Evaluation workspace safety: refuse deleting unowned workspace
+    unowned_workspace = tmp_path / "unowned_workspace"
+    unowned_workspace.mkdir(parents=True, exist_ok=True)
+    (unowned_workspace / "important_user_doc.txt").write_text("do not delete")
+
+    with pytest.raises(ValueError, match="Refusing to delete unowned evaluation workspace"):
+        run_evaluation(sample_dir=src_dir, eval_workspace=unowned_workspace, skip_git_check=True)
+    assert (unowned_workspace / "important_user_doc.txt").exists()
+
+    # Refuse system/cwd roots
+    with pytest.raises(ValueError, match="Refusing unsafe evaluation workspace path"):
+        run_evaluation(sample_dir=src_dir, eval_workspace=Path.cwd(), skip_git_check=True)
+
+    # When owned marker is present, workspace cleaning succeeds
+    valid_workspace = tmp_path / "valid_workspace"
+    valid_workspace.mkdir(parents=True, exist_ok=True)
+    (valid_workspace / EVALUATION_WORKSPACE_MARKER).write_text("owned_by=run_tool_4_evaluation\n")
+    (valid_workspace / "old_temp.tmp").write_text("old")
+
+    class PreflightPassed(Exception):
+        pass
+
+    with patch("scripts.run_tool_4_evaluation.select_and_copy_bounded_evaluation_media", side_effect=PreflightPassed):
+        with pytest.raises(PreflightPassed):
+            run_evaluation(sample_dir=src_dir, eval_workspace=valid_workspace, max_files=1, max_bytes=500, skip_git_check=True)
+
+    assert not (valid_workspace / "old_temp.tmp").exists()
+    assert (valid_workspace / EVALUATION_WORKSPACE_MARKER).exists()
+
+
+def test_59_streaming_discovery_incremental_processing(tmp_path, env_setup):
+    """59. Incremental streaming discovery processes files before full traversal completes (R-055)."""
+    from media_archive_tooling.orchestrator.discovery import (
+        iter_discover_media_targets,
+        validate_targets,
+    )
+
+    media_dir = tmp_path / "stream_media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    f1 = media_dir / "2022-09-19_KKS_Oslo_01.mp3"
+    f1.write_text("audio 1")
+    f2 = media_dir / "2022-09-19_KKS_Oslo_02.mp3"
+    f2.write_text("audio 2")
+
+    # 1. Missing target check fails fast without traversal
+    missing = validate_targets([media_dir / "nonexistent.mp3", f1])
+    assert len(missing) == 1
+    assert "nonexistent.mp3" in missing[0]
+
+    svc = env_setup["service"]
+    summary_missing = svc.run([media_dir / "nonexistent.mp3"])
+    assert summary_missing.exit_code == 1
+
+    # 2. Deduplication semantics: duplicate target paths are yielded once
+    yielded = list(iter_discover_media_targets([f1, f1, media_dir]))
+    assert len(yielded) == 2
+    assert yielded[0] == f1.resolve()
+    assert yielded[1] == f2.resolve()
+
+    # 3. Prove processing begins before full traversal completes:
+    events: List[str] = []
+    orig_process = svc._process_single_file
+
+    def spy_process(p):
+        events.append(f"process:{p.name}")
+        return orig_process(p)
+
+    def generator_spy(targets, **kwargs):
+        events.append("generator:yield_1")
+        yield f1
+        events.append("generator:yield_2")
+        yield f2
+        events.append("generator:done")
+
+    with patch.object(svc, "_process_single_file", side_effect=spy_process):
+        with patch("media_archive_tooling.orchestrator.service.iter_discover_media_targets", side_effect=generator_spy):
+            svc.run([media_dir])
+
+    # Assert processing of file 1 occurred BEFORE yield of file 2!
+    assert events == [
+        "generator:yield_1",
+        "process:2022-09-19_KKS_Oslo_01.mp3",
+        "generator:yield_2",
+        "process:2022-09-19_KKS_Oslo_02.mp3",
+        "generator:done",
+    ]
+
+
+def test_61_discovery_bounds_bookkeeping_with_overlapping_targets(tmp_path, env_setup):
+    """Discovery deduplicates overlapping roots without retaining every media path."""
+    from media_archive_tooling.orchestrator.discovery import iter_discover_media_targets
+
+    parent = tmp_path / "archive"
+    child = parent / "collection"
+    child.mkdir(parents=True)
+    media = [child / f"recording_{i:03d}.mp3" for i in range(75)]
+    for path in media:
+        path.write_text("audio")
+    for i in range(80):
+        (child / f"other_{i:03d}.zip").write_text("unsupported")
+
+    yielded = list(iter_discover_media_targets([media[0], child, parent, child]))
+    assert len(yielded) == len(media)
+    assert len(set(yielded)) == len(media)
+
+    svc = env_setup["service"]
+    with patch.object(svc, "_process_single_file", return_value=MagicMock(status=FileExecutionStatus.UNCHANGED)):
+        summary = svc.run([parent])
+    assert summary.total_discovered == len(media)
+    assert summary.skipped_unsupported == 80
+    assert len(summary.skipped_files) == 50
+
+
+def test_62_tool5_revalidates_after_file_hash_checkpoint(env_setup):
+    """A stable file hash must not bypass Tool 5's model/config-aware cache."""
+    from media_archive_tooling.content_discoverer.models import (
+        ConfidenceLevel, ContentDiscoveryResult, ContentType, MantraType,
+    )
+    from media_archive_tooling.orchestrator.scratch import compute_file_sha256
+
+    svc = env_setup["service"]
+    media_path = env_setup["media_dir"] / "recording.mp3"
+    media_path.write_text("audio")
+    tracking_id = "checkpoint_tool5_test"
+    result = ContentDiscoveryResult(
+        tracking_id=tracking_id,
+        classification=ContentType.CLASS,
+        confidence=ConfidenceLevel.HIGH,
+        mantra_type=MantraType.NONE,
+        transcript_path="cached-transcript.json",
+        transcript_sha256="sha",
+        input_sha256=compute_file_sha256(media_path),
+        source_path=str(media_path),
+    )
+    svc.tool5_service = MagicMock()
+    svc.tool5_service.discover_content.return_value = result
+
+    first, _ = svc._run_tool_5(media_path, tracking_id)
+    second, _ = svc._run_tool_5(media_path, tracking_id)
+    assert first.success and second.success
+    assert svc.tool5_service.discover_content.call_count == 2
+
+
+def test_60_fresh_remote_review_and_metadata_sync(env_setup):
+    """60. Live Tool 2 discovers new remote candidates; Tool 4 syncs metadata after earlier SYNCED (R-056)."""
+    from media_archive_tooling.media_db_reviewer.models import MediaCandidate, MediaDatabaseReviewResult, ReviewDecision
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncResult, FieldDiff, FieldAction, SyncOperation
+
+    media_dir = env_setup["media_dir"]
+    file1 = media_dir / "KKS Bhajans vrindavan sep 2019.mp3"
+    file1.write_text("audio")
+
+    svc = env_setup["service"]
+    reg = env_setup["registry"]
+
+    # 1. First run: file processed, Tool 2 returns 0 candidates (NEW_MEDIA_CANDIDATE)
+    summary1 = svc.run([file1])
+    assert summary1.completed == 1
+    tid1 = summary1.file_results[0].tracking_id
+    final_p1 = Path(summary1.file_results[0].final_path)
+    assert final_p1.exists()
+    t2_initial = reg.get_media_db_review(tid1)
+    assert t2_initial["result"]["decision"] == "NEW_MEDIA_CANDIDATE"
+
+    # Now simulate a collaborator adding a matching row in Baserow!
+    env_setup["fake_write_adapter"].rows[9999] = {
+        "id": 9999,
+        "Date": "2019-09-01",
+        "Title": "Kirtan",
+        "Place, location": {"id": 71, "value": "Vrindavan"},
+        "Country": {"id": 61, "value": "India"},
+        "Filename": "old.mp3",
+        "media_archive_path": "",
+    }
+    new_remote_candidate = MediaCandidate(
+        media_row_id=9999,
+        retrieval_reasons=["exact date", "matching location"],
+    )
+    fresh_review_result = MediaDatabaseReviewResult(
+        tracking_id=tid1,
+        decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+        candidates=[new_remote_candidate],
+        selected_media_row_id=9999,
+        database_state="LIVE_CURRENT",
+        database_snapshot_at="2026-09-24T12:00:00Z",
+        baserow_read_at="2026-09-24T12:00:00Z",
+        live_read_complete=True,
+        snapshot_complete=True,
+        baserow_check_complete=True,
+        review_required=False,
+    )
+
+    def mock_fresh_review(target_id, *args, **kwargs):
+        reg.save_media_db_review(
+            tracking_id=target_id,
+            decision=fresh_review_result.decision.value,
+            database_state=fresh_review_result.database_state,
+            snapshot_timestamp=fresh_review_result.database_snapshot_at,
+            result_json=fresh_review_result.model_dump_json(),
+            selected_media_row_id=fresh_review_result.selected_media_row_id,
+            review_required=fresh_review_result.review_required,
+        )
+        return fresh_review_result
+
+    with patch.object(svc.tool2_service, "review_file", side_effect=mock_fresh_review):
+        summary2 = svc.run([final_p1])
+        assert summary2.completed == 1
+        t2_updated = reg.get_media_db_review(tid1)
+        assert t2_updated["result"]["decision"] == "EXISTING_MEDIA_MATCH"
+        assert t2_updated["result"]["selected_media_row_id"] == 9999
+
+    # 2. Tool 4 metadata update after earlier SYNCED result:
+    sync_rec = reg.get_media_db_sync(tid1)
+    assert sync_rec is not None
+    assert sync_rec["sync_status"] == SyncStatus.SYNCED.value
+
+    # Simulate that local metadata was updated; Tool 4 must re-evaluate diffs and update Baserow
+    diff_result = MediaDbSyncResult(
+        tracking_id=tid1,
+        status=SyncStatus.SYNCED,
+        operation=SyncOperation.UPDATE,
+        media_row_id=9999,
+        field_diffs=[FieldDiff(field_name="Title", action=FieldAction.SET, old_value="Old", new_value="Updated Title")],
+        live_row={"id": 9999, "Title": "Updated Title"},
+    )
+
+    with patch.object(svc.tool4_service, "synchronize", return_value=diff_result) as mock_sync:
+        summary3 = svc.run([final_p1])
+        assert summary3.completed == 1
+        assert mock_sync.call_count == 1
+        assert summary3.file_results[0].tool4_operation == "UPDATE"
+        cp4 = reg.get_stage_checkpoint(tid1, StageName.TOOL_4_SYNC.value)
+        assert cp4 is not None
+        assert cp4["details"]["operation"] == "UPDATE"

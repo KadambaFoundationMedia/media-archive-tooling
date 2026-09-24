@@ -75,6 +75,12 @@ class RunSummary(BaseModel):
     skipped_unsupported: int = 0
     log_path: str = ""
     registry_path: str = ""
+    max_retained_file_results: Optional[int] = 500
     file_results: List[FileRunResult] = Field(default_factory=list)
     skipped_files: List[str] = Field(default_factory=list)
     exit_code: int = 0
+
+    def add_file_result(self, result: FileRunResult) -> None:
+        """Add a file result adhering to in-memory retention bounds."""
+        if self.max_retained_file_results is None or len(self.file_results) < self.max_retained_file_results:
+            self.file_results.append(result)
