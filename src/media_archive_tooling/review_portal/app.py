@@ -1,5 +1,5 @@
-"""Localhost FastAPI review portal application."""
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, List, Optional
@@ -320,6 +320,53 @@ def get_waveform_endpoint(tracking_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/file/{tracking_id}/cut-approval")
+def save_cut_approval_endpoint(
+    tracking_id: str,
+    cut_point: float = Form(...),
+    reviewer: str = Form("portal_reviewer"),
+    notes: Optional[str] = Form(None),
+):
+    """Audit and persist human cut approval decision after validation."""
+    cutter_svc = get_file_cutter_service()
+    service = get_service()
+    file_rec = service.registry.get_file(tracking_id)
+    if not file_rec:
+        raise HTTPException(status_code=404, detail=f"File not found: {tracking_id}")
+    crev = service.registry.get_content_review(tracking_id)
+    if not crev:
+        raise HTTPException(status_code=400, detail="File has no content discovery review")
+    if crev.get("classification") != "KIRTAN_AND_CLASS":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Classification '{crev.get('classification')}' is not KIRTAN_AND_CLASS; cannot approve cut",
+        )
+    source_path = Path(file_rec["current_path"])
+    if not source_path.exists():
+        raise HTTPException(status_code=400, detail="Source file does not exist on disk")
+
+    from ..file_cutter.audio_cutter import compute_sha256
+    current_sha = compute_sha256(source_path)
+
+    try:
+        audio_info = cutter_svc.audio_cutter.inspect_audio(source_path)
+        duration = audio_info["duration"]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to inspect audio stream: {e}")
+
+    if cut_point <= 1.0 or cut_point >= duration - 1.0 or not math.isfinite(cut_point):
+        raise HTTPException(status_code=400, detail=f"Cut point {cut_point}s is invalid for duration {duration:.2f}s")
+
+    service.registry.save_human_cut_decision(
+        tracking_id=tracking_id,
+        source_sha256=current_sha,
+        cut_point_seconds=cut_point,
+        reviewer=reviewer,
+        notes=notes,
+    )
+    return {"status": "approved", "tracking_id": tracking_id, "cut_point_seconds": cut_point}
+
+
 @app.post("/api/file/{tracking_id}/cut")
 def execute_cut_endpoint(
     tracking_id: str,
@@ -335,6 +382,7 @@ def execute_cut_endpoint(
             tracking_id,
             dry_run=dry_run,
             cut_point_override=cut_point,
+            root_dir=_review_root,
             reviewer=reviewer,
             notes=notes,
         )

@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -34,8 +35,10 @@ def derive_split_whats(
 
     Returns (singing_what, class_what).
     """
-    s_what = detected_mantra or "Jaya-radha-madhava"
-    if s_what.lower() in ("none", "unknown"):
+    if detected_mantra and detected_mantra.strip().lower() not in ("none", "unknown"):
+        s_what = detected_mantra.strip()
+    else:
+        # Default to generic Kirtan rather than inventing a specific song title
         s_what = "Kirtan"
 
     c_what = source_what or "Class"
@@ -59,7 +62,7 @@ def derive_split_whats(
 
 
 def _atomic_publish_file(staged_path: Path, target_path: Path) -> None:
-    """Safely and atomically publish staged_path to target_path without clobbering."""
+    """Safely, exclusively, and atomically publish staged_path to target_path without clobbering."""
     staged_path = staged_path.resolve()
     target_path = target_path.resolve()
 
@@ -75,16 +78,58 @@ def _atomic_publish_file(staged_path: Path, target_path: Path) -> None:
             staged_path.unlink(missing_ok=True)
             raise FileExistsError(f"Case-insensitive filename collision with existing file: {existing}")
 
+    # Step 1: Attempt atomic link on same filesystem
     try:
         os.link(staged_path, target_path)
         staged_path.unlink(missing_ok=True)
+        return
+    except FileExistsError:
+        staged_path.unlink(missing_ok=True)
+        raise FileExistsError(f"Target file already exists: {target_path}")
     except OSError:
-        # Cross-device link or unsupported link; fallback to atomic rename/copy
-        try:
-            shutil.move(str(staged_path), str(target_path))
-        except Exception as e:
-            staged_path.unlink(missing_ok=True)
-            raise RuntimeError(f"Could not safely move file to {target_path}: {e}") from e
+        pass
+
+    # Step 2: Exclusive creation via O_CREAT | O_EXCL to prevent concurrent clobbering
+    try:
+        fd = os.open(target_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        staged_path.unlink(missing_ok=True)
+        raise FileExistsError(f"Target file already exists: {target_path}")
+    except Exception as e:
+        staged_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Could not open exclusive publication target {target_path}: {e}") from e
+
+    try:
+        with os.fdopen(fd, "wb") as dst:
+            with staged_path.open("rb") as src:
+                shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        staged_path.unlink(missing_ok=True)
+    except Exception as e:
+        target_path.unlink(missing_ok=True)
+        staged_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Could not safely copy file to {target_path}: {e}") from e
+
+
+def _safe_rollback_output(output_path: Path, expected_hash: str) -> None:
+    """Unlink an output file during rollback ONLY if its physical hash matches this attempt."""
+    if not output_path.exists():
+        return
+    try:
+        curr_hash = compute_sha256(output_path)
+        if curr_hash == expected_hash:
+            output_path.unlink(missing_ok=True)
+            logger.info("Rolled back owned output file: %s", output_path)
+        else:
+            logger.warning(
+                "Rollback skipped for %s: current hash %s does not match expected %s",
+                output_path,
+                curr_hash,
+                expected_hash,
+            )
+    except Exception as e:
+        logger.warning("Error during ownership-checked rollback of %s: %s", output_path, e)
 
 
 class FileCutterService:
@@ -210,7 +255,8 @@ class FileCutterService:
         p_singing.what.selected_value = singing_what
         p_singing.what.state = ResolutionState.EXACT
         p_singing.identity.extension = ext
-        p_singing.identity.tracking_id = "temp_singing"
+        p_singing.file_metadata.edited = False
+        p_singing.file_metadata.possible_combination = False
         prop_singing = self.planner.plan_rename(p_singing)
 
         # Build class ParserResult
@@ -218,14 +264,17 @@ class FileCutterService:
         p_class.what.selected_value = class_what
         p_class.what.state = ResolutionState.EXACT
         p_class.identity.extension = ext
+        p_class.file_metadata.edited = False
+        p_class.file_metadata.possible_combination = False
         prop_class = self.planner.plan_rename(p_class)
 
+        # Distinct proposed filenames through Tool 1 RenamePlanner boundary
         fn_singing = prop_singing.proposed_filename
         fn_class = prop_class.proposed_filename
-
-        # Remove temporary ID tags if planner added them
-        fn_singing = re.sub(r"_ID-[0-9a-fA-F]{8}", "", fn_singing, flags=re.IGNORECASE)
-        fn_class = re.sub(r"_ID-[0-9a-fA-F]{8}", "", fn_class, flags=re.IGNORECASE)
+        if fn_singing == fn_class:
+            stem = Path(fn_class).stem
+            ext = Path(fn_class).suffix
+            fn_class = f"{stem}-02{ext}"
 
         return fn_singing, fn_class
 
@@ -340,10 +389,57 @@ class FileCutterService:
             if cand.is_file():
                 is_video = True
                 working_audio_path = cand
-                # Check derived audio registration
+                # Check derived audio registration and verified ownership
                 deriv_rec = self.registry.get_video_audio_derivative(str(working_audio_path))
                 if not deriv_rec:
-                    logger.warning("Derived audio %s not tracked in video_audio_derivatives", working_audio_path)
+                    return FileCutterResult(
+                        tracking_id=tracking_id,
+                        source_path=str(source_path),
+                        source_sha256=current_sha256,
+                        source_duration_seconds=0.0,
+                        cut_point_seconds=0.0,
+                        success=False,
+                        review_required=True,
+                        review_reason=f"Derived audio {working_audio_path} is not tracked in video_audio_derivatives; cannot safely cut or delete",
+                        error_message="Derived audio not registered",
+                    )
+                if deriv_rec.get("source_video_tracking_id") != tracking_id:
+                    return FileCutterResult(
+                        tracking_id=tracking_id,
+                        source_path=str(source_path),
+                        source_sha256=current_sha256,
+                        source_duration_seconds=0.0,
+                        cut_point_seconds=0.0,
+                        success=False,
+                        review_required=True,
+                        review_reason=f"Derived audio {working_audio_path} owner mismatch: expected {tracking_id}, found {deriv_rec.get('source_video_tracking_id')}",
+                        error_message="Derived audio owner mismatch",
+                    )
+                if deriv_rec.get("source_video_sha256") != current_sha256:
+                    return FileCutterResult(
+                        tracking_id=tracking_id,
+                        source_path=str(source_path),
+                        source_sha256=current_sha256,
+                        source_duration_seconds=0.0,
+                        cut_point_seconds=0.0,
+                        success=False,
+                        review_required=True,
+                        review_reason=f"Derived audio source hash mismatch: expected {current_sha256}, found {deriv_rec.get('source_video_sha256')}",
+                        error_message="Derived audio source hash mismatch",
+                    )
+                derived_sha = compute_sha256(working_audio_path)
+                if deriv_rec.get("derived_sha256") and derived_sha != deriv_rec.get("derived_sha256"):
+                    return FileCutterResult(
+                        tracking_id=tracking_id,
+                        source_path=str(source_path),
+                        source_sha256=current_sha256,
+                        source_duration_seconds=0.0,
+                        cut_point_seconds=0.0,
+                        success=False,
+                        review_required=True,
+                        review_reason=f"Derived audio physical hash mismatch: expected {deriv_rec.get('derived_sha256')}, found {derived_sha}",
+                        error_message="Derived audio physical hash mismatch",
+                    )
 
         # Inspect working audio duration
         try:
@@ -390,26 +486,76 @@ class FileCutterService:
                 review_reason=f"{classification} recordings require multi-part specification and review; not auto-cut by Tool 6",
             )
 
-        # Check human cut decision
+        # Handle cut point override
         human_dec = self.registry.get_human_cut_decision(tracking_id)
         if cut_point_override is not None:
-            # Audit and persist human cut decision
-            self.registry.save_human_cut_decision(
-                tracking_id=tracking_id,
-                source_sha256=current_sha256,
-                cut_point_seconds=cut_point_override,
-                reviewer=reviewer,
-                notes=notes,
-            )
+            # Validate cut point override value
+            if cut_point_override <= 1.0 or cut_point_override >= duration - 1.0 or not math.isfinite(cut_point_override):
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=current_sha256,
+                    source_duration_seconds=duration,
+                    cut_point_seconds=cut_point_override,
+                    success=False,
+                    review_required=True,
+                    review_reason=f"Cut point override {cut_point_override}s is invalid for duration {duration:.2f}s",
+                )
+
+            # A cut point alone must NOT approve a non-combination file for two-part cut
+            if classification != "KIRTAN_AND_CLASS":
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=current_sha256,
+                    source_duration_seconds=duration,
+                    cut_point_seconds=cut_point_override,
+                    success=False,
+                    review_required=True,
+                    review_reason=f"File classification '{classification}' is not KIRTAN_AND_CLASS; a cut point alone cannot approve non-combination recording for two-part cut",
+                )
+
+            # Save human decision only when NOT dry_run!
+            if not dry_run:
+                self.registry.save_human_cut_decision(
+                    tracking_id=tracking_id,
+                    source_sha256=current_sha256,
+                    cut_point_seconds=cut_point_override,
+                    reviewer=reviewer,
+                    notes=notes,
+                )
             human_dec = {"cut_point_seconds": cut_point_override, "source_sha256": current_sha256}
 
         cut_point: Optional[float] = None
         if human_dec and human_dec.get("source_sha256") == current_sha256:
+            # Validate content type for stored human cut decision as well
+            if classification != "KIRTAN_AND_CLASS":
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=current_sha256,
+                    source_duration_seconds=duration,
+                    cut_point_seconds=float(human_dec["cut_point_seconds"]),
+                    success=False,
+                    review_required=True,
+                    review_reason=f"File classification '{classification}' is not KIRTAN_AND_CLASS; a cut point alone cannot approve non-combination recording for two-part cut",
+                )
             cut_point = float(human_dec["cut_point_seconds"])
         elif classification == "KIRTAN_AND_CLASS" and crev.get("confidence") == "HIGH":
             prop = crev.get("cutter_proposal")
-            if prop:
-                cut_point = prop.get("singing_end_seconds") or prop.get("kirtan_range", [0, 0])[1]
+            if prop and prop.get("confidence") == "HIGH" and prop.get("singing_end_seconds") is not None:
+                cut_point = float(prop["singing_end_seconds"])
+            else:
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=current_sha256,
+                    source_duration_seconds=duration,
+                    cut_point_seconds=0.0,
+                    success=False,
+                    review_required=True,
+                    review_reason="Exact singing_end_seconds is missing or confidence is not HIGH; manual review required",
+                )
         else:
             return FileCutterResult(
                 tracking_id=tracking_id,
@@ -591,8 +737,8 @@ class FileCutterService:
         try:
             _atomic_publish_file(cut_res.class_staged_path, class_dest)
         except Exception as e:
-            # Rollback singing output
-            singing_dest.unlink(missing_ok=True)
+            # Ownership-checked rollback of singing output
+            _safe_rollback_output(singing_dest, cut_res.singing_sha256)
             shutil.rmtree(scratch_dir, ignore_errors=True)
             self.registry.remove_scratch_artifact(scratch_dir)
             return FileCutterResult(
@@ -612,8 +758,8 @@ class FileCutterService:
         valid_c, dur_c, hash_c, err_c = self.audio_cutter.verify_audio_file(class_dest)
 
         if not valid_s or not valid_c:
-            singing_dest.unlink(missing_ok=True)
-            class_dest.unlink(missing_ok=True)
+            _safe_rollback_output(singing_dest, hash_s or cut_res.singing_sha256)
+            _safe_rollback_output(class_dest, hash_c or cut_res.class_sha256)
             shutil.rmtree(scratch_dir, ignore_errors=True)
             self.registry.remove_scratch_artifact(scratch_dir)
             return FileCutterResult(
@@ -628,27 +774,7 @@ class FileCutterService:
                 error_message=f"Post-pub fail: {err_s or err_c}",
             )
 
-        # 9. Clean up Input Audio (Only after verified publication)
-        if is_video:
-            # Video source: keep original video! Delete ONLY the owned extracted MP3
-            try:
-                working_audio_path.unlink(missing_ok=True)
-                logger.info("Removed owned video-extracted MP3 after verified split: %s", working_audio_path)
-            except Exception as e:
-                logger.warning("Could not remove owned extracted MP3 %s: %s", working_audio_path, e)
-        else:
-            # Audio source: remove original working audio file
-            try:
-                working_audio_path.unlink(missing_ok=True)
-                logger.info("Removed working audio input after verified split: %s", working_audio_path)
-            except Exception as e:
-                logger.warning("Could not remove working audio %s: %s", working_audio_path, e)
-
-        # Clean scratch directory
-        shutil.rmtree(scratch_dir, ignore_errors=True)
-        self.registry.remove_scratch_artifact(scratch_dir)
-
-        # 10. Update Local Registry Lineage
+        # 9. Update Local Registry Lineage & Checkpoints FIRST (Durable before deletion)
         singing_tracking_id = uuid.uuid4().hex[:8]
 
         # Register singing file in registry
@@ -665,12 +791,21 @@ class FileCutterService:
         )
 
         # Update class successor in registry
-        self.registry.update_file_status(
-            tracking_id=tracking_id,
-            status="committed",
-            proposed_filename=class_dest.name,
-            current_path=str(class_dest),
-        )
+        # For video: retain the original video as current_path; class audio tracked separately!
+        if is_video:
+            self.registry.update_file_status(
+                tracking_id=tracking_id,
+                status="committed",
+                proposed_filename=source_path.name,
+                current_path=str(source_path),
+            )
+        else:
+            self.registry.update_file_status(
+                tracking_id=tracking_id,
+                status="committed",
+                proposed_filename=class_dest.name,
+                current_path=str(class_dest),
+            )
 
         # Record file split in registry
         split_record_data = {
@@ -712,53 +847,102 @@ class FileCutterService:
             details=split_record_data,
         )
 
-        # 11. Tool 4 Baserow Synchronization (Optional / Non-destructive)
+        # 10. Clean up Input Audio (Only AFTER durable lineage persistence)
+        if is_video:
+            # Video source: keep original video! Delete ONLY the owned extracted MP3
+            try:
+                working_audio_path.unlink(missing_ok=True)
+                logger.info("Removed owned video-extracted MP3 after verified split: %s", working_audio_path)
+            except Exception as e:
+                logger.warning("Could not remove owned extracted MP3 %s: %s", working_audio_path, e)
+        else:
+            # Audio source: remove original working audio file
+            try:
+                working_audio_path.unlink(missing_ok=True)
+                logger.info("Removed working audio input after verified split: %s", working_audio_path)
+            except Exception as e:
+                logger.warning("Could not remove working audio %s: %s", working_audio_path, e)
+
+        # Clean scratch directory
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+        self.registry.remove_scratch_artifact(scratch_dir)
+
+        # 11. Tool 4 Baserow Synchronization (Preserves local split on failure)
         sync_res_class = None
         sync_res_singing = None
 
+        from ..media_db_updater.models import MediaDbSyncRequest
+
+        clean_class_what = derive_split_whats(file_rec.get("what_val"), mantra_str)[1]
+        req_class = MediaDbSyncRequest(
+            tracking_id=tracking_id,
+            current_filename=source_path.name if is_video else class_dest.name,
+            current_path=str(source_path) if is_video else str(class_dest),
+            audio_file_path=str(class_dest) if is_video else None,
+            what_val=clean_class_what,
+        )
+
+        clean_singing_what = derive_split_whats(file_rec.get("what_val"), mantra_str)[0]
+        req_singing = MediaDbSyncRequest(
+            tracking_id=singing_tracking_id,
+            current_filename=singing_dest.name,
+            current_path=str(singing_dest),
+            what_val=clean_singing_what,
+            what_category="Kirtan",
+        )
+
         if self.media_db_service is not None:
+            # Sync Class successor
             try:
-                from ..media_db_updater.models import MediaDbSyncRequest
-
-                # Sync Class successor
-                # For video: keep video filename and media_archive_path; write class MP3 to audio_file_path!
-                clean_class_what = derive_split_whats(file_rec.get("what_val"), mantra_str)[1]
-                req_class = MediaDbSyncRequest(
-                    tracking_id=tracking_id,
-                    current_filename=source_path.name if is_video else class_dest.name,
-                    current_path=str(source_path) if is_video else str(class_dest),
-                    audio_file_path=str(class_dest) if is_video else None,
-                    what_val=clean_class_what,
-                )
-
+                res_c = None
                 if hasattr(self.media_db_service, "synchronize"):
                     res_c = self.media_db_service.synchronize(tracking_id, commit=not dry_run, request=req_class)
                 elif hasattr(self.media_db_service, "sync_file"):
                     res_c = self.media_db_service.sync_file(req_class)
-                else:
-                    res_c = None
                 if res_c:
                     sync_res_class = res_c.model_dump() if hasattr(res_c, "model_dump") else dict(res_c)
-
-                # Sync Singing child
-                clean_singing_what = derive_split_whats(file_rec.get("what_val"), mantra_str)[0]
-                req_singing = MediaDbSyncRequest(
-                    tracking_id=singing_tracking_id,
-                    current_filename=singing_dest.name,
-                    current_path=str(singing_dest),
-                    what_val=clean_singing_what,
-                    what_category="Kirtan",
+            except Exception as e:
+                logger.warning("Tool 4 synchronization failed for class %s: %s; recording pending sync", tracking_id, e)
+                self.registry.save_media_db_sync(
+                    tracking_id=tracking_id,
+                    sync_status="PENDING_SYNC",
+                    operation_type="UPDATE",
+                    error_message=str(e),
+                    request_json=json.dumps(req_class.model_dump()),
                 )
+
+            # Sync Singing child
+            try:
+                res_s = None
                 if hasattr(self.media_db_service, "synchronize"):
                     res_s = self.media_db_service.synchronize(singing_tracking_id, commit=not dry_run, request=req_singing)
                 elif hasattr(self.media_db_service, "sync_file"):
                     res_s = self.media_db_service.sync_file(req_singing)
-                else:
-                    res_s = None
                 if res_s:
                     sync_res_singing = res_s.model_dump() if hasattr(res_s, "model_dump") else dict(res_s)
             except Exception as e:
-                logger.warning("Tool 4 synchronization failed for split %s: %s; local split preserved", tracking_id, e)
+                logger.warning("Tool 4 synchronization failed for singing %s: %s; recording pending sync", singing_tracking_id, e)
+                self.registry.save_media_db_sync(
+                    tracking_id=singing_tracking_id,
+                    sync_status="PENDING_SYNC",
+                    operation_type="CREATE",
+                    error_message=str(e),
+                    request_json=json.dumps(req_singing.model_dump()),
+                )
+        else:
+            # Media DB service not configured; record pending sync outbox records
+            self.registry.save_media_db_sync(
+                tracking_id=tracking_id,
+                sync_status="PENDING_SYNC",
+                operation_type="UPDATE",
+                request_json=json.dumps(req_class.model_dump()),
+            )
+            self.registry.save_media_db_sync(
+                tracking_id=singing_tracking_id,
+                sync_status="PENDING_SYNC",
+                operation_type="CREATE",
+                request_json=json.dumps(req_singing.model_dump()),
+            )
 
         return FileCutterResult(
             tracking_id=tracking_id,

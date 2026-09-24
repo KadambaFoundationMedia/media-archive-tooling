@@ -185,6 +185,7 @@ class BaseTranscriptionAdapter(ABC):
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        excerpt_windows: Optional[List[Tuple[float, float]]] = None,
     ) -> TranscriptArtifact:
         """Transcribe audio into a durable normalized TranscriptArtifact."""
         pass
@@ -256,6 +257,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        excerpt_windows: Optional[List[Tuple[float, float]]] = None,
     ) -> TranscriptArtifact:
         audio_path = audio_path.resolve()
         if not audio_path.is_file():
@@ -534,6 +536,8 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     "transcription_elapsed_seconds": time.monotonic() - transcription_started,
                     "elapsed_seconds": elapsed,
                     "rtf": rtf,
+                    "is_full_file": excerpt_windows is None,
+                    "excerpt_windows": excerpt_windows,
                 },
                 created_at=now_iso,
                 classification_version="1.0",
@@ -578,6 +582,10 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         self.simulate_metal_fallback = simulate_metal_fallback
         self.simulate_source_change = simulate_source_change
         self.calls = []
+        self.last_excerpt_windows = None
+        self.full_file_transcriptions_count: int = 0
+        self.simulated_acoustic_boundary: Optional[float] = None
+        self.verify_acoustic_boundary: bool = True
 
     def probe_availability(self) -> Dict[str, Any]:
         return {
@@ -600,8 +608,12 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        excerpt_windows: Optional[List[Tuple[float, float]]] = None,
     ) -> TranscriptArtifact:
         audio_path = audio_path.resolve()
+        self.last_excerpt_windows = excerpt_windows
+        if excerpt_windows is None:
+            self.full_file_transcriptions_count += 1
 
         if self.should_fail:
             raise TranscriptionBlockedError(self.fail_message)
@@ -683,7 +695,7 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
             except Exception:
                 pass
 
-        self.calls.append((audio_path, tracking_id, requested_device))
+        self.calls.append((audio_path, tracking_id, requested_device, excerpt_windows))
 
         now_iso = datetime.now(timezone.utc).isoformat()
         artifact = TranscriptArtifact(
@@ -705,6 +717,8 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
                 "requested_device": requested_device,
                 "threads": 4,
                 "fallback_reason": fallback_reason,
+                "is_full_file": excerpt_windows is None,
+                "excerpt_windows": excerpt_windows,
             },
             created_at=now_iso,
             classification_version="1.0",

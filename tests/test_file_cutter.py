@@ -29,6 +29,7 @@ from media_archive_tooling.file_cutter.models import (
 from media_archive_tooling.file_cutter.service import (
     FileCutterService,
     _atomic_publish_file,
+    _safe_rollback_output,
     derive_split_whats,
 )
 from media_archive_tooling.file_cutter.waveform import WaveformGenerator
@@ -188,6 +189,18 @@ def env(tmp_path):
             "review_required": classification != "KIRTAN_AND_CLASS" or confidence != "HIGH",
         }
         registry.save_content_review(crev_data)
+
+        if derived_audio_path:
+            deriv_p = Path(derived_audio_path).resolve()
+            deriv_sha = compute_sha256(deriv_p) if deriv_p.is_file() else "mock_deriv_sha"
+            registry.record_video_audio_derivative(
+                derived_path=deriv_p,
+                source_video_path=path.resolve(),
+                source_video_tracking_id=tracking_id,
+                source_video_sha256=sha,
+                derived_sha256=deriv_sha,
+            )
+
         return tracking_id
 
     return {
@@ -561,6 +574,7 @@ def test_08_portal_waveform_transcoding_and_cut_api(env):
     configure_review_context(
         registry=env["registry"],
         file_cutter_service=env["cutter_service"],
+        review_root=env["tmp_path"],
     )
     client = TestClient(portal_app)
 
@@ -705,3 +719,238 @@ def test_10_cli_cut_command(env, capsys, monkeypatch):
     assert parsed["success"] is True
     assert parsed["dry_run"] is True
     assert parsed["cut_point_seconds"] == 3.0
+
+
+# ===========================================================================
+# 11. Regression Tests: T6-R-001 through T6-R-005
+# ===========================================================================
+def test_r001_tool5_excerpt_only_and_missing_cut_evidence_blocks(env):
+    """T6-R-001: Tool 5 runs bounded excerpt windows, text endpoints alone yield MEDIUM confidence without cut point, and missing cut point blocks Tool 6."""
+    from media_archive_tooling.content_discoverer.service import ContentDiscovererService
+    from media_archive_tooling.content_discoverer.transcriber import FakeTranscriptionAdapter
+    from media_archive_tooling.content_discoverer.models import TranscriptSegment
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    # 1. Verify ContentDiscovererService uses excerpt_windows on transcription adapter
+    media_file = make_audio_file(env["media_dir"] / "r001_test.mp3", duration=300.0)
+    tid = env["register_test_file"](media_file, tracking_id="trk_r001", source_duration_seconds=300.0)
+
+    fake_adapter = FakeTranscriptionAdapter(
+        canned_segments=[
+            TranscriptSegment(start_seconds=0.0, end_seconds=120.0, text="jaya radha madhava kunja bihari gopi jana vallabha", language="en", avg_logprob=-0.2),
+            TranscriptSegment(start_seconds=125.0, end_seconds=280.0, text="om ajnana timirandhasya jnana-anjanasalakaya srimad bhagavatam lecture begins", language="en", avg_logprob=-0.2),
+        ],
+        duration_seconds=300.0,
+    )
+    disc_svc = ContentDiscovererService(
+        registry=env["registry"],
+        transcription_adapter=fake_adapter,
+        acoustic_verifier=FakeAcousticBoundaryVerifier(should_verify=False),  # Acoustic verifier cannot confirm boundary
+    )
+    res_disc = disc_svc.discover_content(tid, root_dir=env["tmp_path"])
+
+    # Verify adapter was called with excerpt_windows and full_file_transcriptions_count is 0
+    assert len(fake_adapter.calls) == 1
+    assert fake_adapter.last_excerpt_windows is not None
+    assert len(fake_adapter.last_excerpt_windows) > 0
+    assert fake_adapter.full_file_transcriptions_count == 0
+
+    # 2. Classifier without acoustic verification produces MEDIUM confidence and no cut point
+    assert res_disc.classification == "KIRTAN_AND_CLASS"
+    assert res_disc.confidence == "MEDIUM"
+    assert res_disc.process_by_tool_6 is False
+    assert res_disc.review_required is True
+    if res_disc.cutter_proposal:
+        assert res_disc.cutter_proposal.singing_end_seconds is None
+
+    # 3. Tool 6 must block auto-cut when exact singing_end_seconds is missing or confidence is not HIGH
+    res_cut = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res_cut.success is False
+    assert res_cut.review_required is True
+    assert "not eligible for auto-cut" in (res_cut.review_reason or "") or "Exact singing_end_seconds is missing" in (res_cut.review_reason or "")
+    assert media_file.exists()
+
+
+def test_r002_unowned_adjacent_mp3_survives_untouched(env):
+    """T6-R-002: Unowned adjacent MP3 survives untouched; video container integrity preserved."""
+    # 1. Video file with unindexed adjacent MP3
+    video_file = env["media_dir"] / "r002_lecture.mp4"
+    video_file.write_bytes(b"VIDEO_HEADER_AND_STREAM_DATA")
+    unindexed_mp3 = make_audio_file(env["media_dir"] / "r002_lecture.mp3", duration=6.0)
+    unindexed_bytes = unindexed_mp3.read_bytes()
+    unindexed_sha = compute_sha256(unindexed_mp3)
+
+    tid = env["register_test_file"](
+        video_file,
+        tracking_id="trk_r002",
+        singing_end_seconds=3.0,
+        derived_audio_path=unindexed_mp3,
+    )
+    # Tamper registry: delete the derivative registration to simulate unindexed/unowned MP3
+    with env["registry"]._get_conn() as conn:
+        conn.execute("DELETE FROM video_audio_derivatives WHERE source_video_tracking_id = ?", (tid,))
+        conn.commit()
+
+    # Tool 6 must fail closed and refuse to touch or cut
+    res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res.success is False
+    assert res.review_required is True
+    assert "not tracked in video_audio_derivatives" in (res.review_reason or "")
+
+    # Both files survive completely untouched!
+    assert video_file.exists()
+    assert unindexed_mp3.exists()
+    assert unindexed_mp3.read_bytes() == unindexed_bytes
+    assert compute_sha256(unindexed_mp3) == unindexed_sha
+
+    # 2. Properly registered video derivative: verify video path preserved in current_path and audio_file_path synced
+    env["registry"].record_video_audio_derivative(
+        derived_path=unindexed_mp3,
+        source_video_path=video_file,
+        source_video_tracking_id=tid,
+        source_video_sha256=compute_sha256(video_file),
+        derived_sha256=unindexed_sha,
+    )
+    res_ok = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res_ok.success is True
+    # Video file remains untouched
+    assert video_file.exists()
+    # Video registry current_path is still the video file, NOT overwritten by mp3!
+    updated_file = env["registry"].get_file(tid)
+    assert Path(updated_file["current_path"]).resolve() == video_file.resolve()
+    assert updated_file["current_filename"] == video_file.name
+
+
+def test_r003_dry_run_immutability_and_non_combination_rejection(env):
+    """T6-R-003: Dry run never writes human decisions or output files; non-combination cannot be forced with cut point."""
+    src = make_audio_file(env["media_dir"] / "r003_audio.mp3", duration=6.0)
+    src_bytes = src.read_bytes()
+    tid = env["register_test_file"](src, tracking_id="trk_r003", singing_end_seconds=2.5)
+
+    # 1. Dry run with cut point override does NOT record human decision or create outputs
+    res_dry = env["cutter_service"].cut_file(
+        tid,
+        dry_run=True,
+        cut_point_override=2.8,
+        root_dir=env["tmp_path"],
+        reviewer="dry_auditor",
+    )
+    assert res_dry.success is True
+    assert res_dry.dry_run is True
+    assert env["registry"].get_human_cut_decision(tid) is None
+    assert not Path(res_dry.singing_output_path).exists()
+    assert not Path(res_dry.class_output_path).exists()
+    assert src.read_bytes() == src_bytes
+
+    # 2. Non-combination file (CLASS) with cut point override is strictly rejected
+    class_src = make_audio_file(env["media_dir"] / "r003_pure_class.mp3", duration=6.0)
+    tid_class = env["register_test_file"](
+        class_src,
+        tracking_id="trk_r003_cls",
+        classification="CLASS",
+        confidence="HIGH",
+    )
+    res_rejected = env["cutter_service"].cut_file(
+        tid_class,
+        cut_point_override=2.5,
+        root_dir=env["tmp_path"],
+    )
+    assert res_rejected.success is False
+    assert res_rejected.review_required is True
+    assert "not KIRTAN_AND_CLASS" in (res_rejected.review_reason or "")
+    assert class_src.exists()
+
+    # 3. Invalid cut point overrides: <= 1.0 or >= duration - 1.0
+    res_invalid1 = env["cutter_service"].cut_file(tid, cut_point_override=0.5, root_dir=env["tmp_path"])
+    assert res_invalid1.success is False
+    assert res_invalid1.review_required is True
+    assert "invalid for duration" in (res_invalid1.review_reason or "")
+
+    res_invalid2 = env["cutter_service"].cut_file(tid, cut_point_override=5.5, root_dir=env["tmp_path"])
+    assert res_invalid2.success is False
+    assert res_invalid2.review_required is True
+    assert "invalid for duration" in (res_invalid2.review_reason or "")
+
+
+def test_r004_exclusive_publication_and_lineage_before_source_deletion(env, tmp_path):
+    """T6-R-004: Atomic exclusive publication, safe rollback, and lineage persisted before source deletion."""
+    # 1. _atomic_publish_file fails if target already exists (exclusive no-clobber)
+    staged = tmp_path / "staged.mp3"
+    staged.write_text("STAGED")
+    target = tmp_path / "target.mp3"
+    target.write_text("TARGET_EXISTING")
+
+    with pytest.raises(FileExistsError):
+        _atomic_publish_file(staged, target)
+    assert target.read_text() == "TARGET_EXISTING"
+
+    # 2. _safe_rollback_output unlinks ONLY if hash matches expected
+    own_file = tmp_path / "own_file.mp3"
+    own_file.write_text("OWN_FILE_DATA")
+    own_hash = compute_sha256(own_file)
+    other_file = tmp_path / "other_file.mp3"
+    other_file.write_text("OTHER_FILE_DATA")
+
+    # Mismatched hash does NOT unlink
+    _safe_rollback_output(other_file, own_hash)
+    assert other_file.exists()
+
+    # Matching hash unlinks
+    _safe_rollback_output(own_file, own_hash)
+    assert not own_file.exists()
+
+    # 3. Lineage persisted before source deletion:
+    src = make_audio_file(env["media_dir"] / "r004_split.mp3", duration=6.0)
+    tid = env["register_test_file"](src, tracking_id="trk_r004", singing_end_seconds=2.5)
+
+    res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res.success is True
+
+    # Lineage is registered in SQLite
+    split_rec = env["registry"].get_file_split_by_source(tid)
+    assert split_rec is not None
+    assert split_rec["cut_point_seconds"] == 2.5
+    assert split_rec["source_tracking_id"] == tid
+    assert split_rec["class_tracking_id"] == tid
+    assert split_rec["singing_tracking_id"] == res.singing_tracking_id
+
+
+def test_r005_unknown_song_title_and_tool4_outbox_pending_sync(env):
+    """T6-R-005: Unknown song falls back to Kirtan (not Jaya-radha-madhava); Tool 4 failure records durable outbox."""
+    # 1. derive_split_whats fallback logic
+    s_what, c_what = derive_split_whats("Lecture_SB-01-02-19", detected_mantra=None)
+    assert s_what == "Kirtan"
+    assert "Jaya-radha-madhava" not in s_what
+    assert "Jaya-Radha-Madhava" not in s_what
+    assert c_what == "Lecture-SB-01-02-19"
+
+    s_what2, c_what2 = derive_split_whats("Jaya-Radha-Madhava_SB-01-02-19", detected_mantra="Unknown")
+    assert s_what2 == "Kirtan"
+
+    s_what3, c_what3 = derive_split_whats("BG-01-01", detected_mantra="Nama-om-visnu-padaya")
+    assert s_what3 == "Nama-om-visnu-padaya"
+
+    # 2. Tool 4 failure / absence records durable outbox PENDING_SYNC in media_db_syncs
+    src = make_audio_file(env["media_dir"] / "r005_sync.mp3", duration=6.0)
+    tid = env["register_test_file"](src, tracking_id="trk_r005", singing_end_seconds=3.0)
+
+    # Set media_db_service to failing mock
+    mock_db = MagicMock()
+    mock_db.synchronize.side_effect = ConnectionError("Baserow unreachable")
+    env["cutter_service"].media_db_service = mock_db
+
+    res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res.success is True
+    assert Path(res.singing_output_path).is_file()
+    assert Path(res.class_output_path).is_file()
+
+    # Registry has 2 PENDING_SYNC outbox entries
+    with env["registry"]._get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT tracking_id, sync_status FROM media_db_syncs WHERE sync_status = 'PENDING_SYNC'")
+        pending = {row[0]: row[1] for row in cursor.fetchall()}
+
+    assert tid in pending
+    assert res.singing_tracking_id in pending
+    assert pending[tid] == "PENDING_SYNC"
+    assert pending[res.singing_tracking_id] == "PENDING_SYNC"
