@@ -445,8 +445,9 @@ class LocalRegistry:
         current_path: Optional[Union[str, Path]] = None,
         proposed_filename: Optional[str] = None,
         what_val: Optional[str] = None,
+        parser_result_json: Optional[str] = None,
     ):
-        """Update file status, current_path, proposed_filename, and/or what_val in files table."""
+        """Update file status, current_path, proposed_filename, what_val, and/or parser_result_json in files table."""
         now = datetime.now(timezone.utc).isoformat()
         updates = ["updated_at = ?"]
         params: List[Any] = [now]
@@ -465,6 +466,20 @@ class LocalRegistry:
         if what_val is not None:
             updates.append("what_val = ?")
             params.append(what_val)
+        if parser_result_json is not None:
+            updates.append("parser_result_json = ?")
+            params.append(parser_result_json)
+        elif what_val is not None:
+            existing = self.get_file(tracking_id)
+            if existing and existing.get("parser_result_json"):
+                try:
+                    pr = json.loads(existing["parser_result_json"])
+                    if "what" in pr and isinstance(pr["what"], dict):
+                        pr["what"]["selected_value"] = what_val
+                        updates.append("parser_result_json = ?")
+                        params.append(json.dumps(pr))
+                except Exception:
+                    pass
         params.append(tracking_id)
         with self._get_conn() as conn:
             cursor = conn.cursor()

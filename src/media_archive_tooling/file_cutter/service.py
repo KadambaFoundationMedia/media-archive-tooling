@@ -1,6 +1,7 @@
 """Application service layer for Tool 6 — File Cutter."""
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import math
@@ -17,6 +18,8 @@ from .waveform import WaveformGenerator
 from ..renamer.registry.registry import LocalRegistry
 from ..renamer.models import ParserResult, RenameMode, ResolutionState, Identity
 from ..renamer.planner.planner import RenamePlanner
+from ..renamer.parser.what import SB_REGEX, BG_REGEX, CC_REGEX
+from ..media_db_updater.country_mapper import get_country_name_for_iso, is_valid_country_display_name
 from ..common.ascii_latin import to_ascii_latin, sanitize_filename_token
 
 logger = logging.getLogger(__name__)
@@ -779,7 +782,107 @@ class FileCutterService:
         singing_tracking_id = uuid.uuid4().hex[:8]
         clean_singing_what, clean_class_what = derive_split_whats(file_rec.get("what_val"), mantra_str)
 
-        # Register singing file in registry
+        # Extract confirmed Tool 1 metadata from parent file record
+        parser_dict = file_rec.get("parser_result") or {}
+        when_data = parser_dict.get("when") or {}
+        what_data = parser_dict.get("what") or {}
+        where_data = parser_dict.get("where") or {}
+        context_data = parser_dict.get("context") or {}
+
+        when_val = when_data.get("selected_value") or file_rec.get("when_val")
+        raw_when_state = when_data.get("state")
+        when_prov = when_data.get("evidence") or when_data.get("provenance")
+
+        where_val = file_rec.get("where_val")
+        where_place = where_data.get("place_location")
+        raw_country = where_data.get("country")
+        raw_iso = where_data.get("country_iso2") or where_val
+        country_name = None
+        if raw_country:
+            clean_c = str(raw_country).strip()
+            if len(clean_c) == 2:
+                country_name = get_country_name_for_iso(clean_c)
+            elif is_valid_country_display_name(clean_c) or len(clean_c) > 2:
+                country_name = clean_c
+        elif raw_iso:
+            clean_iso = str(raw_iso).strip()
+            country_name = get_country_name_for_iso(clean_iso)
+
+        raw_where_state = where_data.get("state")
+        where_prov = where_data.get("evidence") or where_data.get("provenance")
+
+        who_val = parser_dict.get("who") or file_rec.get("who_val") or "KKS"
+        parent_ctx = context_data.get("parent_folder") or Path(file_rec["current_path"]).parent.name
+
+        def _clean_st(st: Any) -> Optional[str]:
+            if st is None:
+                return None
+            val = st.value if hasattr(st, "value") else str(st)
+            clean = val.strip().lower()
+            return clean if clean and clean != "none" else None
+
+        clean_when_state = _clean_st(raw_when_state)
+        if not clean_when_state and when_val and re.match(r"^\d{4}-\d{2}-\d{2}$", str(when_val).strip().replace("/", "-")):
+            clean_when_state = "exact"
+
+        clean_where_state = _clean_st(raw_where_state)
+        if not clean_where_state and (where_place or country_name):
+            clean_where_state = "exact"
+
+        # Resolve category for class successor
+        class_cat = what_data.get("category")
+        if not class_cat and clean_class_what:
+            if SB_REGEX.search(clean_class_what):
+                class_cat = "Srimad Bhagavatam"
+            elif BG_REGEX.search(clean_class_what):
+                class_cat = "Bhagavad-gita"
+            elif CC_REGEX.search(clean_class_what):
+                class_cat = "Caitanya caritamrta"
+
+        raw_what_state = what_data.get("state")
+        clean_class_what_state = _clean_st(raw_what_state) or "exact"
+
+        class_what_prov = list(what_data.get("evidence") or what_data.get("provenance") or [])
+        if crev:
+            class_what_prov.append({
+                "source": "tool_5_content_discoverer",
+                "classification": crev.get("classification"),
+                "confidence": crev.get("confidence"),
+            })
+
+        singing_what_prov = list(what_data.get("evidence") or what_data.get("provenance") or [])
+        if crev:
+            singing_what_prov.append({
+                "source": "tool_5_content_discoverer",
+                "classification": crev.get("classification"),
+                "mantra_type": mantra_str,
+                "confidence": crev.get("confidence"),
+            })
+
+        # Construct Tool 1 ParserResult for singing child with full confirmed metadata
+        p_singing = ParserResult.model_validate(parser_dict)
+        p_singing.identity.tracking_id = singing_tracking_id
+        p_singing.identity.current_filename = singing_dest.name
+        p_singing.identity.original_filename = singing_dest.name
+        p_singing.identity.original_path = str(singing_dest.resolve())
+        p_singing.identity.extension = singing_dest.suffix.lower()
+        p_singing.what.selected_value = clean_singing_what
+        p_singing.what.category = "Kirtan"
+        p_singing.what.state = ResolutionState.EXACT
+        p_singing.file_metadata.edited = False
+        p_singing.file_metadata.possible_combination = False
+
+        # Construct Tool 1 ParserResult for class successor with full confirmed metadata
+        p_class = ParserResult.model_validate(parser_dict)
+        p_class.identity.current_filename = source_path.name if is_video else class_dest.name
+        p_class.identity.extension = source_path.suffix.lower() if is_video else class_dest.suffix.lower()
+        p_class.what.selected_value = clean_class_what
+        if class_cat:
+            p_class.what.category = class_cat
+        p_class.file_metadata.edited = False
+        p_class.file_metadata.possible_combination = False
+
+        # Register singing file in registry with confirmed metadata
         self.registry.register_file(
             tracking_id=singing_tracking_id,
             current_path=singing_dest,
@@ -787,9 +890,13 @@ class FileCutterService:
             original_filename=singing_dest.name,
             current_filename=singing_dest.name,
             proposed_filename=singing_dest.name,
+            when_val=when_val,
+            who_val=who_val,
             what_val=clean_singing_what,
+            where_val=where_val,
             status="committed",
             source_hash=hash_s,
+            parser_result_json=p_singing.model_dump_json(),
         )
 
         # Update class successor in registry
@@ -801,6 +908,7 @@ class FileCutterService:
                 proposed_filename=source_path.name,
                 current_path=str(source_path),
                 what_val=clean_class_what,
+                parser_result_json=p_class.model_dump_json(),
             )
         else:
             self.registry.update_file_status(
@@ -809,6 +917,7 @@ class FileCutterService:
                 proposed_filename=class_dest.name,
                 current_path=str(class_dest),
                 what_val=clean_class_what,
+                parser_result_json=p_class.model_dump_json(),
             )
 
         # Record file split in registry
@@ -893,22 +1002,72 @@ class FileCutterService:
                     if prior_s["request"].get("tool2_decision"):
                         class_t2_decision = prior_s["request"].get("tool2_decision")
 
+        table_id = ""
+        if self.media_db_service and hasattr(self.media_db_service, "write_adapter"):
+            table_id = str(getattr(self.media_db_service.write_adapter, "media_table_id", "") or "")
+
+        fp_str_c = f"{tracking_id}|{source_path if is_video else class_dest}|{source_path.name if is_video else class_dest.name}|{file_rec.get('original_path')}|{file_rec.get('original_filename')}|||{class_selected_row_id or ''}|{when_val}|{clean_class_what}|{country_name}|{where_place}"
+        req_fp_c = hashlib.sha256(fp_str_c.encode("utf-8")).hexdigest()
+        req_id_c = f"req_{tracking_id}_{int(datetime.now(timezone.utc).timestamp())}"
+
         req_class = MediaDbSyncRequest(
             tracking_id=tracking_id,
             current_filename=source_path.name if is_video else class_dest.name,
             current_path=str(source_path) if is_video else str(class_dest),
+            original_filename=file_rec.get("original_filename"),
+            original_path=file_rec.get("original_path"),
             audio_file_path=str(class_dest) if is_video else None,
+            request_id=req_id_c,
+            request_fingerprint=req_fp_c,
+            table_id=table_id,
+            when_val=when_val,
+            when_state=clean_when_state,
+            when_provenance=when_prov,
             what_val=clean_class_what,
+            what_category=class_cat,
+            what_verse=what_data.get("verse"),
+            what_state=clean_class_what_state,
+            what_provenance=class_what_prov,
+            who_val=who_val,
+            where_val=where_val,
+            where_place=where_place,
+            where_country=country_name,
+            where_country_iso=where_data.get("country_iso2"),
+            where_state=clean_where_state,
+            where_provenance=where_prov,
+            parent_folder_context=parent_ctx,
             tool2_decision=class_t2_decision,
             selected_media_row_id=class_selected_row_id,
         )
+
+        fp_str_s = f"{singing_tracking_id}|{singing_dest}|{singing_dest.name}||||||{when_val}|{clean_singing_what}|{country_name}|{where_place}"
+        req_fp_s = hashlib.sha256(fp_str_s.encode("utf-8")).hexdigest()
+        req_id_s = f"req_{singing_tracking_id}_{int(datetime.now(timezone.utc).timestamp())}"
 
         req_singing = MediaDbSyncRequest(
             tracking_id=singing_tracking_id,
             current_filename=singing_dest.name,
             current_path=str(singing_dest),
+            original_filename=singing_dest.name,
+            original_path=str(singing_dest),
+            request_id=req_id_s,
+            request_fingerprint=req_fp_s,
+            table_id=table_id,
+            when_val=when_val,
+            when_state=clean_when_state,
+            when_provenance=when_prov,
             what_val=clean_singing_what,
             what_category="Kirtan",
+            what_state="exact",
+            what_provenance=singing_what_prov,
+            who_val=who_val,
+            where_val=where_val,
+            where_place=where_place,
+            where_country=country_name,
+            where_country_iso=where_data.get("country_iso2"),
+            where_state=clean_where_state,
+            where_provenance=where_prov,
+            parent_folder_context=parent_ctx,
             tool2_decision="NEW_MEDIA_CANDIDATE",
         )
 

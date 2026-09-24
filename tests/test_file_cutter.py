@@ -1153,3 +1153,156 @@ def test_r008_tool6_tool4_sync_requests_and_retry_metadata_preservation(env):
     class_plan = updater_service.engine.plan_and_revalidate(req_class_rebuilt, live_fields, live_row=live_row)
     assert class_plan.operation == SyncOperation.UPDATE
     assert "Unrecognized or unassociated Tool 2 decision" not in str(class_plan.diagnostic_notes)
+
+
+def test_r009_split_kirtan_row_preserves_confirmed_media_metadata_and_field_diffs(env):
+    """T6-R-009: Split kirtan row preserves confirmed media metadata (Category, Date, Place, Title)
+
+    Verifies that Tool 6 passes confirmed metadata and eligibility states so Tool 4's
+    plan_and_revalidate produces a CREATE with authoritative Title, Kirtan Category, Date,
+    and Location (not falling back to filename or excluding fields), that the class row
+    retains its class WHAT and provenance, and that the retry path preserves all fields.
+    """
+    from media_archive_tooling.media_db_updater.service import MediaDatabaseUpdaterService
+    from media_archive_tooling.media_db_updater.models import SyncOperation, FieldAction
+    from media_archive_tooling.media_db_updater.write_adapter import FakeBaserowWriteAdapter
+
+    # 1. Setup source recording with confirmed date, scripture reference, and location
+    src = make_audio_file(env["media_dir"] / "2008-04-13_KKS_Jaya-Radha-Madhava_SB-01-02-19_Oslo.mp3", duration=6.0)
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_r009",
+        what_val="Jaya-Radha-Madhava_SB-01-02-19",
+        when_val="2008-04-13",
+        where_val="Oslo",
+        singing_end_seconds=2.5,
+        mantra_type="Jaya-Radha-Madhava",
+    )
+
+    # Record Tool 2 review for parent file matching Baserow row 42
+    env["registry"].save_media_db_review(
+        tracking_id=tid,
+        decision="EXISTING_MEDIA_MATCH",
+        database_state="MATCHED",
+        selected_media_row_id=42,
+        snapshot_timestamp="2026-09-24T12:00:00Z",
+        result_json=json.dumps({"decision": "EXISTING_MEDIA_MATCH"}),
+    )
+
+    fake_adapter = FakeBaserowWriteAdapter(
+        initial_rows=[{
+            "id": 42,
+            "Filename": src.name,
+            "Title": "SB 1.2.19",
+            "Category": "Srimad Bhagavatam",
+            "Date": "2008-04-13",
+            "Place, location": "Oslo",
+        }]
+    )
+    updater_service = MediaDatabaseUpdaterService(
+        registry=env["registry"],
+        write_adapter=fake_adapter,
+        tool2_service=None,
+    )
+    env["cutter_service"].media_db_service = updater_service
+
+    # 2. Execute cut
+    res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert res.success is True
+    singing_tid = res.singing_tracking_id
+
+    # 3. Verify SQLite files table contains confirmed metadata for both successors
+    singing_file = env["registry"].get_file(singing_tid)
+    assert singing_file is not None
+    assert singing_file["what_val"] == "Jaya-Radha-Madhava"
+    assert singing_file["when_val"] == "2008-04-13"
+    assert singing_file["where_val"] == "Oslo"
+    assert singing_file["parser_result"]["what"]["category"] == "Kirtan"
+    assert singing_file["parser_result"]["what"]["state"] == "exact"
+    assert singing_file["parser_result"]["when"]["state"] == "exact"
+    assert singing_file["parser_result"]["where"]["state"] == "exact"
+
+    class_file = env["registry"].get_file(tid)
+    assert class_file is not None
+    assert class_file["what_val"] == "SB-01-02-19"
+
+    # 4. Check initial sync requests built during cut
+    live_fields = fake_adapter.fields
+
+    # Singing child request check
+    req_singing = updater_service.build_sync_request(singing_tid, force_refresh=False)
+    assert req_singing is not None
+    assert req_singing.what_val == "Jaya-Radha-Madhava"
+    assert req_singing.what_category == "Kirtan"
+    assert req_singing.what_state == "exact"
+    assert req_singing.when_val == "2008-04-13"
+    assert req_singing.when_state == "exact"
+    assert req_singing.where_place == "Oslo"
+    assert req_singing.where_state == "exact"
+    assert req_singing.who_val == "KKS"
+    assert req_singing.tool2_decision == "NEW_MEDIA_CANDIDATE"
+
+    # Direct call to Tool 4 engine plan_and_revalidate for singing child
+    singing_plan = updater_service.engine.plan_and_revalidate(req_singing, live_fields)
+    assert singing_plan.operation == SyncOperation.CREATE
+    diffs_by_name = {d.field_name: d for d in singing_plan.field_diffs}
+
+    # Verify actual field diffs: must NOT fall back to filename or omit Category/Date/Place
+    assert "Title" in diffs_by_name
+    assert diffs_by_name["Title"].action == FieldAction.SET
+    assert diffs_by_name["Title"].new_value == "Jaya-Radha-Madhava"
+    assert diffs_by_name["Title"].new_value != req_singing.current_filename
+
+    assert "Category" in diffs_by_name
+    assert diffs_by_name["Category"].action == FieldAction.SET
+    assert diffs_by_name["Category"].new_value == "Kirtan"
+
+    assert "Date" in diffs_by_name
+    assert diffs_by_name["Date"].action == FieldAction.SET
+    assert diffs_by_name["Date"].new_value == "2008-04-13"
+
+    assert "Place, location" in diffs_by_name
+    assert diffs_by_name["Place, location"].action == FieldAction.SET
+    assert diffs_by_name["Place, location"].new_value == "Oslo"
+
+    # 5. Class successor request check
+    req_class = updater_service.build_sync_request(tid, force_refresh=False)
+    assert req_class is not None
+    assert req_class.what_val == "SB-01-02-19"
+    assert req_class.what_category == "Srimad Bhagavatam"
+    assert req_class.what_state == "exact"
+    assert req_class.tool2_decision == "EXISTING_MEDIA_MATCH"
+    assert req_class.selected_media_row_id == 42
+
+    # Class plan revalidation against existing row
+    live_row = fake_adapter.rows[42]
+    class_plan = updater_service.engine.plan_and_revalidate(req_class, live_fields, live_row=live_row)
+    assert class_plan.operation in (SyncOperation.UPDATE, SyncOperation.NOOP)
+    class_diffs_by_name = {d.field_name: d for d in class_plan.field_diffs}
+    assert class_diffs_by_name["Category"].action == FieldAction.PRESERVED
+    assert class_diffs_by_name["Date"].action == FieldAction.PRESERVED
+    assert class_diffs_by_name["Title"].action == FieldAction.PRESERVED
+
+    # 6. Verify retry path: force_refresh=True reconstructs full requests with all metadata
+    req_singing_retry = updater_service.build_sync_request(singing_tid, force_refresh=True)
+    assert req_singing_retry is not None
+    assert req_singing_retry.what_val == "Jaya-Radha-Madhava"
+    assert req_singing_retry.what_category == "Kirtan"
+    assert req_singing_retry.what_state == "exact"
+    assert req_singing_retry.when_val == "2008-04-13"
+    assert req_singing_retry.when_state == "exact"
+    assert req_singing_retry.where_place == "Oslo"
+    assert req_singing_retry.where_state == "exact"
+
+    retry_singing_plan = updater_service.engine.plan_and_revalidate(req_singing_retry, live_fields)
+    retry_diffs = {d.field_name: d for d in retry_singing_plan.field_diffs}
+    assert retry_diffs["Category"].new_value == "Kirtan"
+    assert retry_diffs["Date"].new_value == "2008-04-13"
+    assert retry_diffs["Title"].new_value == "Jaya-Radha-Madhava"
+    assert retry_diffs["Place, location"].new_value == "Oslo"
+
+    req_class_retry = updater_service.build_sync_request(tid, force_refresh=True)
+    assert req_class_retry is not None
+    assert req_class_retry.what_val == "SB-01-02-19"
+    assert req_class_retry.what_category == "Srimad Bhagavatam"
+    assert req_class_retry.selected_media_row_id == 42
