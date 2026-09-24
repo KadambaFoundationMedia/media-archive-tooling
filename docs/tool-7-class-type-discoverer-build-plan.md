@@ -2,6 +2,10 @@
 
 Status: **FINALIZED — implementation-ready**
 
+Revision 2026-09-24: this plan now has a concrete pre-build/acceptance gate to
+reduce avoidable planner–builder correction cycles. It does not change Tool
+7's owner-confirmed behavior or the Tool 6 build already in progress.
+
 This is the authoritative Tool 7 specification. The Builder is a separate
 Antigravity model, started by the owner with `BUILD TOOL 7`. It must use
 `BUILDER.md`, `./scripts/builder-start.sh 7`, and
@@ -15,6 +19,51 @@ markdown verse asset is the
 repository copy of the structure illustrated in the owner's
 `audio-editing/assets/verse-structure.pdf`; do not require that separate
 checkout at runtime.
+
+Treat `BUILD TOOL 7` as the persistent `/goal` described in `BUILDER.md`:
+continue through the acceptance matrix, tests, self-review, PR, and CI
+handoff. Do not stop at the first implementation milestone or call a partial
+suite “done.” Persistence does not authorize live media or Baserow changes.
+
+## 0. Builder preflight and concrete acceptance gate
+
+Before writing Tool 7 application code, inspect the **accepted, merged** Tool
+6 output/lineage contract and the current Tool 5 evidence and transcription
+adapter. List the exact types/fields Tool 7 will consume in
+`status/tool-7-class-type-discoverer.md`; do not invent names based on this
+plan's examples. If Tool 6 is still unaccepted, work only on Tool 7 parts
+that do not depend on its child identity and record the integration as pending.
+If the eventual contract materially contradicts this plan, stop that part,
+record a precise Q-entry in status, and ask the planner rather than building
+an incompatible bridge. Check the live Baserow `description` field **only
+through Tool 4's adapter**; the owner's confirmation is not a substitute for
+runtime schema validation.
+
+The Builder must map every row below to at least one named automated test and
+show the observed outcome in the status file before `READY_FOR_REVIEW`.
+Use hermetic audio/transcript, Vedabase, and Baserow fixtures; no live archive
+or Baserow mutation is required. “Tool 1/4 called” means through the main
+orchestrator using their existing gates, not direct filesystem or Baserow
+writes by Tool 7.
+
+| Case | Required observable outcome |
+|---|---|
+| Clear class title and verse, e.g. `2008-11-11_KKS_SB-11-9-31.mp3` | Full local transcript still created; confirmed WHAT is not needlessly renamed or overwritten; Tool 1/4 re-evaluation is idempotent. |
+| Unclear title, e.g. `AF2002 Lekce 2008.mp3`, with fixture audio announcing and reading SB 4.10.23 | Full transcript; timed category/verse evidence; verify the canonical Vedabase page; request Tool 1/4 updates only when their existing confidence/write gates allow. Do not invent a recording date, location, final filename, or row ID. |
+| Verified Tool 6 class + singing children | Exactly the class child receives a full Tool 7 transcript; singing receives none. The class retains its existing row association. No discarded pre-cut audio is transcribed and no second class row is created. |
+| Standalone kirtan | Tool 7 is skipped, with a visible reason; Tool 5's kirtan/mantra evidence remains available for Tool 1/4. |
+| Initiation, Vyasa-puja, or event/address | Full current recording is transcribed without Tool 7 inventing a Tool 6 cut or treating it as kirtan. |
+| Verified scripture link with existing human `description` text | Tool 4 appends the exact canonical URL once, preserving the text and row identity; rerun is a no-op. Missing/wrong-type field or a competing link blocks only the unsafe write and yields review. |
+| Ambiguous reference, weak Sanskrit match, Vedabase unavailable, or conflicting confirmed Baserow value | Keep transcript and evidence; no invented URL or confirmed-field overwrite; show a specific review reason. |
+| Dry-run with no valid transcript cache | No transcription or other mutation; report that analysis is planned, not a fabricated audio-derived category/verse or Baserow write. |
+
+Before handoff, the Builder performs a self-review against this matrix, the
+Tool 1/2/4 access boundaries, the Tool 6 accepted interface, and the actual
+CLI/portal output. Record for each case: test name, pass/fail, concise
+observed result, and any deliberate deferral. A green overall pytest count
+without this evidence is not a complete handoff. Resolve failures on the
+implementation branch before asking for planner review; do not silently
+weaken a case or expand unrelated tool scope to make it pass.
 
 ## 1. Purpose and owner-confirmed scope
 

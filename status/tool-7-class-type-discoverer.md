@@ -32,3 +32,18 @@ review handoff. Never use SSH or read `.env` manually for GitHub access.
 Current implementation HEAD: none
 Relevant implementation commits: none
 Open policy questions: none for the first build
+
+## Pre-build verification handoff — 2026-09-24
+
+The owner asked to reduce repeated correction cycles. The Tool 7 plan now
+opens with a concrete acceptance matrix and a builder self-review gate. Before
+coding against a Tool 6 child, inspect its **merged implementation** and
+record the actual output/lineage fields here. Tool 6 is currently being
+built; do not interrupt or alter its branch. Map every acceptance row to a
+test and record observed results before `READY_FOR_REVIEW`. Passing CI alone
+does not prove the Tool 7 workflow, especially the full-transcript exception
+for kirtan, post-cut class identity, and Tool 4-only `description` writes.
+Treat the entire `BUILD TOOL 7` request as a persistent `/goal` under
+`BUILDER.md`; continue until the acceptance and PR/CI handoff are complete or
+a genuine blocker is documented. This is not permission for live archive or
+Baserow mutation.
