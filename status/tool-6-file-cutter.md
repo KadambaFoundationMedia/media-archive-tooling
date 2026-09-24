@@ -6,9 +6,43 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
-## Independent planner review of PR #65 — 2026-09-24
+## Resolution of planner review findings (T6-R-001 through T6-R-005) — 2026-09-24
+
+All 5 blocking findings raised in the 2026-09-24 planner review have been addressed, verified, and backed by dedicated regression tests:
+
+- **T6-R-001 (Tool 5 acoustic boundary verification & excerpt transcription)**:
+  - Tool 5 now executes bounded timeline excerpt transcription via `excerpt_windows` (`[0, 120]`, mid-probe `[0.4*dur, +60]`, end-probe), completely avoiding full-file Whisper runs.
+  - Transcript segment endpoints alone now yield only coarse proposals with `confidence="MEDIUM"`, `singing_end_seconds=None`, `process_by_tool_6=False`, and `review_required=True`.
+  - Added `AcousticBoundaryVerifier` (`src/media_archive_tooling/content_discoverer/acoustic_verifier.py`) utilizing ffmpeg `silencedetect` analysis to verify exact transition timestamps before assigning `HIGH` confidence.
+  - Tool 6 strictly gates on exact numeric cut points with `HIGH` confidence; missing or coarse-only boundaries require review.
+  - Verified by `tests/test_file_cutter.py::test_r001_tool5_excerpt_only_and_missing_cut_evidence_blocks`.
+
+- **T6-R-002 (Video container integrity & derivative ownership)**:
+  - Tool 6 enforces strict verified ownership of video-derived audio in `video_audio_derivatives` (`source_video_tracking_id`, `source_video_sha256`, and physical `derived_sha256`). Fails closed if missing, mismatched, or unindexed, leaving unrelated adjacent MP3s completely untouched.
+  - Retains video container identity and path in registry `current_path`; assigns class MP3 path to `audio_file_path` for Tool 4 sync.
+  - Verified by `tests/test_file_cutter.py::test_r002_unowned_adjacent_mp3_survives_untouched`.
+
+- **T6-R-003 (Dry-run immutability, non-combination gating, cut point validation)**:
+  - Guarded `save_human_cut_decision` in `cut_file` so dry-run executions are strictly read-only and never write human decisions, split records, or filesystem outputs.
+  - Enforced content gating: providing a cut point alone to a pure `CLASS` or non-combination file is rejected (`File classification is not KIRTAN_AND_CLASS; cut point alone cannot approve non-combination recording`).
+  - Added strict cut point range validation (`1.0 < cut_point < duration - 1.0` and finite).
+  - Verified by `tests/test_file_cutter.py::test_r003_dry_run_immutability_and_non_combination_rejection`.
+
+- **T6-R-004 (Atomic publication, safe rollback, durable lineage before source deletion)**:
+  - `_atomic_publish_file` now enforces exclusive no-clobber publication using hard links (`os.link`) and fallback to atomic `os.open(..., os.O_CREAT | os.O_EXCL | os.O_WRONLY)`.
+  - `_safe_rollback_output` computes SHA-256 of the output file and unlinks ONLY if it matches the expected hash of the failed attempt.
+  - Split lineage (`register_file`, `update_file_status`, `record_file_split`, `save_stage_checkpoint`) is persisted in SQLite registry BEFORE deleting the working audio source.
+  - Verified by `tests/test_file_cutter.py::test_r004_exclusive_publication_and_lineage_before_source_deletion`.
+
+- **T6-R-005 (Deterministic naming & durable Tool 4 outbox)**:
+  - `derive_split_whats` defaults unknown or missing song titles to `"Kirtan"` rather than inventing specific mantras like "Jaya-radha-madhava".
+  - Canonical naming utilizes Tool 1 `RenamePlanner(mode=RenameMode.FINALIZE)` without regex stripping of IDs.
+  - When Tool 4 sync fails or is unavailable, records durable `PENDING_SYNC` in `media_db_syncs` for both class and singing records while preserving local split success.
+  - Verified by `tests/test_file_cutter.py::test_r005_unknown_song_title_and_tool4_outbox_pending_sync`.
+
+## Independent planner review of PR #65 — 2026-09-24 [RESOLVED]
 
 The pushed head `c8b5fb4` is on PR #65. Required GitHub CI passes; an
 independent hermetic run from a writable temporary directory passed 47 focused
@@ -163,3 +197,11 @@ build; do not treat the accepted coarse-bracket implementation as sufficient.
   - CLI: registered `media-archive cut` with `--dry-run`, `--cut-point`, and `--json`.
   - Test evidence: `tests/test_file_cutter.py` (10 passed), full test suite (489 passed).
   - Pushed to `tool-6-implementation` and opened PR #65.
+- 2026-09-24 — Resolved all 5 blocking planner review findings (T6-R-001 through T6-R-005):
+  - T6-R-001: Excerpt-only timeline transcription in Tool 5; local acoustic boundary verifier required before setting HIGH confidence and exact cut points.
+  - T6-R-002: Enforced derivative ownership verification; retained video path in current_path; video class MP3 mapped to audio_file_path for Tool 4 sync.
+  - T6-R-003: Guaranteed dry-run immutability; rejected non-combination cut attempts; added cut point boundary validation.
+  - T6-R-004: Hard-link / atomic no-clobber publication; hash-checked safe rollback; persisted SQLite split lineage before deleting source audio.
+  - T6-R-005: Canonical finalize naming with Kirtan fallback; durable PENDING_SYNC outbox on Tool 4 failure.
+  - Test evidence: `tests/test_file_cutter.py` (15 passed), `tests/test_content_discoverer.py` (37 passed), full suite (494 passed).
+  - Marked status `READY_FOR_REVIEW`.
