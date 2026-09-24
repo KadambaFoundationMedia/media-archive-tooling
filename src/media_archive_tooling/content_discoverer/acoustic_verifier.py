@@ -177,6 +177,62 @@ class AcousticBoundaryVerifier:
         # Fail closed: never fall back to coarse text boundaries without acoustic verification
         return None
 
+    def find_speech_onset(
+        self,
+        audio_path: Path,
+        search_start: float,
+        search_end: float,
+        noise_threshold: str = "-30dB",
+    ) -> Optional[float]:
+        """Find the exact speech onset (end of silence immediately preceding speech) in a search window."""
+        if not self.ffmpeg_bin or not audio_path.exists() or search_end <= search_start:
+            return None
+
+        audio_path = audio_path.resolve()
+        dur = search_end - search_start
+        if dur <= 0.2:
+            return None
+
+        cmd = [
+            self.ffmpeg_bin,
+            "-nostdin",
+            "-v", "info",
+            "-ss", f"{search_start:.3f}",
+            "-t", f"{dur:.3f}",
+            "-i", str(audio_path),
+            "-af", f"silencedetect=noise={noise_threshold}:d=0.3",
+            "-f", "null",
+            "-",
+        ]
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=30,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.warning("ffmpeg silencedetect failed during speech onset detection on %s: %s", audio_path, e)
+            return None
+
+        if res.returncode != 0:
+            return None
+
+        stderr_text = res.stderr.decode("utf-8", errors="replace")
+        silence_ends = [
+            float(m.group(1))
+            for m in re.finditer(r"silence_end:\s*(\d+(?:\.\d+)?)", stderr_text)
+        ]
+        if not silence_ends:
+            return None
+
+        abs_ends = [search_start + rel for rel in silence_ends]
+        valid = [e for e in abs_ends if e < search_end - 0.2]
+        if valid:
+            return round(valid[-1], 3)
+        return round(abs_ends[0], 3)
+
 
 class FakeAcousticBoundaryVerifier:
     """Test double for acoustic boundary verification."""
@@ -186,10 +242,12 @@ class FakeAcousticBoundaryVerifier:
         exact_cut_point: Optional[float] = None,
         should_verify: bool = True,
         candidate_transitions: Optional[List[Tuple[float, float]]] = None,
+        speech_onset: Optional[float] = None,
     ):
         self.exact_cut_point = exact_cut_point
         self.should_verify = should_verify
         self.candidate_transitions = candidate_transitions or []
+        self.speech_onset = speech_onset
         self.calls = []
 
     def detect_candidate_transitions(
@@ -213,3 +271,14 @@ class FakeAcousticBoundaryVerifier:
         if self.exact_cut_point is not None:
             return self.exact_cut_point
         return coarse_gap_start
+
+    def find_speech_onset(
+        self,
+        audio_path: Path,
+        search_start: float,
+        search_end: float,
+        noise_threshold: str = "-30dB",
+    ) -> Optional[float]:
+        if not self.should_verify:
+            return None
+        return self.speech_onset

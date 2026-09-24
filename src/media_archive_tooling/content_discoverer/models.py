@@ -87,6 +87,7 @@ class CutterBoundaryProposal(BaseModel):
     class_range: Tuple[float, float] = (0.0, 0.0)
     coarse_gap_bracket: Tuple[float, float] = (0.0, 0.0)
     singing_end_seconds: Optional[float] = None
+    class_start_seconds: Optional[float] = None
     source_duration_seconds: Optional[float] = None
     source_sha256: Optional[str] = None
     method: Optional[str] = None
@@ -104,8 +105,10 @@ class CutterBoundaryProposal(BaseModel):
         if self.description:
             return self.description
         k_start_min, k_start_sec = divmod(int(self.kirtan_range[0]), 60)
-        k_end_min, k_end_sec = divmod(int(self.kirtan_range[1]), 60)
-        c_start_min, c_start_sec = divmod(int(self.class_range[0]), 60)
+        k_end_val = self.singing_end_seconds if self.singing_end_seconds is not None else self.kirtan_range[1]
+        k_end_min, k_end_sec = divmod(int(k_end_val), 60)
+        c_start_val = self.class_start_seconds if self.class_start_seconds is not None else self.class_range[0]
+        c_start_min, c_start_sec = divmod(int(c_start_val), 60)
         return f"kirtan {k_start_min:02d}:{k_start_sec:02d}-{k_end_min:02d}:{k_end_sec:02d}; class begins {c_start_min:02d}:{c_start_sec:02d}"
 
     @property
@@ -114,10 +117,14 @@ class CutterBoundaryProposal(BaseModel):
 
     @property
     def kirtan_end_sec(self) -> float:
+        if self.singing_end_seconds is not None:
+            return self.singing_end_seconds
         return self.kirtan_range[1]
 
     @property
     def class_start_sec(self) -> float:
+        if self.class_start_seconds is not None:
+            return self.class_start_seconds
         return self.class_range[0]
 
 

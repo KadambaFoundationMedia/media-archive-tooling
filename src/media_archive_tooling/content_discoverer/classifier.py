@@ -222,6 +222,103 @@ HOME_PROGRAM_PATTERNS = [
 class ContentClassifier:
     """Classifies audio transcripts and identifies mantra and cutter boundaries."""
 
+    @staticmethod
+    def is_verse_intro_text(text: str) -> bool:
+        """Evaluate if text contains scripture verse introduction phrasing.
+
+        Per user guidance: Looks for 'We are reading from' or for 'Chapter, Canto and/or Verse'
+        or a combination of that.
+        """
+        # 1. Reading from phrases
+        has_reading_from = bool(
+            re.search(r"\b(?:we\s+are\s+)?reading(?:\s+today)?(?:\s+from)?\b", text)
+        )
+
+        # 2. Canto patterns
+        has_canto = bool(
+            re.search(
+                r"\b(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+canto|canto\s+(?:\d+|[a-z]+))\b",
+                text,
+            )
+        )
+
+        # 3. Chapter patterns
+        has_chapter = bool(
+            re.search(r"\bchapter\s+(?:\d+|[a-z]+)\b", text)
+        )
+
+        # 4. Verse / Text patterns
+        has_verse = bool(
+            re.search(r"\b(?:verse|text)\s+(?:\d+|[a-z]+)\b", text)
+        )
+
+        # 5. Scripture title patterns
+        has_scripture = bool(
+            re.search(r"\b(?:srimad\s+bhagavatam|bhagavad\s+gita|caitanya\s+caritamrta)\b", text)
+        )
+
+        # 6. Combined chapter/canto and verse numbers, or reference citation (e.g. "It's 31... text 31", "1.19.31")
+        has_citation = bool(
+            re.search(r"\b(?:it\s*['’]?s\s+|text\s+|verse\s+)?\d+[\s,\.:-]+(?:canto|chapter|text|verse|\d+)\b", text)
+        )
+
+        # Match criteria:
+        # A) Explicit "reading from" + (scripture or canto or chapter or verse or citation)
+        if has_reading_from and (has_scripture or has_canto or has_chapter or has_verse or has_citation):
+            return True
+        # B) Combinations of Canto, Chapter, Verse (any two present)
+        features = [has_canto, has_chapter, has_verse]
+        if sum(bool(f) for f in features) >= 2:
+            return True
+        # C) Scripture + (canto or chapter or verse)
+        if has_scripture and (has_canto or has_chapter or has_verse):
+            return True
+        # D) Canto or Chapter with citation/verse number
+        if (has_canto or has_chapter) and (has_verse or has_citation):
+            return True
+        # E) Standalone explicit reading from
+        if re.search(r"\b(?:we\s+are\s+)?reading\s+from\b", text):
+            return True
+
+        return False
+
+    def find_verse_introduction(
+        self,
+        speech_segments: List[TranscriptSegment],
+        singing_end: float = 0.0,
+    ) -> Optional[TranscriptSegment]:
+        """Find the earliest transcript segment representing scripture verse introduction."""
+        if singing_end > 0.0:
+            # Look for verse intro candidates around or after singing concludes
+            candidates = [s for s in speech_segments if s.start_seconds >= max(0.0, singing_end - 15.0)]
+        else:
+            candidates = list(speech_segments)
+
+        if not candidates:
+            return None
+
+        # 1. First check each segment individually
+        for seg in candidates:
+            norm = normalize_text(seg.text)
+            if not norm:
+                continue
+            if self.is_verse_intro_text(norm):
+                return seg
+
+        # 2. Check adjacent segment pairs in case phrasing spans a segment boundary
+        for idx in range(len(candidates) - 1):
+            seg1 = candidates[idx]
+            seg2 = candidates[idx + 1]
+            norm1 = normalize_text(seg1.text)
+            norm2 = normalize_text(seg2.text)
+            if not norm1 or not norm2:
+                continue
+            combined = norm1 + " " + norm2
+            if self.is_verse_intro_text(combined):
+                return seg1
+
+        return None
+
     def classify(self, artifact: TranscriptArtifact) -> ContentDiscoveryResult:
         meta = dict(artifact.raw_metadata or {})
         meta["duration_seconds"] = artifact.duration_seconds
@@ -560,18 +657,42 @@ class ContentClassifier:
                 else:
                     detected_mantra = MantraType.KIRTAN
 
-            # If acoustic candidate transition verified singing end and speech start:
+            # Check for verse introduction in speech segments
+            primary_singing_end = cand_transitions[0][0] if cand_transitions else 0.0
+            if primary_singing_end <= 0.0:
+                all_singing = mantra_ranges + singing_ranges
+                primary_singing_end = max((r[1] for r in all_singing), default=0.0)
+            verse_intro_seg = self.find_verse_introduction(speech_segments, singing_end=primary_singing_end)
+
+            # If acoustic candidate transition verified singing end:
             if cand_transitions:
                 singing_end, speech_start = cand_transitions[0]
-                coarse_gap = (singing_end, speech_start)
+                if verse_intro_seg is not None:
+                    class_start = verse_intro_seg.start_seconds
+                    method = "acoustic_verse_intro_transition"
+                    evidence.append(
+                        ContentEvidence(
+                            kind="verse_introduction",
+                            start_seconds=verse_intro_seg.start_seconds,
+                            end_seconds=verse_intro_seg.end_seconds,
+                            raw_excerpt=verse_intro_seg.text,
+                            normalized_text=normalize_text(verse_intro_seg.text),
+                        )
+                    )
+                else:
+                    class_start = speech_start
+                    method = "acoustic_silence_transition"
+
+                coarse_gap = (singing_end, class_start)
                 cutter_prop = CutterBoundaryProposal(
                     kirtan_range=(0.0, singing_end),
-                    class_range=(speech_start, total_duration),
+                    class_range=(class_start, total_duration),
                     coarse_gap_bracket=coarse_gap,
                     singing_end_seconds=singing_end,
+                    class_start_seconds=class_start,
                     source_duration_seconds=total_duration,
                     source_sha256=artifact.input_sha256,
-                    method="acoustic_silence_transition",
+                    method=method,
                     confidence="HIGH",
                 )
                 return ContentDiscoveryResult(
@@ -599,12 +720,14 @@ class ContentClassifier:
 
             # Requires distinct ordered time ranges: initial sustained kirtan + later class
             if latest_kirtan_before_class > 60.0 and earliest_class >= latest_kirtan_before_class - 10.0:
-                coarse_gap = (latest_kirtan_before_class, earliest_class)
+                class_start = verse_intro_seg.start_seconds if verse_intro_seg is not None else earliest_class
+                coarse_gap = (latest_kirtan_before_class, class_start)
                 cutter_prop = CutterBoundaryProposal(
                     kirtan_range=(0.0, latest_kirtan_before_class),
-                    class_range=(earliest_class, total_duration),
+                    class_range=(class_start, total_duration),
                     coarse_gap_bracket=coarse_gap,
                     singing_end_seconds=None,
+                    class_start_seconds=class_start,
                     source_duration_seconds=total_duration,
                     source_sha256=artifact.input_sha256,
                     method="text_segment_coarse_estimate",

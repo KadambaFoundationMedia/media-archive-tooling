@@ -27,6 +27,7 @@ class AudioCutSpec(BaseModel):
     """Specification for a two-part audio split."""
     source_path: Path
     cut_point_seconds: float
+    class_start_seconds: Optional[float] = None
     source_duration_seconds: float
     singing_output_path: Path
     class_output_path: Path
@@ -228,6 +229,7 @@ class AudioCutter:
         # 1. Leading silence detection
         singing_trim = 0.0
         class_trim = 0.0
+        actual_class_start = spec.class_start_seconds if spec.class_start_seconds is not None else spec.cut_point_seconds
         if spec.trim_silence:
             singing_trim = self.detect_leading_silence(
                 source_path,
@@ -236,8 +238,8 @@ class AudioCutter:
             )
             class_trim = self.detect_leading_silence(
                 source_path,
-                start_seconds=spec.cut_point_seconds,
-                end_seconds=min(spec.source_duration_seconds, spec.cut_point_seconds + 60.0),
+                start_seconds=actual_class_start,
+                end_seconds=min(spec.source_duration_seconds, actual_class_start + 60.0),
             )
 
         # 2. Stage singing output
@@ -284,7 +286,7 @@ class AudioCutter:
 
         # 3. Stage class output
         class_staged = spec.scratch_dir / f"staged_class_{os.getpid()}{ext_class}"
-        class_start = spec.cut_point_seconds + class_trim
+        class_start = actual_class_start + class_trim
         class_end = spec.source_duration_seconds
 
         cmd_class = [

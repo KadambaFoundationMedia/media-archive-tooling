@@ -1414,3 +1414,38 @@ def test_in_place_split_rollback_restores_original_source(env):
     assert not singing_dest.exists()
 
 
+def test_two_boundary_audio_cut_omits_transition_gap(env):
+    """AudioCutSpec with distinct cut_point_seconds (kirtan end) and class_start_seconds cuts cleanly and omits dead air gap."""
+    # 10s source: singing 0-3s, silence gap 3-5s, class 5-10s
+    src = make_audio_file(env["media_dir"] / "two_boundary_source.mp3", duration=10.0)
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_twobound",
+        what_val="SB-01-19-31",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=3.0,
+        source_duration_seconds=10.0,
+    )
+    # Manually update cutter proposal to have class_start_seconds=5.0
+    crev = env["registry"].get_content_review(tid)
+    prop = crev["cutter_proposal"]
+    prop["class_start_seconds"] = 5.0
+    prop["class_range"] = [5.0, 10.0]
+    with env["registry"]._get_conn() as conn:
+        conn.execute("UPDATE content_reviews SET cutter_proposal_json = ? WHERE tracking_id = ?", (json.dumps(prop), tid))
+        conn.commit()
+
+    res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert res.success is True
+
+    # Inspect outputs:
+    # Singing part was cut from 0 to 3s (duration ~3s)
+    info_s = env["audio_cutter"].inspect_audio(Path(res.singing_output_path))
+    assert 2.5 <= info_s["duration"] <= 3.5
+
+    # Class part was cut from 5s to 10s (duration ~5s), NOT from 3s to 10s (which would be 7s)!
+    info_c = env["audio_cutter"].inspect_audio(Path(res.class_output_path))
+    assert 4.5 <= info_c["duration"] <= 5.5
+
+
+

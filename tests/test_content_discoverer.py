@@ -1371,3 +1371,77 @@ def test_39_adaptive_excerpt_window_around_candidate_transition(env, monkeypatch
     has_onset_window = any(730.0 <= w[0] <= 745.0 for w in windows_requested)
     assert has_onset_window, f"Expected window around speech onset 742s, got: {windows_requested}"
 
+
+def test_42_verse_introduction_matching():
+    """ContentClassifier.is_verse_intro_text matches 'We are reading from' and 'Chapter, Canto, Verse' combinations."""
+    from media_archive_tooling.content_discoverer.classifier import ContentClassifier
+
+    # 1. Exact phrase from user audio:
+    assert ContentClassifier.is_verse_intro_text("it's 31 first canto chapter 9 the appearance of sukadeva goswami text 31") is True
+    assert ContentClassifier.is_verse_intro_text("first canto chapter 19 the appearance of sukadeva goswami text 31") is True
+
+    # 2. Reading from combinations
+    assert ContentClassifier.is_verse_intro_text("we are reading from srimad bhagavatam first canto") is True
+    assert ContentClassifier.is_verse_intro_text("we are reading today from bhagavad-gita chapter 4 text 10") is True
+    assert ContentClassifier.is_verse_intro_text("reading from caitanya caritamrta") is True
+
+    # 3. Chapter and verse combinations
+    assert ContentClassifier.is_verse_intro_text("chapter 19 text 31") is True
+    assert ContentClassifier.is_verse_intro_text("canto 1 chapter 19") is True
+    assert ContentClassifier.is_verse_intro_text("text 31 chapter 19") is True
+
+    # 4. Negative / non-verse intro texts
+    assert ContentClassifier.is_verse_intro_text("jaya radha madhava kunja bihari") is False
+    assert ContentClassifier.is_verse_intro_text("hare krishna hare krishna krishna krishna hare hare") is False
+    assert ContentClassifier.is_verse_intro_text("thank you very much for coming tonight") is False
+
+
+def test_43_two_boundary_kirtan_and_class_cut_proposal(env, monkeypatch):
+    """Combination recording correctly cuts kirtan at singing_end and class at verse introduction."""
+    media_file = env["media_dir"] / "2011-08-29_KKS_SB-01-19-31_with_Radha_Madhava_Oslo.mp3"
+    media_file.write_text("audio dummy bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_comb_intro")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.956,
+        candidate_transitions=[(703.956, 764.0)],
+        speech_onset=742.0,  # Acoustically verified 12:22 onset
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 6200.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="dummy_sha",
+            transcript_sha256="tx_dummy",
+            duration_seconds=6200.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=700.0, text="jaya radha madhava kunja bihari"),
+                TranscriptSegment(start_seconds=739.0, end_seconds=748.0, text="It's 31. First Canto, Chapter 19, The Appearance of Sukadeva Goswami, text 31."),
+                TranscriptSegment(start_seconds=764.0, end_seconds=1200.0, text="om namo bhagavate vasudevaya. we continue reading the purport."),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.mantra_type == MantraType.JAYA_RADHA_MADHAVA
+    assert result.process_by_tool_6 is True
+    assert result.cutter_proposal is not None
+    assert result.cutter_proposal.kirtan_start_sec == 0.0
+    assert result.cutter_proposal.kirtan_end_sec == 703.956
+    # Must pick the verse introduction at 12:22 (742s), NOT 12:44 (764s)!
+    assert result.cutter_proposal.class_start_sec == 742.0
+    assert "kirtan 00:00-11:43; class begins 12:22" == result.cutter_proposal.suggested_cut_points
+
+

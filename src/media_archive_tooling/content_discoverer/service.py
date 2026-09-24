@@ -362,12 +362,16 @@ class ContentDiscovererService:
             excerpt_windows.append((0.0, min(120.0, duration_sec)))
 
             if candidate_transitions:
-                # Add targeted excerpt around speech onset
-                for _, speech_start in candidate_transitions[:2]:
-                    t_start = max(120.0, speech_start - 10.0)
-                    t_end = min(duration_sec, t_start + 60.0)
-                    if t_start < duration_sec and not any(abs(w[0] - t_start) < 20.0 for w in excerpt_windows):
-                        excerpt_windows.append((t_start, t_end))
+                # Add targeted excerpts covering the transition zone from singing_end onwards in overlapping slices
+                for singing_end, speech_start in candidate_transitions[:2]:
+                    trans_start = max(0.0, singing_end)
+                    max_trans_cover = min(duration_sec, max(speech_start + 45.0, singing_end + 130.0))
+                    curr_t = trans_start
+                    while curr_t < max_trans_cover:
+                        w_end = min(duration_sec, curr_t + 45.0)
+                        if w_end > curr_t and not any(abs(w[0] - curr_t) < 15.0 for w in excerpt_windows):
+                            excerpt_windows.append((curr_t, w_end))
+                        curr_t += 35.0
 
             mid_s = max(120.0, duration_sec * 0.4)
             mid_e = min(duration_sec, mid_s + 60.0)
@@ -438,6 +442,17 @@ class ContentDiscovererService:
             coarse_s = result.cutter_proposal.kirtan_range[1]
             coarse_e = result.cutter_proposal.class_range[0]
             dur = result.cutter_proposal.source_duration_seconds or duration_sec
+
+            # Acoustically refine class speech onset if possible
+            if self.acoustic_verifier and hasattr(self.acoustic_verifier, "find_speech_onset"):
+                raw_c_start = result.cutter_proposal.class_start_seconds or coarse_e
+                if raw_c_start > 0:
+                    search_s = max(0.0, raw_c_start - 5.0)
+                    search_e = min(dur, raw_c_start + 15.0)
+                    refined_onset = self.acoustic_verifier.find_speech_onset(actual_audio, search_s, search_e)
+                    if refined_onset is not None and abs(refined_onset - raw_c_start) <= 10.0:
+                        result.cutter_proposal.class_start_seconds = refined_onset
+                        result.cutter_proposal.class_range = (refined_onset, dur)
 
             if result.cutter_proposal.singing_end_seconds is not None and result.cutter_proposal.confidence == "HIGH":
                 # Already verified acoustically via transition detection

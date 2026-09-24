@@ -65,12 +65,15 @@ def derive_split_whats(
     return _sanitize_what(s_what), _sanitize_what(cleaned_c)
 
 
-def _atomic_publish_file(staged_path: Path, target_path: Path) -> None:
-    """Safely, exclusively, and atomically publish staged_path to target_path without clobbering."""
+def _atomic_publish_file(staged_path: Path, target_path: Path, overwrite: bool = False) -> None:
+    """Safely, exclusively, and atomically publish staged_path to target_path."""
     staged_path = staged_path.resolve()
     target_path = target_path.resolve()
 
     if target_path.exists():
+        if overwrite:
+            os.replace(staged_path, target_path)
+            return
         staged_path.unlink(missing_ok=True)
         raise FileExistsError(f"Target file already exists: {target_path}")
 
@@ -287,6 +290,7 @@ class FileCutterService:
         tracking_id_or_path: Union[str, Path],
         dry_run: bool = False,
         cut_point_override: Optional[float] = None,
+        force: bool = False,
         root_dir: Optional[Path] = None,
         reviewer: str = "human_reviewer",
         notes: Optional[str] = None,
@@ -337,7 +341,7 @@ class FileCutterService:
 
         # Check if already split (Idempotency)
         existing_split = self.registry.get_file_split_by_source(tracking_id)
-        if existing_split:
+        if existing_split and not force:
             logger.info("File %s already completed split (ID %s)", tracking_id, existing_split["id"])
             return FileCutterResult(
                 tracking_id=tracking_id,
@@ -531,6 +535,7 @@ class FileCutterService:
             human_dec = {"cut_point_seconds": cut_point_override, "source_sha256": current_sha256}
 
         cut_point: Optional[float] = None
+        class_start_point: Optional[float] = None
         if human_dec and human_dec.get("source_sha256") == current_sha256:
             # Validate content type for stored human cut decision as well
             if classification != "KIRTAN_AND_CLASS":
@@ -545,10 +550,16 @@ class FileCutterService:
                     review_reason=f"File classification '{classification}' is not KIRTAN_AND_CLASS; a cut point alone cannot approve non-combination recording for two-part cut",
                 )
             cut_point = float(human_dec["cut_point_seconds"])
+            if human_dec.get("class_start_seconds") is not None:
+                class_start_point = float(human_dec["class_start_seconds"])
         elif classification == "KIRTAN_AND_CLASS" and crev.get("confidence") == "HIGH":
             prop = crev.get("cutter_proposal")
             if prop and prop.get("confidence") == "HIGH" and prop.get("singing_end_seconds") is not None:
                 cut_point = float(prop["singing_end_seconds"])
+                if prop.get("class_start_seconds") is not None:
+                    class_start_point = float(prop["class_start_seconds"])
+                elif prop.get("class_range") and len(prop["class_range"]) >= 1 and float(prop["class_range"][0]) > 0:
+                    class_start_point = float(prop["class_range"][0])
             else:
                 return FileCutterResult(
                     tracking_id=tracking_id,
@@ -613,8 +624,8 @@ class FileCutterService:
             in_place_target = class_dest
 
         # Collision preflight: check that neither target path already exists,
-        # unless it is the source/working audio file being split in-place.
-        if singing_dest.exists() and singing_dest.resolve() not in source_resolved:
+        # unless it is the source/working audio file being split in-place or force=True.
+        if not force and singing_dest.exists() and singing_dest.resolve() not in source_resolved:
             return FileCutterResult(
                 tracking_id=tracking_id,
                 source_path=str(source_path),
@@ -627,7 +638,7 @@ class FileCutterService:
                 review_required=True,
                 review_reason=f"Target singing output path already exists: {singing_dest}",
             )
-        if class_dest.exists() and class_dest.resolve() not in source_resolved:
+        if not force and class_dest.exists() and class_dest.resolve() not in source_resolved:
             return FileCutterResult(
                 tracking_id=tracking_id,
                 source_path=str(source_path),
@@ -659,6 +670,7 @@ class FileCutterService:
 
         # 6. Dry Run Execution
         if dry_run:
+            actual_c_start = class_start_point if class_start_point is not None else cut_point
             singing_trim = self.audio_cutter.detect_leading_silence(
                 working_audio_path,
                 start_seconds=0.0,
@@ -666,8 +678,8 @@ class FileCutterService:
             )
             class_trim = self.audio_cutter.detect_leading_silence(
                 working_audio_path,
-                start_seconds=cut_point,
-                end_seconds=min(duration, cut_point + 60.0),
+                start_seconds=actual_c_start,
+                end_seconds=min(duration, actual_c_start + 60.0),
             )
             return FileCutterResult(
                 tracking_id=tracking_id,
@@ -684,7 +696,7 @@ class FileCutterService:
                 class_output_path=str(class_dest),
                 class_tracking_id=tracking_id,
                 class_sha256="dry_run_hash_class",
-                class_duration_seconds=round((duration - cut_point) - class_trim, 3),
+                class_duration_seconds=round((duration - actual_c_start) - class_trim, 3),
                 class_leading_silence_seconds=class_trim,
                 class_pending_tool_11_move=True,
                 success=True,
@@ -705,6 +717,7 @@ class FileCutterService:
         spec = AudioCutSpec(
             source_path=working_audio_path,
             cut_point_seconds=cut_point,
+            class_start_seconds=class_start_point,
             source_duration_seconds=duration,
             singing_output_path=singing_dest,
             class_output_path=class_dest,
@@ -751,7 +764,10 @@ class FileCutterService:
                 )
 
         try:
-            _atomic_publish_file(cut_res.singing_staged_path, singing_dest)
+            if force:
+                _atomic_publish_file(cut_res.singing_staged_path, singing_dest, overwrite=True)
+            else:
+                _atomic_publish_file(cut_res.singing_staged_path, singing_dest)
         except Exception as e:
             if in_place_backup_path and in_place_backup_path.exists():
                 try:
@@ -773,7 +789,10 @@ class FileCutterService:
             )
 
         try:
-            _atomic_publish_file(cut_res.class_staged_path, class_dest)
+            if force:
+                _atomic_publish_file(cut_res.class_staged_path, class_dest, overwrite=True)
+            else:
+                _atomic_publish_file(cut_res.class_staged_path, class_dest)
         except Exception as e:
             # Ownership-checked rollback of singing output
             _safe_rollback_output(singing_dest, cut_res.singing_sha256)
