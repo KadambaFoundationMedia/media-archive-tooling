@@ -4,6 +4,10 @@ This file is the **single starting point for any implementation model** working 
 
 Do not rely on previous chat history. The repository is the persistent project memory.
 
+The README is the current user-facing guide to the main script and Tools 1–7.
+When a build changes a documented command, workflow stage, or tool availability,
+update its examples and overview before marking the build ready for review.
+
 ## Start / resume command
 
 ### Numbered tools
