@@ -6,7 +6,50 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
+
+## Independent planner re-review — 2026-09-24
+
+Focused Tool 5/6 tests pass (52), but PR #65 is not approved for live archive or
+Baserow writes. Please continue the same persistent `BUILD TOOL 6` `/goal`; fix
+the following three production-path blockers, add tests that exercise the real
+adapters and retry path, then commit/push the implementation and status update.
+
+### T6-R-006 — Excerpt mode still transcribes the complete recording
+
+`content_discoverer/service.py` passes `excerpt_windows`, but the production
+`WhisperCppTranscriptionAdapter.transcribe()` only records them in metadata.
+`prepare_whisper_input()` still decodes the complete source and Whisper receives
+the complete file (`content_discoverer/transcriber.py`, around lines 328–350).
+The cache key does not distinguish excerpt vs full-file transcripts or their
+windows. Actually extract bounded, timestamp-preserving excerpts before Whisper,
+invalidate incompatible cached artifacts, and test the production command/input
+duration and timeline mapping rather than only the fake adapter's call arguments.
+
+### T6-R-007 — Unrelated silence is promoted to a HIGH-confidence cut
+
+`acoustic_verifier.py` returns the *first* silence in a broad window, even if
+it precedes the suggested singing/class transition; when no silence exists,
+it returns the coarse text boundary if the bracket is at most two seconds.
+Neither proves that singing has ended. Restrict candidates to the transition
+and verify singing-before/class-after evidence; otherwise return no exact cut
+and require portal review. Test an earlier unrelated pause and a narrow bracket
+with no silence: neither may auto-cut.
+
+### T6-R-008 — Tool 4 handoff cannot perform or reliably retry the two writes
+
+`file_cutter/service.py` constructs minimal `MediaDbSyncRequest`s with no
+`tool2_decision` or selected class row. Tool 4's engine default-denies those
+requests, so even a healthy Baserow connection cannot do the promised update
+and create. Its retry path rebuilds requests from registry, losing the video
+class `audio_file_path` and the new singing category/WHAT; the source is deleted
+before the Tool 4 outbox is recorded. Build/revalidate full Tool 4 requests for
+both successors, preserve Tool 6-specific fields through retry, and persist
+both pending intents before source deletion. Test with the real Tool 4 service
+and fake Baserow adapter: class row update, distinct kirtan row creation, and
+failure followed by successful retry with the same intended fields.
+
+No live media was cut and no Baserow row was changed during this review.
 
 ## Resolution of planner review findings (T6-R-001 through T6-R-005) — 2026-09-24
 
