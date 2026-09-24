@@ -7,10 +7,19 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW` — merge held pending Tool 5–7 transcription workflow decision
+Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
 
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
+
+## Acceptance — 2026-09-24
+
+The owner explicitly accepted the current Main Script implementation and
+authorized merging PR #60. The planner reviewed its final implementation head
+and the required Python 3.12 CI check passed. The proposed move of full
+transcription from Tool 5 to Tool 7 remains a separate future workflow change
+to plan after the owner supplies the Tool 7 description; it does not block
+acceptance of this current Main Script milestone.
 
 ## Planner review follow-up — 2026-09-24
 
@@ -31,9 +40,8 @@ failures writing the repository's `.renamer` directory; GitHub CI is the
 authoritative full-suite check. No media files or Baserow rows were changed.
 
 The owner has proposed moving full transcription from Tool 5 to Tool 7 so
-combination recordings are cut first. The planner has requested clarification
-on class-only versus kirtan transcription. PR #60 must not be merged until
-the phase boundary and necessary Main Script integration change are settled.
+combination recordings are cut first. This future redesign is not part of
+the accepted PR #60 milestone and will need its own plan and branch.
 
 ## Independent planner review of PR #60 — 2026-09-23 [RESOLVED 2026-09-24]
 
