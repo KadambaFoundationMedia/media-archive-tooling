@@ -24,9 +24,9 @@ CLI `media-archive cut` enables standalone execution and dry-run inspection.
 ## Review checkpoint
 
 Last planning/review commit: `66854fe` (planning PR #61)
-Current implementation HEAD: `513c873` (PR #65)
+Current implementation HEAD: `3a84504` (PR #65)
 Fundamental-change review pending: no
-Relevant commits since last review: `45e57c1`, `be629b9`, `513c873`
+Relevant commits since last review: `45e57c1`, `be629b9`, `513c873`, `3a84504`
 
 ## Open questions / contradictions
 
