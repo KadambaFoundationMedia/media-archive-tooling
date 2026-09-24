@@ -23,11 +23,11 @@ class TerminalReporter:
             print("Operating directly on files; authorized renames and Baserow mutations will occur without prompt.")
 
         if workflow == WorkflowType.ALL:
-            print("Workflow: all (Tools 1–5 active; Tools 6–11 pending)")
+            print("Workflow: all (Tools 1–6 active; Tools 7–11 pending)")
         elif workflow == WorkflowType.RENAMER:
             print("Workflow: renamer (Phase A: Tools 1–4 active)")
         elif workflow == WorkflowType.PROCESSING:
-            print("Workflow: processing (Tool 5 active for Phase 1-tracked files; Tools 6–11 pending)")
+            print("Workflow: processing (Tools 5–6 active for Phase 1-tracked files; Tools 7–11 pending)")
 
         if target_count is not None:
             print(f"Discovered {target_count} media file(s) for processing.\n")

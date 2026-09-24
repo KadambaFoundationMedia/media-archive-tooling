@@ -12,6 +12,7 @@ class ContentType(str, Enum):
     INITIATION = "INITIATION"
     EVENT_OR_FESTIVAL_ADDRESS = "EVENT_OR_FESTIVAL_ADDRESS"
     HOME_PROGRAM = "HOME_PROGRAM"
+    VYASA_PUJA = "VYASA_PUJA"
     UNKNOWN_REVIEW = "UNKNOWN_REVIEW"
 
 
@@ -81,12 +82,22 @@ class ContentEvidence(BaseModel):
 
 
 class CutterBoundaryProposal(BaseModel):
-    """Coarse gap bracket between distinct recording sections for Tool 6 handoff."""
-    kirtan_range: Tuple[float, float]
-    class_range: Tuple[float, float]
-    coarse_gap_bracket: Tuple[float, float]
+    """Exact cut point and boundary proposal between distinct recording sections for Tool 6 handoff."""
+    kirtan_range: Tuple[float, float] = (0.0, 0.0)
+    class_range: Tuple[float, float] = (0.0, 0.0)
+    coarse_gap_bracket: Tuple[float, float] = (0.0, 0.0)
+    singing_end_seconds: Optional[float] = None
+    source_duration_seconds: Optional[float] = None
+    source_sha256: Optional[str] = None
+    method: Optional[str] = None
     confidence: str = "HIGH"
     description: Optional[str] = None
+
+    @property
+    def exact_cut_seconds(self) -> float:
+        if self.singing_end_seconds is not None:
+            return self.singing_end_seconds
+        return self.kirtan_range[1]
 
     @property
     def suggested_cut_points(self) -> str:
@@ -118,9 +129,9 @@ class ContentDiscoveryResult(BaseModel):
     mantra_type: MantraType
     process_by_tool_6: bool = False
     cutter_proposal: Optional[CutterBoundaryProposal] = None
-    transcript_path: str
-    transcript_sha256: str
-    input_sha256: str
+    transcript_path: str = ""
+    transcript_sha256: str = ""
+    input_sha256: str = ""
     source_path: str
     derived_audio_path: Optional[str] = None
     evidence: List[ContentEvidence] = Field(default_factory=list)

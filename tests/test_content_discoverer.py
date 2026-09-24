@@ -203,7 +203,8 @@ def test_05_initiation_with_multipart_sections(env):
 
     res = env["service"].discover_content(media_file, root_dir=env["tmp_path"])
     assert res.classification == ContentType.INITIATION
-    assert res.process_by_tool_6 is True
+    assert res.process_by_tool_6 is False
+    assert res.review_required is True
     assert res.cutter_proposal is not None
     assert "initiation vows" in res.cutter_proposal.suggested_cut_points
     assert "spiritual name giving" in res.cutter_proposal.suggested_cut_points

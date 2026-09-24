@@ -648,6 +648,8 @@ def run_main_script(args):
             tool2_service=getattr(args, "tool2_service", None),
             travel_service=getattr(args, "travel_service", None),
             tool4_service=getattr(args, "tool4_service", None),
+            tool5_service=getattr(args, "tool5_service", None),
+            tool6_service=getattr(args, "tool6_service", None),
         )
 
     if purge:
@@ -731,9 +733,56 @@ def run_discover_content(args):
         print(f"Review Required: {result.review_reason or 'Yes'}")
 
 
+def run_cut(args):
+    """Run Tool 6 File Cutter CLI command."""
+    config = load_config()
+    reg_path = Path(args.registry_path) if args.registry_path else config.registry_path
+    registry = LocalRegistry(reg_path)
+    from .file_cutter.service import FileCutterService
+
+    updater_service = getattr(args, "updater_service", None)
+    cutter_service = FileCutterService(registry=registry, media_db_service=updater_service)
+
+    result = cutter_service.cut_file(
+        tracking_id_or_path=args.target,
+        dry_run=args.dry_run,
+        cut_point_override=args.cut_point,
+    )
+
+    if args.json:
+        print(json.dumps(result.model_dump(), indent=2))
+        return
+
+    print("Tool 6 — File Cutter")
+    if result.dry_run:
+        print("Mode: DRY-RUN (no files or database modified)")
+    if result.success:
+        print(f"Status: SUCCESS (cut at {result.cut_point_seconds:.2f}s)")
+        print(f"Singing Part: {result.singing_output_path} ({result.singing_duration_seconds:.2f}s, trim: {result.singing_leading_silence_seconds:.2f}s)")
+        print(f"Class Part:   {result.class_output_path} ({result.class_duration_seconds:.2f}s, trim: {result.class_leading_silence_seconds:.2f}s)")
+        if result.singing_pending_tool_11_move:
+            print("Location: Pending Tool 11 category move (files remain beside source)")
+    else:
+        print("Status: FAILED / REVIEW REQUIRED")
+        if result.review_reason:
+            print(f"Reason: {result.review_reason}")
+        if result.error_message:
+            print(f"Error: {result.error_message}")
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="media-archive", description="Media Archive Tooling CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Tool 6: File Cutter command
+    cut_parser = subparsers.add_parser("cut", help="Run Tool 6: File Cutter")
+    cut_parser.add_argument("target", help="Target media file path or tracking ID to split")
+    cut_parser.add_argument("--dry-run", action="store_true", default=False, help="Perform dry-run cut preview without modifying files or database")
+    cut_parser.add_argument("--cut-point", type=float, default=None, help="Explicit cut point in seconds (overrides automatic Tool 5 proposal)")
+    cut_parser.add_argument("--registry-path", help="Custom SQLite registry path")
+    cut_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
+    cut_parser.set_defaults(func=run_cut)
 
     # Tool 5: Content Discoverer command
     discover_parser = subparsers.add_parser("discover-content", help="Run Tool 5: Content Discoverer")

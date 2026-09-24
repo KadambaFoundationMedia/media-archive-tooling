@@ -1,9 +1,10 @@
 # Media Archive Tooling
 
-Media Archive Tooling is a local Python application for inspecting, renaming,
-reviewing, and registering archive media. It provides a command-line runner for
-individual files and recursive batches, plus a localhost review portal for
-items that need human attention.
+Media Archive Tooling processes local archive recordings in place. Its main
+script accepts one file, several files, or folders; reports each tool's
+progress; and sends uncertain decisions to a separate localhost review portal.
+It writes detailed events to one log file and tracks work in a local SQLite
+registry.
 
 The current runnable workflow is:
 
@@ -13,14 +14,15 @@ Tool 1: interpret filename
 → Tool 3: check the verified travel schedule
 → Tool 1: create and commit the final filename
 → Tool 4: create, update, or preserve the Baserow Media row
-→ Tool 5: transcribe and discover the recording's content in place
+→ Tool 5: discover content from audio and short targeted excerpts
+→ Tool 6: split a confirmed singing-and-class combination when safe
+→ Tool 4: synchronize the resulting class and singing items
 ```
 
-Tools 1–5 and the Main Tooling Script are available. Tools 6 and 7 have
-finalized build plans but are not yet implemented; Tools 8–11 still need
-individual build plans. The current Tool 5 code fully transcribes recordings.
-Its planned revision will use bounded classification analysis instead; Tool 7
-will then fully transcribe every non-kirtan recording after any Tool 6 cut.
+The main script currently integrates Tools 1–6. Tool 7 has a build plan but is
+not yet implemented; Tools 8–11 still need individual build plans. This is
+alpha/beta software: test with `--dry-run` first, and remember that a live
+Tool 6 split replaces the full-length working audio with two verified outputs.
 
 ## Quick start
 
@@ -28,13 +30,13 @@ Use the included launcher from the repository folder. It performs the required
 first-time setup automatically. You do not need to install or operate Python
 development tools yourself.
 
-Preview one file without renaming it or writing to Baserow:
+Preview one file, with a concise result for each tool:
 
 ```sh
 ./run-media-archive.sh "/path/to/recording.mp3" --dry-run
 ```
 
-Process that file live:
+Process that file live, without a confirmation prompt:
 
 ```sh
 ./run-media-archive.sh "/path/to/recording.mp3"
@@ -46,8 +48,9 @@ and can take a little longer. Later runs start directly. Live Baserow use also
 requires the project `.env` configuration.
 
 > **Important:** live mode is the default. Without `--dry-run`, eligible files
-> are renamed immediately, Tool 4 may write to Baserow, and Tool 5 may
-> transcribe the recording. There is no confirmation prompt.
+> may be renamed, Tool 4 may write to Baserow, and Tool 6 may replace a
+> confirmed combination recording with two files. There is no confirmation
+> prompt. Work on backed-up media and preview unfamiliar batches first.
 
 ## Main Tooling Script
 
@@ -62,7 +65,7 @@ be supplied in the same command.
 
 ### Common examples
 
-Preview a directory recursively:
+Preview a directory recursively (including supported media in subfolders):
 
 ```sh
 ./run-media-archive.sh "/path/to/archive-folder" --dry-run
@@ -77,10 +80,23 @@ Preview several explicit files:
   --dry-run
 ```
 
-Run with detailed per-stage output:
+Show detailed per-stage output while previewing:
 
 ```sh
 ./run-media-archive.sh "/path/to/archive-folder" --dry-run --verbose
+```
+
+Run only the renaming/database stages on one file:
+
+```sh
+./run-media-archive.sh "/path/to/recording.mp3" --workflow renamer --dry-run
+```
+
+Run the audio-discovery/cutting stages on a file already registered by the
+renaming workflow:
+
+```sh
+./run-media-archive.sh "/path/to/registered-recording.mp3" --workflow processing --dry-run
 ```
 
 Use explicit registry and log locations:
@@ -101,8 +117,21 @@ Start the localhost review portal after processing:
 ```
 
 The portal is available at `http://127.0.0.1:8000` by default. Its active
-queue shows files needing evaluation, including Tool 5 content decisions and
-actionable Tool 4 synchronization states.
+queue shows files needing evaluation, including Tool 5/6 decisions and
+actionable Tool 4 synchronization states. The portal can also be started
+independently; see [Review portal only](#review-portal-only).
+
+Preview an alpha/beta cleanup, then run it only if the listed test rows are
+the ones you intend to remove:
+
+```sh
+./run-media-archive.sh --purge --dry-run
+./run-media-archive.sh --purge
+```
+
+`--purge` may delete Tool 4-tracked test rows from the **live** Baserow table
+before clearing local review state. It is not a general archive cleanup
+command, and it does not accept file targets.
 
 ### Options
 
@@ -110,10 +139,11 @@ actionable Tool 4 synchronization states.
 | --- | --- |
 | `--dry-run` | Preview final filenames and Tool 4 changes without renaming files or mutating Baserow. |
 | `--verbose` | Show additional structured details for every tool stage. |
-| `--workflow all` | Default: runs the available Tools 1–5 in sequence. Tools 6–11 are not yet executed. |
+| `--workflow all` | Default: runs the currently integrated Tools 1–6 when applicable. |
 | `--workflow renamer` | Runs the renaming/database workflow: Tools 1–4. |
-| `--workflow processing` | Runs Tool 5 for a file that already passed Phase 1 registration; it does not run pending Tools 6–11. |
+| `--workflow processing` | Runs Tools 5–6 when applicable for a file already registered by Phase 1. |
 | `--purge` | Standalone alpha/beta cleanup: remove Tool 4-tracked test rows from Baserow, then reset local review state when remote cleanup succeeds. Use `--purge --dry-run` to preview. Do not supply file targets. |
+| `--production` | Currently blocked pending a production retention policy; do not use for archive-wide processing yet. |
 | `--registry-path PATH` | Use a specific SQLite registry instead of the configured default. |
 | `--log-file PATH` | Write the combined append-only JSONL log to a specific file. |
 | `--review-portal` | Start the localhost review portal after the run. |
@@ -134,7 +164,8 @@ For each file, terminal output separates the stages and summarizes:
 - fields that would be or were written;
 - the created or selected Baserow row number;
 - verified live values after a successful write;
-- Tool 5 content type, detected mantra, and transcription progress when run.
+- Tool 5 content type and detected mantra when run;
+- Tool 6 cut result and both output names when a safe split applies.
 
 Detailed structured events from all tools are appended to one log file. With
 the default configuration it is `.renamer/logs/media-archive-tooling.log`.
@@ -148,7 +179,8 @@ remains recoverable.
   access.
 - Tool 4 is the only component allowed to create or update Baserow rows or
   select options.
-- Tool 5 analyzes audio locally and does not access Baserow.
+- Tool 5 analyzes audio locally and does not access Baserow; Tool 6 cuts local
+  audio, while Tool 4 alone handles its Baserow updates.
 - Existing confirmed Baserow metadata is leading. Contradictions are routed to
   review instead of being overwritten automatically.
 - An existing `media_archive_link` is preserved; Tools 1–4 do not invent or
@@ -171,6 +203,76 @@ portal session:
 ./scripts/review-tool-1.sh
 ```
 
+## Tooling overview
+
+The [Main Tooling Script plan](docs/main-tooling-script-build-plan.md) defines
+the local orchestrator. It discovers selected media files, invokes the
+available tools in the right order, summarizes progress in the terminal,
+records detailed events in one log, and routes unresolved items to the review
+portal. It does not replace any tool's own decisions or processing logic.
+
+**Tool 1 — Renamer.** The [Tool 1 build plan](docs/tool-1-renamer-build-plan.md)
+defines how filename, folder, database, travel, and later audio evidence become
+a canonical filename. Tool 1 can run again as stronger metadata arrives; it
+renames in place only when the evidence is sufficient, otherwise it requests
+review.
+
+**Tool 2 — Media database reviewer.** The [Tool 2 build plan](docs/tool-2-media-database-reviewer-build-plan.md)
+defines a read-only lookup of Baserow's Media table. It searches for matching
+recordings, identifies duplicate or conflicting candidates, and passes
+confirmed metadata or a structured review decision to Tool 1 and Tool 4. It
+never writes Baserow data.
+
+**Tool 3 — Travel schedule reviewer.** The [Tool 3 build plan](docs/tool-3-travel-schedule-reviewer-build-plan.md)
+uses the verified local travel schedule as supporting evidence for a
+recording's date and place. It can corroborate a filename or flag a genuine
+conflict, but a scheduled trip alone does not establish where a recording was
+made.
+
+**Tool 4 — Media database updater.** The [Tool 4 build plan](docs/tool-4-media-database-updater-build-plan.md)
+defines the sole Baserow writer. After Tool 2's matching decision, it creates
+a genuinely new Media row or adds trustworthy metadata to an existing row,
+preserving confirmed fields and unrelated online links. Ambiguous matches,
+contradictions, and unsafe writes are held for review or retry.
+
+**Tool 5 — Content discoverer.** The [Tool 5 build plan](docs/tool-5-content-discoverer-build-plan.md)
+classifies the audio as a class, kirtan, combination, ceremony, or another
+supported type. It identifies opening singing and, where possible, a
+recording-specific cut point using acoustic analysis and short local
+transcription excerpts. Full transcription belongs to Tool 7, not this
+pre-cut stage.
+
+**Tool 6 — File cutter.** The [Tool 6 build plan](docs/tool-6-file-cutter-build-plan.md)
+handles a confirmed singing-and-class combination. With a trustworthy cut
+point, it produces and verifies separate singing and class files, trims only
+actual leading silence, and removes the full-length working audio after a
+successful split. Tool 1 owns their filenames and Tool 4 handles the distinct
+class and singing Media items; uncertain cuts stay intact for portal review.
+
+**Tool 7 — Class type discoverer and full transcription (planned).** The
+[Tool 7 build plan](docs/tool-7-class-type-discoverer-build-plan.md) specifies
+full local transcription after any Tool 6 cut for every non-kirtan recording.
+It uses the reusable transcript to discover or corroborate the class category
+and scripture verse, then asks Tool 1/Tool 4 to apply trustworthy metadata.
+Kirtan-only files skip this full-transcription stage.
+
+**Tool 8 — Class Trimmer (planned).** This is the future class-audio trimming
+stage. Its exact rules and individual build plan have not been agreed yet.
+
+**Tool 9 — Class Gain Booster (planned).** This is the future gain-adjustment
+stage for class audio. Its processing rules and individual build plan are
+still pending.
+
+**Tool 10 — Questions Gain Booster (planned).** This is the future stage for
+questions that need gain adjustment. Its detection and processing rules still
+need a build plan.
+
+**Tool 11 — Processed Media Organiser (planned).** This will move finalized
+media and applicable transcripts into their destination under
+`processed-files`, based on the latest WHAT/category. Its individual build
+plan is pending. The [full pipeline workflow](docs/full-pipeline-workflow-amendment.md)
+records the confirmed ordering and dependencies for Tools 8–11.
+
 ## Builder plans and prompts
 
 The Builder is a **separate Antigravity model** started manually by the owner.
@@ -190,13 +292,9 @@ planner reviews/tests the result and merges it only after approval and CI.
 | Tool 6 — File cutter | [Tool 6 plan](docs/tool-6-file-cutter-build-plan.md) | `BUILD TOOL 6` |
 | Tool 7 — Class type discoverer and full transcription | [Tool 7 plan](docs/tool-7-class-type-discoverer-build-plan.md) | `BUILD TOOL 7` |
 
-Tools 1–5 already have implementations; their prompts are for directed
-corrections or resumption, not an instruction to rebuild them. After this
-planning revision is merged, send `BUILD TOOL 6` first: its plan includes
-the revised Tool 5 exact-cut handoff without full transcription and the Tool
-4 video-audio path extension. Then send `BUILD TOOL 7` for full non-kirtan
-transcription, category/verse discovery, and the Tool 4 `description` link
-handoff. Tools 8–11 have no finalized plans or build prompts yet.
+Tools 1–6 have implementations; those prompts are for directed corrections or
+resumption, not an instruction to rebuild them. Tool 7 is the next planned
+build. Tools 8–11 have no finalized individual plans or build prompts yet.
 
 ## Project documentation
 

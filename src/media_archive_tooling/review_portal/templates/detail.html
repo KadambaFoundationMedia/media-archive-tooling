@@ -475,6 +475,57 @@
     </div>
     {% endif %}
 
+    <!-- Tool 6 File Cutter Card -->
+    {% if content_review and (content_review.classification == "KIRTAN_AND_CLASS" or file_split or human_cut_decision) %}
+    <div class="card" id="file-cutter-card">
+        <h2>Tool 6 — File Cutter</h2>
+        {% if file_split %}
+        <div style="background: #e6f4ea; border: 1px solid #34a853; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+            <div style="font-weight: 600; color: #137333; margin-bottom: 6px;">✓ File Successfully Split into 2 Parts</div>
+            <div style="font-size: 13px;">
+                <strong>Singing Output:</strong> <code>{{ file_split.singing_path }}</code> ({{ file_split.singing_duration_seconds }}s, ID: <code>{{ file_split.singing_tracking_id }}</code>)<br>
+                <strong>Class Output:</strong> <code>{{ file_split.class_path }}</code> ({{ file_split.class_duration_seconds }}s, ID: <code>{{ file_split.class_tracking_id }}</code>)<br>
+                <strong>Cut Point:</strong> {{ file_split.cut_point_seconds }}s &middot; 
+                <strong>Leading Silence Trimmed:</strong> Singing: {{ file_split.singing_leading_silence_seconds }}s, Class: {{ file_split.class_leading_silence_seconds }}s &middot;
+                <strong>Pending Tool 11 Move:</strong> YES
+            </div>
+        </div>
+        {% else %}
+        <p style="font-size: 13px; color: var(--muted-color); margin-bottom: 12px;">
+            Interactive waveform and boundary review for splitting into singing and class portions.
+        </p>
+
+        <!-- Waveform Visualization -->
+        <div id="waveform-container" style="position: relative; width: 100%; height: 120px; background: #1a1a24; border-radius: 6px; overflow: hidden; margin-bottom: 8px;">
+            <canvas id="waveform-canvas" width="800" height="120" style="width: 100%; height: 100%; display: block;"></canvas>
+            <div id="waveform-marker" style="position: absolute; top: 0; bottom: 0; width: 2px; background: #ea4335; pointer-events: none; left: 0%;">
+                <div style="position: absolute; top: 4px; left: 4px; background: #ea4335; color: white; font-size: 10px; font-weight: bold; padding: 2px 4px; border-radius: 3px; white-space: nowrap;" id="marker-label">Cut Point</div>
+            </div>
+        </div>
+
+        <!-- Slider and Time Labels -->
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+            <span id="cut-time-display" style="font-family: monospace; font-size: 14px; font-weight: bold; min-width: 60px;">00:00</span>
+            <input type="range" id="cut-slider" min="0" max="100" step="0.1" value="0" style="flex: 1;" oninput="onCutSliderChange(this.value)">
+            <span id="total-time-display" style="font-family: monospace; font-size: 14px; color: var(--muted-color);">00:00</span>
+        </div>
+
+        <!-- Cue / Playback Controls -->
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+            <button type="button" class="btn" onclick="seekAudio(getCutPointSeconds())">Seek to Cut Point</button>
+            <button type="button" class="btn" onclick="playAroundCut(-5)">Play 5s Before Cut</button>
+            <button type="button" class="btn" onclick="playAroundCut(0)">Play 5s After Cut</button>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+            <button type="button" class="btn btn-primary" id="btn-execute-cut" onclick="executeCut(false)">Execute Cut</button>
+            <button type="button" class="btn" id="btn-dry-run-cut" onclick="executeCut(true)">Dry Run Simulation</button>
+        </div>
+        <div id="cut-result-status" style="margin-top: 10px; font-size: 13px;"></div>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <form method="POST" action="/file/{{ file.tracking_id }}/update">
         <div class="card">
             <h2>Metadata Fields & Evidence</h2>
@@ -861,6 +912,135 @@
                 audio.play();
             }
         }
+
+        let currentCutSeconds = 0;
+        let totalDurationSeconds = 0;
+
+        function formatTime(sec) {
+            if (isNaN(sec) || sec < 0) return "00:00";
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function updateCutDisplay(seconds) {
+            currentCutSeconds = parseFloat(seconds);
+            const display = document.getElementById('cut-time-display');
+            if (display) display.textContent = formatTime(currentCutSeconds);
+            const marker = document.getElementById('waveform-marker');
+            if (marker && totalDurationSeconds > 0) {
+                const pct = Math.max(0, Math.min(100, (currentCutSeconds / totalDurationSeconds) * 100));
+                marker.style.left = `${pct}%`;
+                const label = document.getElementById('marker-label');
+                if (label) label.textContent = `${formatTime(currentCutSeconds)} (${currentCutSeconds.toFixed(1)}s)`;
+            }
+        }
+
+        function onCutSliderChange(val) {
+            updateCutDisplay(val);
+        }
+
+        function getCutPointSeconds() {
+            return currentCutSeconds;
+        }
+
+        function playAroundCut(offset) {
+            const audio = document.getElementById('audio-preview');
+            if (audio) {
+                const target = Math.max(0, currentCutSeconds + offset);
+                audio.currentTime = target;
+                audio.play();
+            }
+        }
+
+        function drawWaveform(peaks) {
+            const canvas = document.getElementById('waveform-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
+
+            ctx.fillStyle = '#4285f4';
+            const barWidth = width / peaks.length;
+            for (let i = 0; i < peaks.length; i++) {
+                const p = peaks[i];
+                const barHeight = Math.max(2, p * (height - 10));
+                const x = i * barWidth;
+                const y = (height - barHeight) / 2;
+                ctx.fillRect(x, y, Math.max(1, barWidth - 1), barHeight);
+            }
+        }
+
+        async function loadWaveform() {
+            const trackingId = "{{ file.tracking_id }}";
+            try {
+                const res = await fetch(`/api/file/${trackingId}/waveform`);
+                if (!res.ok) return;
+                const data = await res.json();
+                totalDurationSeconds = data.duration_seconds || 0;
+                const totalDisplay = document.getElementById('total-time-display');
+                if (totalDisplay) totalDisplay.textContent = formatTime(totalDurationSeconds);
+
+                const slider = document.getElementById('cut-slider');
+                if (slider) {
+                    slider.max = totalDurationSeconds;
+                    const initCut = data.cut_point_seconds || (totalDurationSeconds * 0.25);
+                    slider.value = initCut;
+                    updateCutDisplay(initCut);
+                }
+                if (data.peaks) {
+                    drawWaveform(data.peaks);
+                }
+            } catch (e) {
+                console.warn("Waveform load failed:", e);
+            }
+        }
+
+        async function executeCut(dryRun) {
+            const statusDiv = document.getElementById('cut-result-status');
+            const trackingId = "{{ file.tracking_id }}";
+            if (statusDiv) {
+                statusDiv.innerHTML = `<span style="color: var(--muted-color);">Running ${dryRun ? 'dry-run simulation' : 'cut'}...</span>`;
+            }
+            const formData = new FormData();
+            formData.append('cut_point', currentCutSeconds);
+            formData.append('dry_run', dryRun ? 'true' : 'false');
+
+            try {
+                const res = await fetch(`/api/file/${trackingId}/cut`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await res.json();
+                if (result.success) {
+                    if (dryRun) {
+                        statusDiv.innerHTML = `<div style="background: rgba(66,133,244,0.1); border: 1px solid #4285f4; border-radius: 4px; padding: 8px; color: #1a73e8;">
+                            <strong>Dry Run Succeeded:</strong> Cut at ${result.cut_point_seconds.toFixed(2)}s.<br>
+                            Projected Singing: <code>${result.singing_output_path}</code> (${result.singing_duration_seconds}s)<br>
+                            Projected Class: <code>${result.class_output_path}</code> (${result.class_duration_seconds}s)
+                        </div>`;
+                    } else {
+                        statusDiv.innerHTML = `<div style="background: #e6f4ea; border: 1px solid #34a853; border-radius: 4px; padding: 8px; color: #137333;">
+                            <strong>Cut Succeeded!</strong> Reloading file view...
+                        </div>`;
+                        setTimeout(() => window.location.reload(), 1500);
+                    }
+                } else {
+                    statusDiv.innerHTML = `<div style="background: rgba(234,67,53,0.1); border: 1px solid #ea4335; border-radius: 4px; padding: 8px; color: #d93025;">
+                        <strong>Cut Blocked / Review Required:</strong> ${result.review_reason || result.error_message}
+                    </div>`;
+                }
+            } catch (e) {
+                if (statusDiv) {
+                    statusDiv.innerHTML = `<div style="color: #d93025;">Execution error: ${e.message}</div>`;
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadWaveform();
+        });
     </script>
 </body>
 </html>

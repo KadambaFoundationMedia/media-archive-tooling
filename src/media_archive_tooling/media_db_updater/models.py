@@ -172,6 +172,7 @@ class MediaDbSyncRequest(BaseModel):
     original_path: Optional[str] = None
     previous_filename: Optional[str] = None
     previous_path: Optional[str] = None
+    audio_file_path: Optional[str] = None
 
     # Stable identity & table target
     request_id: Optional[str] = None
