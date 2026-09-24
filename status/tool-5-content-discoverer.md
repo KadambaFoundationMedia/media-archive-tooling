@@ -10,6 +10,43 @@ Recording references: `assets/verse-structure.md`, `assets/original-and-edited-r
 
 Status: `ACCEPTED`
 
+## Correction PR #67 — independent benchmark review (2026-09-24)
+
+The previously accepted Tool 5 release is not being revoked, but the current
+Tool 5/6 correction branch is **CHANGES_REQUESTED** and must not be merged or
+used for automatic live cutting yet. The owner supplied manual marks for five
+files in `sample-files/cutting-samples/timings.md`. Four correctly identified
+combinations have promising boundaries, but these release blockers remain:
+
+1. **T5-R-006 — Preserve the Sweden class opening.** For the SB 3.6.6 Sweden
+   sample, manual class start is 150.189 s and the acoustic speech onset is
+   150.911 s, yet Tool 6's dry-run begins the class at the later verse-intro
+   marker, 183.183 s. Approximately 33 seconds of audible class introduction
+   would be discarded. The class cut must begin at the first verified speech
+   onset; retain a later scripture marker as metadata, not a destructive trim
+   boundary. Add a regression that asserts the preserved class opening.
+2. **T5-R-007 — Do not two-part-cut Vyasa-puja.** The sample at
+   `cutting-samples/Vyasa-puja 2015/ZOOM0004.MP3` was classified as
+   `KIRTAN_AND_CLASS` with automatic Tool 6 routing despite its known
+   multi-part ceremony context. Use available source/folder context as a
+   safety signal and send initiation/Vyasa-puja to review; do not discard
+   later ceremony stages. Add a regression using this folder/name pattern.
+3. **T5-R-008 — An acoustic pause alone is not singing evidence.** Current
+   `classifier.py` treats a candidate transition after 90 s as sufficient
+   singing evidence. A hermetic pure-class transcript with only class speech
+   and `candidate_transitions=[(703.956, 742.0)]` yields
+   `KIRTAN_AND_CLASS`, `HIGH`, `process_by_tool_6=True`. Require independent
+   singing or source-combination evidence before automatic routing; add this
+   negative regression.
+
+The Simhachalam marks differ by +7.04 s at singing end and +5.40 s at class
+start, so the claim of <=1.5 s accuracy does not hold for all five files.
+Check whether either proposed boundary removes audible content; route uncertain
+cases to review. Preserve the existing no-live-write benchmark procedure.
+After correcting the three blockers, rerun the five-file benchmark, Tool 6
+dry-runs, focused/full tests and CI, and report each class start as *first
+retained speech* separately from the later verse-introduction marker.
+
 ## Tool 5-to-7 transcription boundary — pending implementation (2026-09-24)
 
 The owner moved **full transcription** out of Tool 5. Tool 5 must classify
