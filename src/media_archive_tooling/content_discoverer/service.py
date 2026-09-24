@@ -350,7 +350,7 @@ class ContentDiscovererService:
                 candidate_transitions = self.acoustic_verifier.detect_candidate_transitions(
                     actual_audio,
                     total_duration=duration_sec,
-                    max_search_sec=min(duration_sec, 2400.0),
+                    max_search_sec=min(duration_sec, 2700.0),
                 )
             except Exception:
                 candidate_transitions = []
@@ -365,7 +365,7 @@ class ContentDiscovererService:
                 # Add targeted excerpts covering the transition zone from singing_end onwards in overlapping slices
                 for singing_end, speech_start in candidate_transitions[:2]:
                     trans_start = max(0.0, singing_end)
-                    max_trans_cover = min(duration_sec, max(speech_start + 45.0, singing_end + 130.0))
+                    max_trans_cover = min(duration_sec, max(speech_start + 60.0, singing_end + 180.0))
                     curr_t = trans_start
                     while curr_t < max_trans_cover:
                         w_end = min(duration_sec, curr_t + 45.0)
@@ -449,7 +449,12 @@ class ContentDiscovererService:
                 if raw_c_start > 0:
                     search_s = max(0.0, raw_c_start - 5.0)
                     search_e = min(dur, raw_c_start + 15.0)
-                    refined_onset = self.acoustic_verifier.find_speech_onset(actual_audio, search_s, search_e)
+                    refined_onset = self.acoustic_verifier.find_speech_onset(
+                        actual_audio,
+                        search_s,
+                        search_e,
+                        target_time=raw_c_start,
+                    )
                     if refined_onset is not None and abs(refined_onset - raw_c_start) <= 10.0:
                         result.cutter_proposal.class_start_seconds = refined_onset
                         result.cutter_proposal.class_range = (refined_onset, dur)

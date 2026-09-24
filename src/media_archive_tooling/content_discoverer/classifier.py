@@ -72,10 +72,12 @@ MAHA_MANTRA_PATTERNS = [
 
 SINGING_INDICATOR_PATTERNS = [
     r"\b\*dies\s+singing\*\b",
-    r"[\*\[\(]?(?:singing|music|singing\s+continues|applause)[\*\]\)]?",
+    r"(?:[\*\[\(](?:singing|music|singing\s+continues|applause)[\*\]\)]|[♪♫]|^\s*(?:singing|music|applause)\s*$)",
     r"\bsatsang\s+with\s+mooji\b",
     r"\b(i'?m\s+sorry\.?\s*){2,}",
     r"\b(thank\s+you\.?\s*){2,}",
+    r"\bki\s+jai\b",
+    r"\bvaisnava\b",
 ]
 
 SPOKEN_DISCOURSE_PATTERNS = [
@@ -237,29 +239,41 @@ class ContentClassifier:
         # 2. Canto patterns
         has_canto = bool(
             re.search(
-                r"\b(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+canto|canto\s+(?:\d+|[a-z]+))\b",
+                r"\b(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+(?:canto|kandron|kanto)|canto\s+(?:\d+|[a-z]+))\b",
                 text,
             )
         )
 
         # 3. Chapter patterns
         has_chapter = bool(
-            re.search(r"\bchapter\s+(?:\d+|[a-z]+)\b", text)
+            re.search(
+                r"\b(?:chapter\s+(?:\d+|[a-z]+)|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+chapter)\b",
+                text,
+            )
         )
 
         # 4. Verse / Text patterns
         has_verse = bool(
-            re.search(r"\b(?:verse|text)\s+(?:\d+|[a-z]+)\b", text)
+            re.search(
+                r"\b(?:(?:verse|text)\s+(?:\d+|[a-z]+)|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+(?:verse|text))\b",
+                text,
+            )
         )
 
         # 5. Scripture title patterns
         has_scripture = bool(
-            re.search(r"\b(?:srimad\s+bhagavatam|bhagavad\s+gita|caitanya\s+caritamrta)\b", text)
+            re.search(
+                r"\b(?:srimad[\s-]+bhagavatam|bhagavad[\s-]+gita|caitanya[\s-]+caritamrta|srimad[\s-]+bhagavata|gita|bhagavatam)\b",
+                text,
+            )
         )
 
         # 6. Combined chapter/canto and verse numbers, or reference citation (e.g. "It's 31... text 31", "1.19.31")
         has_citation = bool(
-            re.search(r"\b(?:it\s*['’]?s\s+|text\s+|verse\s+)?\d+[\s,\.:-]+(?:canto|chapter|text|verse|\d+)\b", text)
+            re.search(
+                r"\b(?:it\s*['’]?s\s+|text\s+|verse\s+)?(?:\d+|[a-z]+)[\s,\.:-]+(?:canto|chapter|text|verse|\d+)\b",
+                text,
+            )
         )
 
         # Match criteria:
@@ -638,7 +652,7 @@ class ContentClassifier:
         has_singing_evidence = (
             has_mantra_evidence
             or len(singing_ranges) >= 1
-            or (has_combination_clue and len(cand_transitions) >= 1 and cand_transitions[0][0] >= 150.0)
+            or (len(cand_transitions) >= 1 and cand_transitions[0][0] >= 90.0)
         )
 
         if has_singing_evidence and has_class_evidence:

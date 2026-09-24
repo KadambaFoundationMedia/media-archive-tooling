@@ -24,11 +24,12 @@ class AcousticBoundaryVerifier:
         self,
         audio_path: Path,
         total_duration: float,
-        max_search_sec: float = 2400.0,
+        max_search_sec: float = 2700.0,
+        min_sustained_sound: float = 90.0,
     ) -> List[Tuple[float, float]]:
         """Detect candidate transition gaps (singing_end, speech_start) across early timeline.
 
-        Continuous music (kirtan/bhajan) lacks speech pauses (>0.5s). When kirtan concludes,
+        Continuous music (kirtan/bhajan) lacks speech pauses (>0.3s). When kirtan concludes,
         the music ceases, producing the first silence event. A transition pause follows before
         spoken discourse commences with typical conversational pause cadence.
 
@@ -47,7 +48,7 @@ class AcousticBoundaryVerifier:
             "-v", "info",
             "-to", f"{search_dur:.3f}",
             "-i", str(audio_path),
-            "-af", "silencedetect=noise=-30dB:d=0.5",
+            "-af", "silencedetect=noise=-30dB:d=0.3",
             "-f", "null",
             "-",
         ]
@@ -56,7 +57,7 @@ class AcousticBoundaryVerifier:
             res = subprocess.run(
                 cmd,
                 capture_output=True,
-                timeout=45,
+                timeout=60,
                 check=False,
                 stdin=subprocess.DEVNULL,
             )
@@ -87,19 +88,14 @@ class AcousticBoundaryVerifier:
             return []
 
         candidates = []
-        # If the first silence in the recording occurs after at least 150s of sustained sound,
-        # it is a strong acoustic candidate for the end of singing.
-        first_silence = events[0]
-        if first_silence[0] >= 150.0:
-            singing_end = first_silence[0]
-            # Speech start is typically the end of the transition pause, where frequent pauses begin.
-            # Look for the last silence in the transition cluster (within 60s of singing_end).
-            speech_start = first_silence[1]
-            cluster_events = [ev for ev in events if ev[0] - singing_end <= 60.0]
-            if len(cluster_events) > 1:
-                # Find the silence preceding the speech onset (before the gap closes)
-                speech_start = cluster_events[-1][1]
-            candidates.append((round(singing_end, 3), round(speech_start, 3)))
+        for i, ev in enumerate(events):
+            prev_end = 0.0 if i == 0 else events[i - 1][1]
+            gap_before = ev[0] - prev_end
+            if gap_before >= min_sustained_sound:
+                singing_end = ev[0]
+                cluster = [e for e in events if 0.0 <= e[0] - singing_end <= 60.0]
+                speech_start = cluster[-1][1] if len(cluster) > 1 else ev[1]
+                candidates.append((round(singing_end, 3), round(speech_start, 3)))
 
         return candidates
 
@@ -183,6 +179,7 @@ class AcousticBoundaryVerifier:
         search_start: float,
         search_end: float,
         noise_threshold: str = "-30dB",
+        target_time: Optional[float] = None,
     ) -> Optional[float]:
         """Find the exact speech onset (end of silence immediately preceding speech) in a search window."""
         if not self.ffmpeg_bin or not audio_path.exists() or search_end <= search_start:
@@ -229,9 +226,12 @@ class AcousticBoundaryVerifier:
 
         abs_ends = [search_start + rel for rel in silence_ends]
         valid = [e for e in abs_ends if e < search_end - 0.2]
-        if valid:
-            return round(valid[-1], 3)
-        return round(abs_ends[0], 3)
+        if not valid:
+            valid = abs_ends
+
+        ref_time = target_time if target_time is not None else search_start
+        best = min(valid, key=lambda e: abs(e - ref_time))
+        return round(best, 3)
 
 
 class FakeAcousticBoundaryVerifier:
@@ -254,7 +254,8 @@ class FakeAcousticBoundaryVerifier:
         self,
         audio_path: Path,
         total_duration: float,
-        max_search_sec: float = 2400.0,
+        max_search_sec: float = 2700.0,
+        min_sustained_sound: float = 90.0,
     ) -> List[Tuple[float, float]]:
         return self.candidate_transitions
 
@@ -278,6 +279,7 @@ class FakeAcousticBoundaryVerifier:
         search_start: float,
         search_end: float,
         noise_threshold: str = "-30dB",
+        target_time: Optional[float] = None,
     ) -> Optional[float]:
         if not self.should_verify:
             return None
