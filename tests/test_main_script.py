@@ -1875,6 +1875,61 @@ def test_59_streaming_discovery_incremental_processing(tmp_path, env_setup):
     ]
 
 
+def test_61_discovery_bounds_bookkeeping_with_overlapping_targets(tmp_path, env_setup):
+    """Discovery deduplicates overlapping roots without retaining every media path."""
+    from media_archive_tooling.orchestrator.discovery import iter_discover_media_targets
+
+    parent = tmp_path / "archive"
+    child = parent / "collection"
+    child.mkdir(parents=True)
+    media = [child / f"recording_{i:03d}.mp3" for i in range(75)]
+    for path in media:
+        path.write_text("audio")
+    for i in range(80):
+        (child / f"other_{i:03d}.zip").write_text("unsupported")
+
+    yielded = list(iter_discover_media_targets([media[0], child, parent, child]))
+    assert len(yielded) == len(media)
+    assert len(set(yielded)) == len(media)
+
+    svc = env_setup["service"]
+    with patch.object(svc, "_process_single_file", return_value=MagicMock(status=FileExecutionStatus.UNCHANGED)):
+        summary = svc.run([parent])
+    assert summary.total_discovered == len(media)
+    assert summary.skipped_unsupported == 80
+    assert len(summary.skipped_files) == 50
+
+
+def test_62_tool5_revalidates_after_file_hash_checkpoint(env_setup):
+    """A stable file hash must not bypass Tool 5's model/config-aware cache."""
+    from media_archive_tooling.content_discoverer.models import (
+        ConfidenceLevel, ContentDiscoveryResult, ContentType, MantraType,
+    )
+    from media_archive_tooling.orchestrator.scratch import compute_file_sha256
+
+    svc = env_setup["service"]
+    media_path = env_setup["media_dir"] / "recording.mp3"
+    media_path.write_text("audio")
+    tracking_id = "checkpoint_tool5_test"
+    result = ContentDiscoveryResult(
+        tracking_id=tracking_id,
+        classification=ContentType.CLASS,
+        confidence=ConfidenceLevel.HIGH,
+        mantra_type=MantraType.NONE,
+        transcript_path="cached-transcript.json",
+        transcript_sha256="sha",
+        input_sha256=compute_file_sha256(media_path),
+        source_path=str(media_path),
+    )
+    svc.tool5_service = MagicMock()
+    svc.tool5_service.discover_content.return_value = result
+
+    first, _ = svc._run_tool_5(media_path, tracking_id)
+    second, _ = svc._run_tool_5(media_path, tracking_id)
+    assert first.success and second.success
+    assert svc.tool5_service.discover_content.call_count == 2
+
+
 def test_60_fresh_remote_review_and_metadata_sync(env_setup):
     """60. Live Tool 2 discovers new remote candidates; Tool 4 syncs metadata after earlier SYNCED (R-056)."""
     from media_archive_tooling.media_db_reviewer.models import MediaCandidate, MediaDatabaseReviewResult, ReviewDecision

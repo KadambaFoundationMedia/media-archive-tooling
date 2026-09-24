@@ -79,40 +79,57 @@ def iter_discover_media_targets(
     Yields media target paths incrementally as directories are traversed,
     preserving deduplication and avoiding materializing the complete archive in memory.
     """
-    seen: Set[Path] = set()
+    # Track only the explicit CLI targets, not every file in a potentially
+    # multi-terabyte archive. Overlapping directory targets are pruned below.
+    visited_dirs: List[Path] = []
+    yielded_explicit_files: Set[Path] = set()
+
+    def covered_by_visited_dir(path: Path) -> bool:
+        return any(path == root or path.is_relative_to(root) for root in visited_dirs)
 
     for target in targets:
         p = Path(target).expanduser().resolve()
         if p.is_file():
+            if p in yielded_explicit_files or covered_by_visited_dir(p):
+                continue
             if is_ignored_file(p):
                 continue
             if is_supported_media_file(p):
                 if registry is not None and hasattr(registry, "is_video_audio_derivative") and registry.is_video_audio_derivative(str(p)):
                     continue
-                if p not in seen:
-                    seen.add(p)
-                    yield p
+                yielded_explicit_files.add(p)
+                yield p
             else:
                 if unsupported_callback:
                     unsupported_callback(p)
         elif p.is_dir():
+            if covered_by_visited_dir(p):
+                continue
             for root, dirs, files in os.walk(p, followlinks=follow_symlinks):
                 root_path = Path(root)
                 # Filter out hidden or ignored directories
-                dirs[:] = sorted([d for d in dirs if not d.startswith(".")])
+                dirs[:] = sorted([
+                    d for d in dirs
+                    if not d.startswith(".")
+                    and not any((root_path / d).resolve() == prior for prior in visited_dirs)
+                ])
                 for fname in sorted(files):
-                    file_path = (root_path / fname).resolve()
+                    entry_path = root_path / fname
+                    if entry_path.is_symlink() and not follow_symlinks:
+                        continue
+                    file_path = entry_path.resolve()
+                    if file_path in yielded_explicit_files or covered_by_visited_dir(file_path):
+                        continue
                     if is_ignored_file(file_path):
                         continue
                     if is_supported_media_file(file_path):
                         if registry is not None and hasattr(registry, "is_video_audio_derivative") and registry.is_video_audio_derivative(str(file_path)):
                             continue
-                        if file_path not in seen:
-                            seen.add(file_path)
-                            yield file_path
+                        yield file_path
                     else:
                         if unsupported_callback:
                             unsupported_callback(file_path)
+            visited_dirs.append(p)
 
 
 def discover_media_targets(

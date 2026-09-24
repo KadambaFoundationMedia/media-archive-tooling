@@ -7,10 +7,33 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `READY_FOR_REVIEW` — merge held pending Tool 5–7 transcription workflow decision
 
 Implementation branch: `main-tooling-script-implementation`
 Implementation PR: https://github.com/KadambaFoundationMedia/media-archive-tooling/pull/60
+
+## Planner review follow-up — 2026-09-24
+
+The planner made two small corrections on the builder branch and informed the
+builder through this status entry:
+
+- Discovery now keeps only explicit target paths for deduplication, prunes
+  overlapping directory roots, and retains at most 50 unsupported-file paths
+  while counting all skips. It no longer accumulates one path per archive file.
+- The Main Script no longer replays a Tool 5 classification solely because the
+  file hash matches an orchestration checkpoint. Tool 5 is called again and
+  its own model/config-aware transcript cache decides whether to reuse audio
+  analysis, avoiding stale classification after a Tool 5 update.
+
+Regression tests 61 and 62 cover these cases. Focused Main Script suite:
+62 passed. Full local suite: 477 passed, with two sandbox-only permission
+failures writing the repository's `.renamer` directory; GitHub CI is the
+authoritative full-suite check. No media files or Baserow rows were changed.
+
+The owner has proposed moving full transcription from Tool 5 to Tool 7 so
+combination recordings are cut first. The planner has requested clarification
+on class-only versus kirtan transcription. PR #60 must not be merged until
+the phase boundary and necessary Main Script integration change are settled.
 
 ## Independent planner review of PR #60 — 2026-09-23 [RESOLVED 2026-09-24]
 

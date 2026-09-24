@@ -331,10 +331,12 @@ class MainToolingScriptService:
             exit_code=0,
         )
 
-        unsupported_files: List[Path] = []
+        unsupported_sample: List[Path] = []
 
         def on_unsupported(p: Path) -> None:
-            unsupported_files.append(p)
+            summary.skipped_unsupported += 1
+            if len(unsupported_sample) < 50:
+                unsupported_sample.append(p)
 
         media_stream = iter_discover_media_targets(
             targets=targets,
@@ -378,8 +380,7 @@ class MainToolingScriptService:
         if has_unexpected_failure:
             summary.exit_code = 2
 
-        summary.skipped_unsupported = len(unsupported_files)
-        summary.skipped_files = [str(p) for p in unsupported_files[:50]]
+        summary.skipped_files = [str(p) for p in unsupported_sample]
 
         self.logger.info(
             "TARGETS_DISCOVERED",
@@ -390,10 +391,10 @@ class MainToolingScriptService:
             },
         )
 
-        if unsupported_files:
+        if summary.skipped_unsupported:
             self.reporter.report_skipped_unsupported(
-                len(unsupported_files),
-                unsupported_files,
+                summary.skipped_unsupported,
+                unsupported_sample,
             )
 
         self.reporter.report_summary(summary)
@@ -431,27 +432,9 @@ class MainToolingScriptService:
             return t5_stage, None
 
         input_sha256 = compute_file_sha256(path)
-        cp = self.registry.get_stage_checkpoint(tracking_id, StageName.TOOL_5_CONTENT_DISCOVERY.value)
-        if cp and cp.get("status") == "COMPLETED" and cp.get("input_sha256") == input_sha256:
-            cr_rec = self.registry.get_content_review(tracking_id)
-            if cr_rec and cr_rec.get("result"):
-                from ..content_discoverer.models import ContentDiscoveryResult
-                content_res = ContentDiscoveryResult.model_validate(cr_rec["result"])
-                boundary_str = f" | Boundary: {content_res.cutter_proposal.suggested_cut_points}" if content_res.cutter_proposal else ""
-                route_str = " -> process_by_tool_6" if content_res.process_by_tool_6 else ""
-                summary_str = (
-                    f"Tool 5 — Content Discovery: {content_res.classification.value} ({content_res.confidence.value}) | "
-                    f"Mantra: {content_res.mantra_type.value}{boundary_str}{route_str} (resumed from checkpoint)"
-                )
-                t5_stage = StageResult(
-                    stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
-                    success=not content_res.review_required,
-                    summary=summary_str,
-                    details=cp.get("details") or {},
-                )
-                self.logger.info("STAGE_SKIPPED_CHECKPOINT", tool="tool_5", file_path=path, tracking_id=tracking_id, details=t5_stage.details)
-                return t5_stage, content_res
-
+        # Tool 5 owns its transcript cache and validates model/configuration
+        # before reuse. A file-hash-only orchestration checkpoint would return
+        # stale classifications after Tool 5 settings or logic change.
         try:
             def report_progress(stage: str, elapsed_seconds: float, status: str) -> None:
                 self.reporter.report_tool5_progress(stage, elapsed_seconds, status)
