@@ -63,6 +63,11 @@ from media_archive_tooling.renamer.models import (
 from media_archive_tooling.renamer.registry.registry import LocalRegistry
 from media_archive_tooling.review_portal.app import app as portal_app, configure_review_context
 
+pytestmark = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="ffmpeg binary is required for Tool 6 file cutter tests",
+)
+
 
 def make_audio_file(
     path: Path,
