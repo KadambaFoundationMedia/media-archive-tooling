@@ -10,6 +10,25 @@ update its examples and overview before marking the build ready for review.
 
 ## Start / resume command
 
+### Treat the build as a persistent `/goal`
+
+For every `BUILD TOOL <number>` or `BUILD MAIN SCRIPT` request, treat the
+**entire accepted build plan** as one persistent `/goal`, not a one-turn task
+or a sequence of optional milestones. If the Builder environment offers a
+literal `/goal` feature, register that objective at startup and continue it
+until the plan's acceptance criteria and repository handoff are complete.
+If it does not, follow the same persistent behavior and report that the
+literal feature was unavailable; do not claim it was used.
+
+Continue through implementation, focused/full tests, practical fixture
+checks, self-review against the plan, corrections, status updates, commits,
+push, PR, and required CI. A progress update or passing partial test suite is
+not completion. Stop only for an actual unresolved owner-policy question,
+external permission/credential failure, or another blocker that prevents
+meaningful in-scope work; record the precise blocker in the tool status file
+and continue unaffected work where safe. Never use `/goal` persistence to
+broaden permission for live archive or Baserow mutations beyond the plan.
+
 ### Numbered tools
 
 When the user says:
