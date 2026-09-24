@@ -128,6 +128,7 @@ class MainToolingScriptService:
         travel_service: Optional[TravelScheduleReviewService] = None,
         tool4_service: Optional[MediaDatabaseUpdaterService] = None,
         tool5_service: Optional[Any] = None,
+        tool6_service: Optional[Any] = None,
         workflow: WorkflowType = WorkflowType.ALL,
         dry_run: bool = False,
         verbose: bool = False,
@@ -144,6 +145,7 @@ class MainToolingScriptService:
         self.travel_service = travel_service
         self.tool4_service = tool4_service
         self.tool5_service = tool5_service
+        self.tool6_service = tool6_service
         self.workflow = workflow
         self.dry_run = dry_run
         self.verbose = verbose
@@ -505,6 +507,52 @@ class MainToolingScriptService:
             )
             return t5_stage, None
 
+    def _run_tool_6(
+        self,
+        tracking_id: str,
+        content_res: Any,
+    ) -> Tuple[StageResult, Optional[Any]]:
+        """Execute Tool 6 File Cutter when eligible."""
+        if self.tool6_service is None:
+            t6_stage = StageResult(
+                stage_name=StageName.TOOL_6_FILE_CUTTER,
+                success=True,
+                summary="Tool 6 — Skipped: Service not configured",
+            )
+            return t6_stage, None
+
+        self.logger.info("STAGE_START", tool="tool_6", tracking_id=tracking_id)
+        try:
+            cut_res = self.tool6_service.cut_file(
+                tracking_id,
+                dry_run=self.dry_run,
+            )
+            s_fn = Path(cut_res.singing_output_path or "").name
+            c_fn = Path(cut_res.class_output_path or "").name
+            summary_str = (
+                f"Tool 6 — File Cutter: Split into singing ({s_fn}) and class ({c_fn}) at {cut_res.cut_point_seconds:.2f}s"
+                if cut_res.success else
+                f"Tool 6 — File Cutter: Flagged for review ({cut_res.review_reason or 'Needs review'})"
+            )
+            t6_stage = StageResult(
+                stage_name=StageName.TOOL_6_FILE_CUTTER,
+                success=cut_res.success,
+                summary=summary_str,
+                details=cut_res.model_dump() if hasattr(cut_res, "model_dump") else dict(cut_res),
+            )
+            self.logger.info("STAGE_COMPLETE", tool="tool_6", tracking_id=tracking_id, details=t6_stage.details)
+            return t6_stage, cut_res
+        except Exception as e:
+            err_msg = f"Tool 6 file cut error: {e}"
+            self.logger.error("TOOL_6_ERROR", tool="tool_6", tracking_id=tracking_id, details={"error": err_msg})
+            t6_stage = StageResult(
+                stage_name=StageName.TOOL_6_FILE_CUTTER,
+                success=False,
+                summary=f"Tool 6 — Error: {err_msg}",
+                error=err_msg,
+            )
+            return t6_stage, None
+
     def _process_single_file(self, file_path: Path) -> FileRunResult:
         """Execute the continuous Phase A pipeline on an individual media file."""
         file_path = file_path.resolve()
@@ -590,11 +638,38 @@ class MainToolingScriptService:
                     stage_results.append(t5_stage)
                     self.reporter.report_stage_result(t5_stage)
 
+                    cut_res = None
+                    if content_res is None and self.tool6_service is not None:
+                        crev_rec = self.registry.get_content_review(tracking_id)
+                        if crev_rec:
+                            from ..content_discoverer.models import ContentDiscoveryResult
+                            try:
+                                if crev_rec.get("result"):
+                                    content_res = ContentDiscoveryResult.model_validate(crev_rec["result"])
+                                else:
+                                    content_res = ContentDiscoveryResult.model_validate(crev_rec)
+                            except Exception:
+                                content_res = None
+
+                    if (
+                        self.tool6_service is not None
+                        and content_res is not None
+                        and getattr(content_res, "process_by_tool_6", False)
+                        and not getattr(content_res, "review_required", False)
+                    ):
+                        t6_stage, cut_res = self._run_tool_6(tracking_id, content_res)
+                        stage_results.append(t6_stage)
+                        self.reporter.report_stage_result(t6_stage)
+
                     status = FileExecutionStatus.DRY_RUN if self.dry_run else FileExecutionStatus.COMPLETED
                     if content_res and content_res.review_required:
                         status = FileExecutionStatus.REVIEW_REQUIRED
                         if content_res.review_reason:
                             review_reasons.append(content_res.review_reason)
+                    if cut_res and not cut_res.success and cut_res.review_required:
+                        status = FileExecutionStatus.REVIEW_REQUIRED
+                        if cut_res.review_reason and cut_res.review_reason not in review_reasons:
+                            review_reasons.append(cut_res.review_reason)
 
                     return FileRunResult(
                         target_path=str(file_path),
@@ -606,6 +681,7 @@ class MainToolingScriptService:
                         review_reasons=review_reasons,
                         stage_results=stage_results,
                         content_discovery_result=content_res,
+                        file_cutter_result=cut_res,
                     )
 
                 # -------------------------------------------------------------
@@ -1014,6 +1090,7 @@ class MainToolingScriptService:
                     self.logger.info("STAGE_COMPLETE", tool="tool_4", file_path=file_path, tracking_id=tracking_id, details=t4_stage.details)
 
                     content_res = None
+                    cut_res = None
                     if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
                         t5_stage, content_res = self._run_tool_5(file_path, tracking_id, phase1_context=prop_final)
                         stage_results.append(t5_stage)
@@ -1022,6 +1099,32 @@ class MainToolingScriptService:
                             status = FileExecutionStatus.REVIEW_REQUIRED
                             if content_res.review_reason and content_res.review_reason not in review_reasons:
                                 review_reasons.append(content_res.review_reason)
+
+                    if content_res is None and self.workflow == WorkflowType.ALL and self.tool6_service is not None:
+                        crev_rec = self.registry.get_content_review(tracking_id)
+                        if crev_rec:
+                            from ..content_discoverer.models import ContentDiscoveryResult
+                            try:
+                                if crev_rec.get("result"):
+                                    content_res = ContentDiscoveryResult.model_validate(crev_rec["result"])
+                                else:
+                                    content_res = ContentDiscoveryResult.model_validate(crev_rec)
+                            except Exception:
+                                content_res = None
+
+                    if (
+                        self.tool6_service is not None
+                        and content_res is not None
+                        and getattr(content_res, "process_by_tool_6", False)
+                        and not getattr(content_res, "review_required", False)
+                    ):
+                        t6_stage, cut_res = self._run_tool_6(tracking_id, content_res)
+                        stage_results.append(t6_stage)
+                        self.reporter.report_stage_result(t6_stage)
+                        if cut_res and not cut_res.success and cut_res.review_required:
+                            status = FileExecutionStatus.REVIEW_REQUIRED
+                            if cut_res.review_reason and cut_res.review_reason not in review_reasons:
+                                review_reasons.append(cut_res.review_reason)
 
                     return FileRunResult(
                         target_path=str(file_path),
@@ -1036,6 +1139,7 @@ class MainToolingScriptService:
                         tool4_operation=tool4_operation,
                         tool4_fields=tool4_fields,
                         content_discovery_result=content_res,
+                        file_cutter_result=cut_res,
                     )
 
                 # Live Mode execution
@@ -1053,13 +1157,40 @@ class MainToolingScriptService:
                     self.logger.info("STAGE_COMPLETE", tool="tool_4", file_path=file_path, tracking_id=tracking_id, details=t4_stage.details)
 
                     content_res = None
+                    cut_res = None
                     if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
-                        t5_stage, content_res = self._run_tool_5(file_path, tracking_id)
+                        t5_stage, content_res = self._run_tool_5(file_path, tracking_id, phase1_context=prop_final)
                         stage_results.append(t5_stage)
                         self.reporter.report_stage_result(t5_stage)
                         if content_res and content_res.review_required:
                             if content_res.review_reason and content_res.review_reason not in prop_final.review_reasons:
                                 prop_final.review_reasons.append(content_res.review_reason)
+
+                    if content_res is None and self.workflow == WorkflowType.ALL and self.tool6_service is not None:
+                        crev_rec = self.registry.get_content_review(tracking_id)
+                        if crev_rec:
+                            from ..content_discoverer.models import ContentDiscoveryResult
+                            try:
+                                if crev_rec.get("result"):
+                                    content_res = ContentDiscoveryResult.model_validate(crev_rec["result"])
+                                else:
+                                    content_res = ContentDiscoveryResult.model_validate(crev_rec)
+                            except Exception:
+                                content_res = None
+
+                    if (
+                        self.tool6_service is not None
+                        and content_res is not None
+                        and getattr(content_res, "process_by_tool_6", False)
+                        and not getattr(content_res, "review_required", False)
+                    ):
+                        t6_stage, cut_res = self._run_tool_6(tracking_id, content_res)
+                        stage_results.append(t6_stage)
+                        self.reporter.report_stage_result(t6_stage)
+                        if cut_res and not cut_res.success and cut_res.review_required:
+                            status = FileExecutionStatus.REVIEW_REQUIRED
+                            if cut_res.review_reason and cut_res.review_reason not in prop_final.review_reasons:
+                                prop_final.review_reasons.append(cut_res.review_reason)
 
                     return FileRunResult(
                         target_path=str(file_path),
@@ -1071,6 +1202,7 @@ class MainToolingScriptService:
                         review_reasons=prop_final.review_reasons,
                         stage_results=stage_results,
                         content_discovery_result=content_res,
+                        file_cutter_result=cut_res,
                     )
 
                 # Execute commit through accepted RenameCommitService boundary (R-003)
@@ -1266,6 +1398,7 @@ class MainToolingScriptService:
                 self.logger.info("STAGE_COMPLETE", tool="tool_4", file_path=current_path, tracking_id=tracking_id, details=t4_stage.details)
 
                 content_res = None
+                cut_res = None
                 if self.workflow == WorkflowType.ALL and self.tool5_service is not None:
                     t5_stage, content_res = self._run_tool_5(current_path, tracking_id, phase1_context=prop_final)
                     stage_results.append(t5_stage)
@@ -1275,12 +1408,44 @@ class MainToolingScriptService:
                         if content_res.review_reason and content_res.review_reason not in review_reasons:
                             review_reasons.append(content_res.review_reason)
 
+                if content_res is None and self.workflow == WorkflowType.ALL and self.tool6_service is not None:
+                    crev_rec = self.registry.get_content_review(tracking_id)
+                    if crev_rec:
+                        from ..content_discoverer.models import ContentDiscoveryResult
+                        try:
+                            if crev_rec.get("result"):
+                                content_res = ContentDiscoveryResult.model_validate(crev_rec["result"])
+                            else:
+                                content_res = ContentDiscoveryResult.model_validate(crev_rec)
+                        except Exception:
+                            content_res = None
+
+                if (
+                    self.tool6_service is not None
+                    and content_res is not None
+                    and getattr(content_res, "process_by_tool_6", False)
+                    and not getattr(content_res, "review_required", False)
+                ):
+                    t6_stage, cut_res = self._run_tool_6(tracking_id, content_res)
+                    stage_results.append(t6_stage)
+                    self.reporter.report_stage_result(t6_stage)
+                    if cut_res and not cut_res.success and cut_res.review_required:
+                        status = FileExecutionStatus.REVIEW_REQUIRED
+                        if cut_res.review_reason and cut_res.review_reason not in review_reasons:
+                            review_reasons.append(cut_res.review_reason)
+
+                final_fn = current_path.name
+                final_p = str(current_path)
+                if cut_res and cut_res.success and cut_res.class_output_path:
+                    final_fn = Path(cut_res.class_output_path).name
+                    final_p = cut_res.class_output_path
+
                 return FileRunResult(
                     target_path=str(file_path),
                     tracking_id=tracking_id,
                     original_filename=orig_filename,
-                    final_filename=current_path.name,
-                    final_path=str(current_path),
+                    final_filename=final_fn,
+                    final_path=final_p,
                     status=status,
                     review_reasons=review_reasons,
                     stage_results=stage_results,
@@ -1290,6 +1455,7 @@ class MainToolingScriptService:
                     tool4_sync_status=tool4_sync_status,
                     tool4_live_row=tool4_live_row,
                     content_discovery_result=content_res,
+                    file_cutter_result=cut_res,
                 )
 
             except Exception as e:
@@ -1346,6 +1512,7 @@ def create_main_tooling_service(
     travel_service: Optional[TravelScheduleReviewService] = None,
     tool4_service: Optional[MediaDatabaseUpdaterService] = None,
     tool5_service: Optional[Any] = None,
+    tool6_service: Optional[Any] = None,
     travel_schedule_path: Optional[Union[str, Path]] = None,
 ) -> MainToolingScriptService:
     """Factory creating a fully wired MainToolingScriptService with all dependencies."""
@@ -1423,6 +1590,14 @@ def create_main_tooling_service(
         from ..content_discoverer.service import ContentDiscovererService
         tool5_service = ContentDiscovererService(registry=registry)
 
+    # Tool 6 File Cutter
+    if tool6_service is None:
+        from ..file_cutter.service import FileCutterService
+        tool6_service = FileCutterService(
+            registry=registry,
+            media_db_service=tool4_service,
+        )
+
     return MainToolingScriptService(
         registry=registry,
         logger=logger,
@@ -1432,6 +1607,7 @@ def create_main_tooling_service(
         travel_service=travel_service,
         tool4_service=tool4_service,
         tool5_service=tool5_service,
+        tool6_service=tool6_service,
         workflow=wf,
         dry_run=dry_run,
         verbose=verbose,

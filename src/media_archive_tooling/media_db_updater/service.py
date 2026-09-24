@@ -201,6 +201,12 @@ class MediaDatabaseUpdaterService:
         # Retain prior field approvals, association approvals, and review notes if present
         prior_sync = self.registry.get_media_db_sync(tracking_id)
         prior_req = prior_sync.get("request") if prior_sync else None
+        if isinstance(prior_req, str):
+            try:
+                prior_req = json.loads(prior_req)
+            except Exception:
+                prior_req = None
+
         field_approvals = {}
         association_approval = None
         reviewer_notes = None
@@ -214,6 +220,143 @@ class MediaDatabaseUpdaterService:
         eff_current_fn = projected_filename or file_rec["current_filename"]
         eff_current_path = projected_path or file_rec["current_path"]
 
+        # Preserve split-specific metadata from prior requests and file_splits
+        split_child = self.registry.get_file_split_by_child(tracking_id)
+        split_source = self.registry.get_file_split_by_source(tracking_id)
+        is_singing_split = bool(split_child and split_child.get("singing_tracking_id") == tracking_id)
+        is_class_split = bool(
+            (split_child and split_child.get("class_tracking_id") == tracking_id)
+            or (split_source and split_source.get("source_tracking_id") == tracking_id)
+        )
+
+        eff_audio_file_path = None
+        if prior_req and prior_req.get("audio_file_path"):
+            eff_audio_file_path = prior_req.get("audio_file_path")
+        elif is_class_split and split_source:
+            if file_rec.get("current_path", "").lower().endswith((".mp4", ".mov", ".mkv", ".avi")):
+                eff_audio_file_path = split_source.get("class_path")
+
+        eff_what_category = what_data.get("category")
+        if prior_req and prior_req.get("what_category"):
+            eff_what_category = prior_req.get("what_category")
+        elif is_singing_split:
+            eff_what_category = "Kirtan"
+
+        eff_what_val = what_data.get("selected_value") or file_rec.get("what_val")
+        if prior_req and prior_req.get("what_val"):
+            eff_what_val = prior_req.get("what_val")
+
+        eff_t2_decision = t2_decision
+        eff_selected_row_id = selected_row_id
+
+        if is_singing_split:
+            eff_t2_decision = "NEW_MEDIA_CANDIDATE"
+            eff_selected_row_id = None
+        else:
+            if not eff_t2_decision or eff_t2_decision == "DATABASE_UNAVAILABLE":
+                if prior_req and prior_req.get("tool2_decision"):
+                    eff_t2_decision = prior_req.get("tool2_decision")
+                    eff_selected_row_id = eff_selected_row_id or prior_req.get("selected_media_row_id")
+
+        # Resolve source record if tracking_id is a split child
+        source_rec = None
+        if split_child and split_child.get("source_tracking_id"):
+            source_rec = self.registry.get_file(split_child["source_tracking_id"])
+
+        src_parser_res = (source_rec.get("parser_result") or {}) if source_rec else {}
+        src_when = src_parser_res.get("when") or {}
+        src_where = src_parser_res.get("where") or {}
+        src_context = src_parser_res.get("context") or {}
+
+        # Effective when fields
+        eff_when_val = when_data.get("selected_value") or file_rec.get("when_val")
+        if not eff_when_val and prior_req:
+            eff_when_val = prior_req.get("when_val")
+        if not eff_when_val and src_when:
+            eff_when_val = src_when.get("selected_value") or (source_rec.get("when_val") if source_rec else None)
+
+        eff_when_state = when_data.get("state")
+        if not eff_when_state and prior_req:
+            eff_when_state = prior_req.get("when_state")
+        if not eff_when_state and src_when:
+            eff_when_state = src_when.get("state")
+
+        eff_when_prov = when_prov
+        if not eff_when_prov and prior_req:
+            eff_when_prov = prior_req.get("when_provenance")
+        if not eff_when_prov and src_when:
+            eff_when_prov = src_when.get("evidence") or src_when.get("provenance")
+
+        # Effective what fields
+        eff_what_state = what_data.get("state")
+        if not eff_what_state and prior_req:
+            eff_what_state = prior_req.get("what_state")
+        if not eff_what_state and is_singing_split:
+            eff_what_state = "exact"
+
+        eff_what_prov = what_prov
+        if not eff_what_prov and prior_req:
+            eff_what_prov = prior_req.get("what_provenance")
+
+        eff_what_verse = what_data.get("verse")
+        if not eff_what_verse and prior_req:
+            eff_what_verse = prior_req.get("what_verse")
+
+        # Effective where fields
+        eff_where_val = file_rec.get("where_val")
+        if not eff_where_val and prior_req:
+            eff_where_val = prior_req.get("where_val")
+        if not eff_where_val and source_rec:
+            eff_where_val = source_rec.get("where_val")
+
+        eff_where_place = where_data.get("place_location")
+        if not eff_where_place and prior_req:
+            eff_where_place = prior_req.get("where_place")
+        if not eff_where_place and src_where:
+            eff_where_place = src_where.get("place_location")
+
+        eff_where_country = country_name
+        if not eff_where_country and prior_req:
+            eff_where_country = prior_req.get("where_country")
+        if not eff_where_country and src_where:
+            raw_c = src_where.get("country")
+            raw_i = src_where.get("country_iso2")
+            if raw_c:
+                clean_sc = str(raw_c).strip()
+                eff_where_country = get_country_name_for_iso(clean_sc) if len(clean_sc) == 2 else clean_sc
+            elif raw_i:
+                eff_where_country = get_country_name_for_iso(str(raw_i).strip())
+
+        eff_where_country_iso = where_data.get("country_iso2")
+        if not eff_where_country_iso and prior_req:
+            eff_where_country_iso = prior_req.get("where_country_iso")
+        if not eff_where_country_iso and src_where:
+            eff_where_country_iso = src_where.get("country_iso2")
+
+        eff_where_state = where_data.get("state")
+        if not eff_where_state and prior_req:
+            eff_where_state = prior_req.get("where_state")
+        if not eff_where_state and src_where:
+            eff_where_state = src_where.get("state")
+
+        eff_where_prov = where_prov
+        if not eff_where_prov and prior_req:
+            eff_where_prov = prior_req.get("where_provenance")
+        if not eff_where_prov and src_where:
+            eff_where_prov = src_where.get("evidence") or src_where.get("provenance")
+
+        eff_who_val = parser_res.get("who") or file_rec.get("who_val")
+        if not eff_who_val and prior_req:
+            eff_who_val = prior_req.get("who_val")
+        if not eff_who_val and source_rec:
+            eff_who_val = src_parser_res.get("who") or source_rec.get("who_val")
+
+        eff_parent_ctx = parent_ctx
+        if not eff_parent_ctx and prior_req:
+            eff_parent_ctx = prior_req.get("parent_folder_context")
+        if not eff_parent_ctx and src_context:
+            eff_parent_ctx = src_context.get("parent_folder")
+
         return MediaDbSyncRequest(
             tracking_id=tracking_id,
             current_filename=eff_current_fn,
@@ -222,29 +365,30 @@ class MediaDatabaseUpdaterService:
             original_path=file_rec.get("original_path"),
             previous_filename=previous_fn or None,
             previous_path=previous_path or None,
+            audio_file_path=eff_audio_file_path,
             request_id=req_id,
             request_fingerprint=req_fingerprint,
             table_id=table_id,
-            when_val=when_data.get("selected_value") or file_rec.get("when_val"),
-            when_state=when_data.get("state"),
-            when_provenance=when_prov,
-            what_val=what_data.get("selected_value") or file_rec.get("what_val"),
-            what_category=what_data.get("category"),
-            what_verse=what_data.get("verse"),
-            what_state=what_data.get("state"),
-            what_provenance=what_prov,
-            who_val=parser_res.get("who") or file_rec.get("who_val"),
-            where_val=file_rec.get("where_val"),
-            where_place=where_data.get("place_location"),
-            where_country=country_name,
-            where_country_iso=where_data.get("country_iso2"),
-            where_state=where_data.get("state"),
-            where_provenance=where_prov,
-            parent_folder_context=parent_ctx,
-            tool2_decision=t2_decision,
+            when_val=eff_when_val,
+            when_state=eff_when_state,
+            when_provenance=eff_when_prov,
+            what_val=eff_what_val,
+            what_category=eff_what_category,
+            what_verse=eff_what_verse,
+            what_state=eff_what_state,
+            what_provenance=eff_what_prov,
+            who_val=eff_who_val,
+            where_val=eff_where_val,
+            where_place=eff_where_place,
+            where_country=eff_where_country,
+            where_country_iso=eff_where_country_iso,
+            where_state=eff_where_state,
+            where_provenance=eff_where_prov,
+            parent_folder_context=eff_parent_ctx,
+            tool2_decision=eff_t2_decision,
             tool2_timestamp=t2_timestamp,
             tool2_database_state=t2_db_state,
-            selected_media_row_id=selected_row_id,
+            selected_media_row_id=eff_selected_row_id,
             association_approval=association_approval,
             tool3_decision=t3_rec.get("decision") if t3_rec else None,
             tool3_evidence=t3_rec.get("result") if t3_rec else None,

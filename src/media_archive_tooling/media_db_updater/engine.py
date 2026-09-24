@@ -804,6 +804,21 @@ class MediaDatabaseUpdateEngine:
                 diagnostic_notes=["Intended field 'media_archive_path' missing from schema"],
             )
 
+        # 7.1 audio_file_path (Video-derived class audio)
+        if request.audio_file_path:
+            af_field = fields_by_name.get("audio_file_path")
+            if af_field and af_field.get("type") in ("text", "long_text", "url"):
+                diffs.append(FieldDiff(field_name="audio_file_path", old_value=None, new_value=request.audio_file_path, action=FieldAction.SET))
+            else:
+                conflicts.append("Target column 'audio_file_path' is missing or incompatible in schema; class audio path left pending review/sync")
+                diffs.append(FieldDiff(
+                    field_name="audio_file_path",
+                    old_value=None,
+                    new_value=request.audio_file_path,
+                    action=FieldAction.CONFLICT,
+                    details="audio_file_path column missing or incompatible in live schema",
+                ))
+
         # 8. Notes
         test_marker = None
         if ALPHA_BETA_TEST_MODE and getattr(request, "is_test_row", True):
@@ -1036,6 +1051,25 @@ class MediaDatabaseUpdateEngine:
             diffs.append(FieldDiff(field_name="media_archive_path", old_value=curr_path, new_value=request.current_path, action=FieldAction.SET))
         if fn_needs_update and "filename" in fields_by_name:
             diffs.append(FieldDiff(field_name="Filename", old_value=curr_fn, new_value=request.current_filename, action=FieldAction.SET))
+
+        # 1.1 audio_file_path (Video-derived class audio)
+        if request.audio_file_path:
+            af_field = fields_by_name.get("audio_file_path")
+            curr_af = _get_text("audio_file_path")
+            if af_field and af_field.get("type") in ("text", "long_text", "url"):
+                if curr_af != request.audio_file_path:
+                    diffs.append(FieldDiff(field_name="audio_file_path", old_value=curr_af, new_value=request.audio_file_path, action=FieldAction.SET))
+                else:
+                    diffs.append(FieldDiff(field_name="audio_file_path", old_value=curr_af, new_value=curr_af, action=FieldAction.PRESERVED))
+            else:
+                conflicts.append("Target column 'audio_file_path' is missing or incompatible in schema; class audio path left pending review/sync")
+                diffs.append(FieldDiff(
+                    field_name="audio_file_path",
+                    old_value=curr_af,
+                    new_value=request.audio_file_path,
+                    action=FieldAction.CONFLICT,
+                    details="audio_file_path column missing or incompatible in live schema",
+                ))
 
         # Q-001: Media Archive link must be preserved on existing rows; cannot be modified by archive tooling
         curr_link = _get_text("Media Archive link") or _get_text("media_archive_link")

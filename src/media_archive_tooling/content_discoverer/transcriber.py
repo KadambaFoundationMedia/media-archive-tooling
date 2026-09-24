@@ -110,6 +110,50 @@ def prepare_whisper_input(
     return decoded_path, "ffmpeg pcm_s16le 16 kHz mono (temporary)"
 
 
+def extract_whisper_slice(
+    audio_path: Path,
+    output_path: Path,
+    start_sec: float,
+    duration_sec: float,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Path:
+    """Extract a time-bounded slice of audio into 16 kHz mono WAV for whisper-cli."""
+    ffmpeg_executable = shutil.which("ffmpeg")
+    if not ffmpeg_executable:
+        raise TranscriptionBlockedError(
+            "ffmpeg is required to extract excerpt audio slices for whisper-cli"
+        )
+    command = [
+        ffmpeg_executable,
+        "-nostdin", "-v", "error", "-y",
+        "-ss", f"{start_sec:.3f}",
+        "-t", f"{duration_sec:.3f}",
+        "-i", str(audio_path),
+        "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000",
+        "-c:a", "pcm_s16le", "-f", "wav", str(output_path),
+    ]
+    try:
+        result = run_with_heartbeat(
+            command,
+            stage="decode_slice",
+            progress_callback=progress_callback,
+            heartbeat_interval=5.0,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=300,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TranscriptionBlockedError("Audio slice extraction timed out") from exc
+    except OSError as exc:
+        raise TranscriptionBlockedError(f"Could not start ffmpeg audio slice decoder: {exc}") from exc
+
+    if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size <= 44:
+        error = result.stderr.decode("utf-8", errors="replace")[-500:].strip()
+        raise TranscriptionBlockedError(f"Audio slice extraction failed: {error or 'no valid WAV output'}")
+    return output_path
+
+
 def parse_timestamp_seconds(value: Any) -> Optional[float]:
     """Parse various timestamp representations (float, string 'HH:MM:SS.mmm') into seconds."""
     if isinstance(value, bool) or value is None:
@@ -185,6 +229,7 @@ class BaseTranscriptionAdapter(ABC):
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        excerpt_windows: Optional[List[Tuple[float, float]]] = None,
     ) -> TranscriptArtifact:
         """Transcribe audio into a durable normalized TranscriptArtifact."""
         pass
@@ -243,6 +288,136 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
         except Exception:
             return "whisper.cpp"
 
+    def _parse_whisper_json(
+        self,
+        raw_payload: Dict[str, Any],
+        offset_seconds: float = 0.0,
+    ) -> List[TranscriptSegment]:
+        raw_transcription = raw_payload.get("transcription") or []
+        segments: List[TranscriptSegment] = []
+        for item in raw_transcription:
+            if not isinstance(item, dict):
+                continue
+            start_sec = None
+            end_sec = None
+            ts = item.get("timestamps")
+            if isinstance(ts, dict):
+                start_sec = parse_timestamp_seconds(ts.get("from"))
+                end_sec = parse_timestamp_seconds(ts.get("to"))
+            if start_sec is None or end_sec is None:
+                offsets = item.get("offsets")
+                if isinstance(offsets, dict):
+                    f_ms = parse_timestamp_seconds(offsets.get("from"))
+                    t_ms = parse_timestamp_seconds(offsets.get("to"))
+                    if f_ms is not None and t_ms is not None:
+                        start_sec = f_ms / 1000.0
+                        end_sec = t_ms / 1000.0
+            if start_sec is not None and end_sec is not None and end_sec >= start_sec:
+                text_str = str(item.get("text", "")).strip()
+                segments.append(
+                    TranscriptSegment(
+                        start_seconds=round(offset_seconds + start_sec, 3),
+                        end_seconds=round(offset_seconds + end_sec, 3),
+                        text=text_str,
+                        is_silence=False,
+                        avg_logprob=item.get("avg_logprob"),
+                        no_speech_prob=item.get("no_speech_prob"),
+                    )
+                )
+        return segments
+
+    def _run_whisper_cli(
+        self,
+        wav_input: Path,
+        tmp_stem: Path,
+        resolved_model: Path,
+        device_mode: str,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Tuple[bool, str, Optional[str]]:
+        expected_json = Path(f"{tmp_stem}.json")
+        selected_backend = "metal" if device_mode in {"auto", "metal"} else "cpu"
+        fallback_reason: Optional[str] = None
+        success = False
+
+        if selected_backend == "metal":
+            cmd = [
+                str(self.whisper_executable),
+                "--model", str(resolved_model),
+                "--file", str(wav_input),
+                "--language", "auto",
+                "--output-json",
+                "--output-file", str(tmp_stem),
+                "--no-prints",
+                "--threads", str(self.threads),
+                "--temperature", "0",
+                "--max-context", "0",
+                "--flash-attn",
+            ]
+            try:
+                res = run_with_heartbeat(
+                    cmd,
+                    stage="transcribe_metal",
+                    progress_callback=progress_callback,
+                    capture_output=True,
+                    timeout=1800,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                    env=self._whisper_environment(),
+                )
+                if res.returncode == 0 and expected_json.exists():
+                    success = True
+                else:
+                    err = res.stderr.decode(errors="replace")[-1000:].strip()
+                    if device_mode == "metal":
+                        raise TranscriptionBlockedError(f"Transcription failed on explicit Metal device: {err}")
+                    fallback_reason = f"Metal failure (exit {res.returncode}): {err}"
+            except Exception as e:
+                if device_mode == "metal":
+                    raise TranscriptionBlockedError(f"Transcription error on explicit Metal device: {e}")
+                fallback_reason = f"Metal exception: {str(e)[:200]}"
+
+        if not success and (device_mode == "cpu" or fallback_reason is not None):
+            selected_backend = "cpu"
+            cmd = [
+                str(self.whisper_executable),
+                "--model", str(resolved_model),
+                "--file", str(wav_input),
+                "--language", "auto",
+                "--output-json",
+                "--output-file", str(tmp_stem),
+                "--no-prints",
+                "--threads", str(self.threads),
+                "--temperature", "0",
+                "--max-context", "0",
+                "--flash-attn",
+                "--no-gpu",
+            ]
+            try:
+                res = run_with_heartbeat(
+                    cmd,
+                    stage="transcribe_cpu",
+                    progress_callback=progress_callback,
+                    capture_output=True,
+                    timeout=1800,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                    env=self._whisper_environment(),
+                )
+                if res.returncode == 0 and expected_json.exists():
+                    success = True
+                else:
+                    err = res.stderr.decode(errors="replace")[-1000:].strip()
+                    raise TranscriptionBlockedError(f"Transcription failed on CPU: {err}")
+            except Exception as e:
+                if isinstance(e, TranscriptionBlockedError):
+                    raise
+                raise TranscriptionBlockedError(f"Transcription CPU execution error: {e}")
+
+        if not success or not expected_json.exists():
+            raise TranscriptionBlockedError("Whisper did not produce expected JSON output")
+
+        return success, selected_backend, fallback_reason
+
     def transcribe(
         self,
         audio_path: Path,
@@ -256,6 +431,7 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        excerpt_windows: Optional[List[Tuple[float, float]]] = None,
     ) -> TranscriptArtifact:
         audio_path = audio_path.resolve()
         if not audio_path.is_file():
@@ -324,105 +500,91 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
         fallback_reason: Optional[str] = None
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_stem = Path(tmp_dir) / "output"
-            expected_json = Path(f"{tmp_stem}.json")
-
             start_t = time.time()
             decode_started = time.monotonic()
-            whisper_input, audio_preprocessing = prepare_whisper_input(
-                audio_path, Path(tmp_dir), progress_callback=progress_callback
-            )
-            decode_elapsed = time.monotonic() - decode_started
             transcription_started = time.monotonic()
-            success = False
+            speech_segments: List[TranscriptSegment] = []
+            detected_lang = "en"
 
-            # Attempt 1: Metal if auto or metal
-            if selected_backend == "metal":
-                cmd = [
-                    str(self.whisper_executable),
-                    "--model", str(resolved_model),
-                    "--file", str(whisper_input),
-                    "--language", "auto",
-                    "--output-json",
-                    "--output-file", str(tmp_stem),
-                    "--no-prints",
-                    "--threads", str(self.threads),
-                    "--temperature", "0",
-                    "--max-context", "0",
-                    "--flash-attn",
-                ]
+            if excerpt_windows is None:
+                # Full file transcription path
+                tmp_stem = Path(tmp_dir) / "output"
+                whisper_input, audio_preprocessing = prepare_whisper_input(
+                    audio_path, Path(tmp_dir), progress_callback=progress_callback
+                )
+                decode_elapsed = time.monotonic() - decode_started
+                transcription_started = time.monotonic()
+
+                _, selected_backend, fallback_reason = self._run_whisper_cli(
+                    whisper_input, tmp_stem, resolved_model, device_mode, progress_callback
+                )
+                expected_json = Path(f"{tmp_stem}.json")
+                raw_bytes = expected_json.read_bytes()
+                if len(raw_bytes) > MAX_TRANSCRIPT_BYTES:
+                    raise TranscriptionBlockedError("Whisper JSON output exceeded maximum allowed size")
+
                 try:
-                    res = run_with_heartbeat(
-                        cmd,
-                        stage="transcribe_metal",
+                    raw_payload = json.loads(raw_bytes.decode("utf-8"))
+                except Exception as exc:
+                    raise TranscriptionBlockedError("Malformed Whisper JSON output") from exc
+
+                if isinstance(raw_payload.get("result"), dict):
+                    detected_lang = raw_payload["result"].get("language", "en")
+                speech_segments = self._parse_whisper_json(raw_payload, offset_seconds=0.0)
+            else:
+                # Excerpt windows path: NEVER decode or send the full recording to Whisper!
+                audio_preprocessing = "ffmpeg excerpt slice pcm_s16le 16 kHz mono (temporary)"
+                selected_backend = "metal" if device_mode in {"auto", "metal"} else "cpu"
+                fallback_reason = None
+
+                clamped_windows = []
+                for w_s, w_e in excerpt_windows:
+                    w_s_c = max(0.0, float(w_s))
+                    w_e_c = min(duration_seconds, float(w_e)) if duration_seconds > 0 else float(w_e)
+                    if w_e_c > w_s_c:
+                        clamped_windows.append((w_s_c, w_e_c))
+
+                decode_elapsed = 0.0
+                transcription_started = time.monotonic()
+                speech_segments = []
+
+                for idx, (w_start, w_end) in enumerate(clamped_windows):
+                    w_dur = w_end - w_start
+                    slice_wav = Path(tmp_dir) / f"excerpt_{idx}.wav"
+                    slice_stem = Path(tmp_dir) / f"output_excerpt_{idx}"
+                    s_dec_start = time.monotonic()
+                    extract_whisper_slice(
+                        audio_path=audio_path,
+                        output_path=slice_wav,
+                        start_sec=w_start,
+                        duration_sec=w_dur,
                         progress_callback=progress_callback,
-                        capture_output=True,
-                        timeout=1800,
-                        check=False,
-                        stdin=subprocess.DEVNULL,
-                        env=self._whisper_environment(),
                     )
-                    if res.returncode == 0 and expected_json.exists():
-                        success = True
-                    else:
-                        err = res.stderr.decode(errors="replace")[-1000:].strip()
-                        if device_mode == "metal":
-                            raise TranscriptionBlockedError(f"Transcription failed on explicit Metal device: {err}")
-                        fallback_reason = f"Metal failure (exit {res.returncode}): {err}"
-                except Exception as e:
-                    if device_mode == "metal":
-                        raise TranscriptionBlockedError(f"Transcription error on explicit Metal device: {e}")
-                    fallback_reason = f"Metal exception: {str(e)[:200]}"
+                    decode_elapsed += (time.monotonic() - s_dec_start)
 
-            # Attempt 2: CPU fallback if auto and Metal failed, or if cpu was requested
-            if not success and (device_mode == "cpu" or fallback_reason is not None):
-                selected_backend = "cpu"
-                cmd = [
-                    str(self.whisper_executable),
-                    "--model", str(resolved_model),
-                    "--file", str(whisper_input),
-                    "--language", "auto",
-                    "--output-json",
-                    "--output-file", str(tmp_stem),
-                    "--no-prints",
-                    "--threads", str(self.threads),
-                    "--temperature", "0",
-                    "--max-context", "0",
-                    "--flash-attn",
-                    "--no-gpu",
-                ]
-                try:
-                    res = run_with_heartbeat(
-                        cmd,
-                        stage="transcribe_cpu",
-                        progress_callback=progress_callback,
-                        capture_output=True,
-                        timeout=1800,
-                        check=False,
-                        stdin=subprocess.DEVNULL,
-                        env=self._whisper_environment(),
+                    _, backend, fb_reason = self._run_whisper_cli(
+                        slice_wav, slice_stem, resolved_model, device_mode, progress_callback
                     )
-                    if res.returncode == 0 and expected_json.exists():
-                        success = True
-                    else:
-                        err = res.stderr.decode(errors="replace")[-1000:].strip()
-                        raise TranscriptionBlockedError(f"Transcription failed on CPU: {err}")
-                except Exception as e:
-                    if isinstance(e, TranscriptionBlockedError):
-                        raise
-                    raise TranscriptionBlockedError(f"Transcription CPU execution error: {e}")
+                    if backend == "cpu":
+                        selected_backend = "cpu"
+                    if fb_reason:
+                        fallback_reason = fb_reason
 
-            if not success or not expected_json.exists():
-                raise TranscriptionBlockedError("Whisper did not produce expected JSON output")
+                    expected_json = Path(f"{slice_stem}.json")
+                    raw_bytes = expected_json.read_bytes()
+                    if len(raw_bytes) > MAX_TRANSCRIPT_BYTES:
+                        raise TranscriptionBlockedError("Whisper JSON output exceeded maximum allowed size")
 
-            raw_bytes = expected_json.read_bytes()
-            if len(raw_bytes) > MAX_TRANSCRIPT_BYTES:
-                raise TranscriptionBlockedError("Whisper JSON output exceeded maximum allowed size")
+                    try:
+                        raw_payload = json.loads(raw_bytes.decode("utf-8"))
+                    except Exception as exc:
+                        raise TranscriptionBlockedError("Malformed Whisper JSON output") from exc
 
-            try:
-                raw_payload = json.loads(raw_bytes.decode("utf-8"))
-            except Exception as exc:
-                raise TranscriptionBlockedError("Malformed Whisper JSON output") from exc
+                    if isinstance(raw_payload.get("result"), dict) and detected_lang == "en":
+                        detected_lang = raw_payload["result"].get("language", "en")
+
+                    window_segments = self._parse_whisper_json(raw_payload, offset_seconds=w_start)
+                    speech_segments.extend(window_segments)
 
             # Post-transcription check: ensure files were not altered during run
             post_sha256 = compute_file_sha256(audio_path)
@@ -435,44 +597,6 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
 
             elapsed = time.time() - start_t
             rtf = (elapsed / duration_seconds) if duration_seconds > 0 else None
-
-            # Parse and normalize segments
-            detected_lang = "en"
-            if isinstance(raw_payload.get("result"), dict):
-                detected_lang = raw_payload["result"].get("language", "en")
-
-            raw_transcription = raw_payload.get("transcription") or []
-            speech_segments: List[TranscriptSegment] = []
-
-            for item in raw_transcription:
-                if not isinstance(item, dict):
-                    continue
-                start_sec = None
-                end_sec = None
-                ts = item.get("timestamps")
-                if isinstance(ts, dict):
-                    start_sec = parse_timestamp_seconds(ts.get("from"))
-                    end_sec = parse_timestamp_seconds(ts.get("to"))
-                if start_sec is None or end_sec is None:
-                    offsets = item.get("offsets")
-                    if isinstance(offsets, dict):
-                        f_ms = parse_timestamp_seconds(offsets.get("from"))
-                        t_ms = parse_timestamp_seconds(offsets.get("to"))
-                        if f_ms is not None and t_ms is not None:
-                            start_sec = f_ms / 1000.0
-                            end_sec = t_ms / 1000.0
-                if start_sec is not None and end_sec is not None and end_sec >= start_sec:
-                    text_str = str(item.get("text", "")).strip()
-                    speech_segments.append(
-                        TranscriptSegment(
-                            start_seconds=start_sec,
-                            end_seconds=end_sec,
-                            text=text_str,
-                            is_silence=False,
-                            avg_logprob=item.get("avg_logprob"),
-                            no_speech_prob=item.get("no_speech_prob"),
-                        )
-                    )
 
             speech_segments.sort(key=lambda s: s.start_seconds)
 
@@ -534,6 +658,8 @@ class WhisperCppTranscriptionAdapter(BaseTranscriptionAdapter):
                     "transcription_elapsed_seconds": time.monotonic() - transcription_started,
                     "elapsed_seconds": elapsed,
                     "rtf": rtf,
+                    "is_full_file": excerpt_windows is None,
+                    "excerpt_windows": excerpt_windows,
                 },
                 created_at=now_iso,
                 classification_version="1.0",
@@ -578,6 +704,10 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         self.simulate_metal_fallback = simulate_metal_fallback
         self.simulate_source_change = simulate_source_change
         self.calls = []
+        self.last_excerpt_windows = None
+        self.full_file_transcriptions_count: int = 0
+        self.simulated_acoustic_boundary: Optional[float] = None
+        self.verify_acoustic_boundary: bool = True
 
     def probe_availability(self) -> Dict[str, Any]:
         return {
@@ -600,8 +730,12 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
         root_dir: Optional[Path] = None,
         dry_run: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        excerpt_windows: Optional[List[Tuple[float, float]]] = None,
     ) -> TranscriptArtifact:
         audio_path = audio_path.resolve()
+        self.last_excerpt_windows = excerpt_windows
+        if excerpt_windows is None:
+            self.full_file_transcriptions_count += 1
 
         if self.should_fail:
             raise TranscriptionBlockedError(self.fail_message)
@@ -683,7 +817,7 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
             except Exception:
                 pass
 
-        self.calls.append((audio_path, tracking_id, requested_device))
+        self.calls.append((audio_path, tracking_id, requested_device, excerpt_windows))
 
         now_iso = datetime.now(timezone.utc).isoformat()
         artifact = TranscriptArtifact(
@@ -705,6 +839,8 @@ class FakeTranscriptionAdapter(BaseTranscriptionAdapter):
                 "requested_device": requested_device,
                 "threads": 4,
                 "fallback_reason": fallback_reason,
+                "is_full_file": excerpt_windows is None,
+                "excerpt_windows": excerpt_windows,
             },
             created_at=now_iso,
             classification_version="1.0",

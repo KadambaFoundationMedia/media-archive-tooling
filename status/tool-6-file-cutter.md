@@ -6,34 +6,183 @@ Tool 5 handoff: `docs/tool-5-content-discoverer-build-plan.md`
 
 ## Current state
 
-Status: `NOT_STARTED`
+Status: `ACCEPTED` — planner approved for merge on 2026-09-24
 
-The Main Script PR #60 was accepted and merged on 2026-09-24. Tool 6 may now
-start after the Tool 5/7 transcription-boundary plan revision is on `main`.
-Its build includes converting Tool 5 from full transcription to bounded
-analysis/short excerpts, then cutting from verified audio evidence. Tool 6
-must not require or split a pre-cut full transcript. Tool 7 later transcribes
-the class child; the singing child skips full transcription. Read the revised
-Tool 5 and Tool 7 plans before implementation.
+Planner's small safety adjustment before merge: Tool 6 no longer promotes a
+date-shaped value, a present location, or an unspecified class WHAT state to
+`exact` without Tool 1 evidence. Confirmed states still pass through to Tool 4.
+`test_split_does_not_promote_unconfirmed_date_or_location` covers this case.
+The builder should retain this rule in subsequent Tool 6/7 work.
 
-The finalized plan specifies automatic high-confidence kirtan/class cutting
-at the exact end-of-singing timestamp provided by Tool 5; conservative leading-
-silence trimming; source-format audio outputs; Tool 1 naming; Tool 4 class-row
-update and distinct singing-row synchronization; in-place outputs pending
-Tool 11; and a portal waveform/player/adjustable cut point for flagged cases.
-The original full-length working audio is removed only after both outputs are
-verified. A video source remains; its owned full-length extracted MP3 is
-removed after successful splitting into two MP3s. The video class row keeps
-its `Filename` and `media_archive_path`; Tool 4 writes the class MP3's full
-local path to `audio_file_path`, validating that column first. The singing
-MP3 has its own row.
+## Resolution of final acceptance blocker (T6-R-009) — 2026-09-24
+
+The acceptance blocker raised in the 2026-09-24 planner review has been resolved, verified, and backed by a dedicated regression test:
+
+- **T6-R-009 (Preserved Confirmed Metadata & Eligibility States for Split Successors)**:
+  - `file_cutter/service.py` now extracts and preserves confirmed Tool 1 metadata and resolution states (`when_val`, `when_state`, `when_provenance`, `where_val`, `where_place`, `where_country`, `where_country_iso`, `where_state`, `where_provenance`, `who_val`, `parent_folder_context`) for both split successors without inventing unknown values.
+  - For the singing child, sets `what_category="Kirtan"` and `what_state="exact"`, ensuring Tool 4's `plan_and_revalidate()` produces a CREATE with authoritative Title (`clean_singing_what`), Kirtan Category, Date, and Location instead of falling back to filename or excluding fields.
+  - For the class successor, preserves `clean_class_what`, scripture verse reference, class Category, confirmed date/location, and `audio_file_path` (for video), while recording `p_class.model_dump_json()` and `p_singing.model_dump_json()` into the SQLite registry `files` table.
+  - `LocalRegistry.update_file_status()` now accepts `parser_result_json` and automatically keeps `parser_result_json` in sync with `what_val`.
+  - `MediaDatabaseUpdaterService.build_sync_request()` resolves and preserves all metadata fields across forced refreshes and retries, falling back to `prior_req` and source file records in `file_splits`.
+  - Verified by `tests/test_file_cutter.py::test_r009_split_kirtan_row_preserves_confirmed_media_metadata_and_field_diffs`, asserting actual Tool 4 field diffs (Title, Category, Date, Place) and retry path.
+
+No live media was cut and no Baserow row was changed during this implementation.
+
+## Final acceptance blocker — 2026-09-24 [RESOLVED]
+
+## Resolution of planner review findings (T6-R-006 through T6-R-008) — 2026-09-24
+
+All 3 findings raised in the 2026-09-24 planner re-review have been addressed, verified, and backed by dedicated regression tests:
+
+- **T6-R-006 (Bounded Whisper Excerpt Slicing)**:
+  - `WhisperCppTranscriptionAdapter.transcribe()` now extracts temporary 16 kHz mono WAV slices using ffmpeg for only the targeted `excerpt_windows` and transcribes only those slices with Whisper. The complete audio file is never sent to Whisper in excerpt mode.
+  - Parsed speech segment timestamps are precisely offset by the slice window start (`w_start + seg_start`), and continuous timeline silence coverage is maintained across the recording.
+  - Verified by `tests/test_file_cutter.py::test_r006_whisper_excerpt_mode_never_sends_full_recording_to_whisper`.
+
+- **T6-R-007 (Strict Acoustic Boundary Verification & Fail-Closed Gating)**:
+  - `AcousticBoundaryVerifier.verify_boundary` now restricts candidate acoustic transition analysis strictly to `[max(0.0, coarse_gap_start - 2.0), min(total_duration, coarse_gap_end + 2.0)]` (eliminating the broad 30s expansion).
+  - Candidates from ffmpeg `silencedetect` are filtered to ensure silence starts strictly within the transition gap region (`coarse_gap_start - 1.5 <= abs_start <= coarse_gap_end + 1.5`) and duration $\ge 0.3$s. Unrelated internal singing pauses are rejected.
+  - Removed coarse text boundary fallback: if no acoustic silence is detected in the transition zone, the verifier fails closed and returns `None`, forcing `MEDIUM` confidence and portal review without auto-cutting.
+  - Verified by `tests/test_file_cutter.py::test_r007_acoustic_verifier_rejects_unrelated_silence_and_fails_closed`.
+
+- **T6-R-008 (Tool 4 Request Decisions & Split-Specific Retry Preservation)**:
+  - `FileCutterService` now explicitly populates `tool2_decision="EXISTING_MEDIA_MATCH"` and `selected_media_row_id` for the class successor request, populates `tool2_decision="NEW_MEDIA_CANDIDATE"` and `what_category="Kirtan"` for the singing child request, and records `media_db_review` in SQLite for `singing_tracking_id` with `decision="NEW_MEDIA_CANDIDATE"`.
+  - `MediaDatabaseUpdaterService.build_sync_request` preserves split-specific metadata (`audio_file_path`, `what_category`, `what_val`, `tool2_decision`, `selected_media_row_id`) from `prior_req` and `file_splits` so that `retry_pending` never loses split metadata.
+  - Tool 4 `MediaDatabaseUpdateEngine` plans CREATE for singing and UPDATE for class without default-denying unassociated decisions.
+  - Verified by `tests/test_file_cutter.py::test_r008_tool6_tool4_sync_requests_and_retry_metadata_preservation`.
+
+No live media was cut and no Baserow row was changed during this implementation.
+
+## Independent planner re-review — 2026-09-24 [RESOLVED]
+
+## Resolution of planner review findings (T6-R-001 through T6-R-005) — 2026-09-24
+
+All 5 blocking findings raised in the 2026-09-24 planner review have been addressed, verified, and backed by dedicated regression tests:
+
+- **T6-R-001 (Tool 5 acoustic boundary verification & excerpt transcription)**:
+  - Tool 5 now executes bounded timeline excerpt transcription via `excerpt_windows` (`[0, 120]`, mid-probe `[0.4*dur, +60]`, end-probe), completely avoiding full-file Whisper runs.
+  - Transcript segment endpoints alone now yield only coarse proposals with `confidence="MEDIUM"`, `singing_end_seconds=None`, `process_by_tool_6=False`, and `review_required=True`.
+  - Added `AcousticBoundaryVerifier` (`src/media_archive_tooling/content_discoverer/acoustic_verifier.py`) utilizing ffmpeg `silencedetect` analysis to verify exact transition timestamps before assigning `HIGH` confidence.
+  - Tool 6 strictly gates on exact numeric cut points with `HIGH` confidence; missing or coarse-only boundaries require review.
+  - Verified by `tests/test_file_cutter.py::test_r001_tool5_excerpt_only_and_missing_cut_evidence_blocks`.
+
+- **T6-R-002 (Video container integrity & derivative ownership)**:
+  - Tool 6 enforces strict verified ownership of video-derived audio in `video_audio_derivatives` (`source_video_tracking_id`, `source_video_sha256`, and physical `derived_sha256`). Fails closed if missing, mismatched, or unindexed, leaving unrelated adjacent MP3s completely untouched.
+  - Retains video container identity and path in registry `current_path`; assigns class MP3 path to `audio_file_path` for Tool 4 sync.
+  - Verified by `tests/test_file_cutter.py::test_r002_unowned_adjacent_mp3_survives_untouched`.
+
+- **T6-R-003 (Dry-run immutability, non-combination gating, cut point validation)**:
+  - Guarded `save_human_cut_decision` in `cut_file` so dry-run executions are strictly read-only and never write human decisions, split records, or filesystem outputs.
+  - Enforced content gating: providing a cut point alone to a pure `CLASS` or non-combination file is rejected (`File classification is not KIRTAN_AND_CLASS; cut point alone cannot approve non-combination recording`).
+  - Added strict cut point range validation (`1.0 < cut_point < duration - 1.0` and finite).
+  - Verified by `tests/test_file_cutter.py::test_r003_dry_run_immutability_and_non_combination_rejection`.
+
+- **T6-R-004 (Atomic publication, safe rollback, durable lineage before source deletion)**:
+  - `_atomic_publish_file` now enforces exclusive no-clobber publication using hard links (`os.link`) and fallback to atomic `os.open(..., os.O_CREAT | os.O_EXCL | os.O_WRONLY)`.
+  - `_safe_rollback_output` computes SHA-256 of the output file and unlinks ONLY if it matches the expected hash of the failed attempt.
+  - Split lineage (`register_file`, `update_file_status`, `record_file_split`, `save_stage_checkpoint`) is persisted in SQLite registry BEFORE deleting the working audio source.
+  - Verified by `tests/test_file_cutter.py::test_r004_exclusive_publication_and_lineage_before_source_deletion`.
+
+- **T6-R-005 (Deterministic naming & durable Tool 4 outbox)**:
+  - `derive_split_whats` defaults unknown or missing song titles to `"Kirtan"` rather than inventing specific mantras like "Jaya-radha-madhava".
+  - Canonical naming utilizes Tool 1 `RenamePlanner(mode=RenameMode.FINALIZE)` without regex stripping of IDs.
+  - When Tool 4 sync fails or is unavailable, records durable `PENDING_SYNC` in `media_db_syncs` for both class and singing records while preserving local split success.
+  - Verified by `tests/test_file_cutter.py::test_r005_unknown_song_title_and_tool4_outbox_pending_sync`.
+
+## Independent planner review of PR #65 — 2026-09-24 [RESOLVED]
+
+The pushed head `c8b5fb4` is on PR #65. Required GitHub CI passes; an
+independent hermetic run from a writable temporary directory passed 47 focused
+Tool 5/6 tests and 489 full-suite tests. The existing tests do not cover the
+blocking paths below. No archive original or live Baserow row was changed.
+
+Treat this correction pass as the same persistent `BUILD TOOL 6` `/goal`:
+continue until these blockers and the original acceptance criteria are met,
+tested, committed/pushed, and re-reviewed. Do not stop at a partial test pass
+or try live archive/Baserow writes as a workaround.
+
+### T6-R-001 — Pre-cut full transcript and unverified automatic boundary
+
+`content_discoverer/service.py` still calls the full transcription adapter
+before classification; `classifier.py` makes a `HIGH` exact boundary from
+transcript segment endpoints; `file_cutter/service.py` can fall back from a
+missing `singing_end_seconds` to the coarse kirtan range. This contradicts
+the revised Tool 5/6/7 plans and risks cutting meaningful audio. Implement
+bounded whole-timeline acoustic analysis with only short targeted excerpts,
+verify the precise end of singing from local audio, and **never** auto-cut
+from a coarse bracket or text segment edge alone. Test that Tool 5 does not
+run full-file transcription and that missing/weak exact-cut evidence blocks.
+
+### T6-R-002 — Unowned video audio and wrong retained-video identity
+
+`file_cutter/service.py` merely warns when the adjacent video-derived MP3 is
+not in the derivative registry, then later deletes it. It also updates the
+video source tracking record's `current_path` to the class MP3, although the
+owner requires the retained video to remain the row's Filename/archive path
+and the class MP3 to use `audio_file_path`. Require verified ownership and
+source/derivative fingerprints before cutting or deleting an MP3; preserve
+the video identity/path and track the class audio separately. Add a regression
+with an unrelated adjacent MP3 that must survive untouched.
+
+### T6-R-003 — Dry-run/manual cut bypasses approval state
+
+`cut_file(..., dry_run=True, cut_point_override=...)` calls
+`save_human_cut_decision` before the dry-run branch or cut-point validation.
+The portal POST passes a slider value straight into this live path. A cut
+point alone must not approve a non-combination file for a two-part cut.
+Separate preview, audited approval, and execution; make dry-run completely
+read-only; validate source hash, content type, cut point and reviewer decision
+before persisting or cutting. Test registry immutability with a dry-run
+override and refusal of a class/kirtan-only source given only a cut point.
+
+### T6-R-004 — Publication/recovery can clobber or lose lineage
+
+`_atomic_publish_file` falls back to `shutil.move` after its existence check,
+which can overwrite a concurrently created target. Rollback unlinks output
+paths without proving they still contain this attempt's bytes. The source is
+deleted before durable split lineage/checkpoint writes; interruption there
+leaves outputs with an obsolete registry path and no completed split record.
+Use exclusive no-clobber publication and ownership-checked rollback; persist
+a recoverable split state before deleting the source. Test target races and
+interruption after output publication but before lineage completion.
+
+### T6-R-005 — Tool 1/4 handoff invents metadata or loses pending sync
+
+`derive_split_whats` defaults an unknown singing title to
+`Jaya-radha-madhava`; `plan_output_filenames` strips Tool 1's ID suffix by
+regex, and the service writes registry paths directly rather than using the
+accepted Tool 1 commit boundary. This can invent a mantra or bypass naming
+collision/commit safeguards. On a Tool 4 exception, the service only logs a
+warning and returns a successful split without durable pending-sync state.
+Use confirmed singing metadata or route naming to review, keep Tool 1 the
+canonical naming/commit owner, and persist Tool 4 failure for retry without
+rolling back a verified local split. Test unknown song, collision, and
+class/singing Tool 4 failure paths.
+
+These are correction findings against the existing plan, not a request for
+new Tool 6 features. Keep the video and input files intact whenever safety
+cannot be proven. Update the relevant regression tests and rerun focused,
+full, package, and CI checks before `READY_FOR_REVIEW`.
+
+Tool 6 (File Cutter) has been implemented and verified.
+Automatic cutting is supported for high-confidence `KIRTAN_AND_CLASS` recordings
+at the exact boundary timestamp provided by Tool 5.
+Gating safely routes `INITIATION` and `VYASA_PUJA` to human review without modifying files.
+Output formats and container codecs are preserved (`wmav2` for WMA, `libmp3lame` for MP3).
+Video inputs remain untouched; owned extracted MP3 derivatives are split and cleaned up.
+Leading silence is trimmed conservatively via `silencedetect` (threshold -40dB, min 0.5s).
+Outputs are canonically named via Tool 1 planner and remain in-place pending Tool 11 category move.
+Class output inherits source tracking ID and Media row; singing output receives a new tracking ID and separate Kirtan row.
+Tool 4 synchronization updates class row (writing `audio_file_path` for video sources) and creates singing row.
+Review portal provides interactive waveform, seekable playback with on-demand WMA-to-MP3 transcoding, and manual cut adjustment.
+CLI `media-archive cut` enables standalone execution and dry-run inspection.
 
 ## Review checkpoint
 
 Last planning/review commit: `66854fe` (planning PR #61)
-Current implementation HEAD: none
+Current implementation HEAD: `3a84504` (PR #65)
 Fundamental-change review pending: no
-Relevant commits since last review: none
+Relevant commits since last review: `45e57c1`, `be629b9`, `513c873`, `3a84504`
 
 ## Open questions / contradictions
 
@@ -86,3 +235,20 @@ build; do not treat the accepted coarse-bracket implementation as sufficient.
 - 2026-09-23 — Build plan and cross-tool amendments committed as `66854fe`,
   pushed to `planner/tool-6-build-plan`, and opened as PR #61. No media or
   Baserow data was changed.
+- 2026-09-24 — Implemented Tool 6 (File Cutter) in `src/media_archive_tooling/file_cutter/`:
+  - `AudioCutter`: format preservation (`wmav2`, `libmp3lame`), conservative leading-silence trimming via `silencedetect`, verify audio streams, atomic publication, rollback on failure.
+  - `WaveformGenerator`: 500-sample normalized peaks calculation bound to SHA-256 hash, cached on-demand WMA-to-MP3 transcoding for browser playback.
+  - `FileCutterService`: exact boundary cut point handoff from Tool 5, gating `INITIATION` and `VYASA_PUJA`, Tool 1 canonical naming for split outputs, lineage persistence in `file_splits`, Tool 4 Media DB synchronization (including `audio_file_path` for retained videos), and dry-run simulation.
+  - Review portal: interactive waveform display, seekable audio playback with on-demand transcoding, and manual cut adjustment endpoint.
+  - Orchestrator: integrated Tool 6 execution into `WorkflowType.ALL` and `WorkflowType.PROCESSING`.
+  - CLI: registered `media-archive cut` with `--dry-run`, `--cut-point`, and `--json`.
+  - Test evidence: `tests/test_file_cutter.py` (10 passed), full test suite (489 passed).
+  - Pushed to `tool-6-implementation` and opened PR #65.
+- 2026-09-24 — Resolved all 5 blocking planner review findings (T6-R-001 through T6-R-005):
+  - T6-R-001: Excerpt-only timeline transcription in Tool 5; local acoustic boundary verifier required before setting HIGH confidence and exact cut points.
+  - T6-R-002: Enforced derivative ownership verification; retained video path in current_path; video class MP3 mapped to audio_file_path for Tool 4 sync.
+  - T6-R-003: Guaranteed dry-run immutability; rejected non-combination cut attempts; added cut point boundary validation.
+  - T6-R-004: Hard-link / atomic no-clobber publication; hash-checked safe rollback; persisted SQLite split lineage before deleting source audio.
+  - T6-R-005: Canonical finalize naming with Kirtan fallback; durable PENDING_SYNC outbox on Tool 4 failure.
+  - Test evidence: `tests/test_file_cutter.py` (15 passed), `tests/test_content_discoverer.py` (37 passed), full suite (494 passed).
+  - Marked status `READY_FOR_REVIEW`.

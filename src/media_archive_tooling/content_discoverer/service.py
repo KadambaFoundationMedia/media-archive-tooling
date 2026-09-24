@@ -23,8 +23,10 @@ from .models import (
     MantraType,
     TranscriptArtifact,
 )
+from .acoustic_verifier import AcousticBoundaryVerifier, FakeAcousticBoundaryVerifier
 from .transcriber import (
     BaseTranscriptionAdapter,
+    FakeTranscriptionAdapter,
     TranscriptionBlockedError,
     WhisperCppTranscriptionAdapter,
     probe_audio_duration,
@@ -129,6 +131,9 @@ def validate_coarse_boundary(boundary_str: str, duration: float = 0.0) -> Option
         kirtan_range=(t0, t1),
         class_range=(class_start, class_end),
         coarse_gap_bracket=(gap_start, gap_end),
+        singing_end_seconds=t1,
+        source_duration_seconds=duration,
+        method="manual_boundary_validation",
         confidence="HIGH",
         description=clean,
     )
@@ -143,11 +148,23 @@ class ContentDiscovererService:
         transcription_adapter: Optional[BaseTranscriptionAdapter] = None,
         audio_extractor: Optional[AudioExtractionAdapter] = None,
         classifier: Optional[ContentClassifier] = None,
+        acoustic_verifier: Optional[Any] = None,
     ):
         self.registry = registry
         self.transcription_adapter = transcription_adapter or WhisperCppTranscriptionAdapter()
         self.audio_extractor = audio_extractor or AudioExtractionAdapter()
         self.classifier = classifier or ContentClassifier()
+        if acoustic_verifier is not None:
+            self.acoustic_verifier = acoustic_verifier
+        elif isinstance(self.transcription_adapter, FakeTranscriptionAdapter):
+            simulated = getattr(self.transcription_adapter, "simulated_acoustic_boundary", None)
+            verify_flag = getattr(self.transcription_adapter, "verify_acoustic_boundary", True)
+            self.acoustic_verifier = FakeAcousticBoundaryVerifier(
+                exact_cut_point=simulated,
+                should_verify=verify_flag,
+            )
+        else:
+            self.acoustic_verifier = AcousticBoundaryVerifier()
 
     def discover_content(
         self,
@@ -264,10 +281,35 @@ class ContentDiscovererService:
                         self.registry.save_content_review(err_result)
                     return err_result
 
-        # 3. Transcription
+        # 3. Bounded Timeline Excerpt Transcription
+        actual_audio = audio_target if audio_target.exists() else media_path
+        duration_sec = 0.0
+        try:
+            duration_sec = probe_audio_duration(actual_audio)
+        except Exception:
+            duration_sec = 0.0
+        if duration_sec <= 0.0 and derived_details:
+            duration_sec = derived_details.duration_seconds
+        if duration_sec <= 0.0:
+            duration_sec = 600.0
+
+        excerpt_windows: List[Tuple[float, float]] = []
+        if duration_sec <= 120.0:
+            excerpt_windows.append((0.0, duration_sec))
+        else:
+            excerpt_windows.append((0.0, min(120.0, duration_sec)))
+            mid_s = max(120.0, duration_sec * 0.4)
+            mid_e = min(duration_sec, mid_s + 60.0)
+            if mid_s < duration_sec:
+                excerpt_windows.append((mid_s, mid_e))
+            if duration_sec > 600.0:
+                end_s = max(mid_e, duration_sec - 120.0)
+                if end_s < duration_sec:
+                    excerpt_windows.append((end_s, duration_sec))
+
         try:
             artifact = self.transcription_adapter.transcribe(
-                audio_path=audio_target if audio_target.exists() else media_path,
+                audio_path=actual_audio,
                 tracking_id=resolved_tid,
                 source_path=media_path if is_video else None,
                 source_type="video" if is_video else "audio",
@@ -278,6 +320,7 @@ class ContentDiscovererService:
                 root_dir=root_dir,
                 dry_run=dry_run,
                 progress_callback=progress_callback,
+                excerpt_windows=excerpt_windows,
             )
         except Exception as e:
             # Transcription failure -> fail closed with BLOCKED confidence
@@ -301,13 +344,45 @@ class ContentDiscovererService:
                 self.registry.save_content_review(err_result)
             return err_result
 
-        # 4. Classification
+        # 4. Classification from Excerpts
         result = self.classifier.classify(artifact)
         result.source_path = str(media_path)
         if derived_mp3_path:
             result.derived_audio_path = str(derived_mp3_path)
         result.created_at = now_iso
         result.updated_at = now_iso
+
+        # 4b. Local Acoustic Boundary Verification for Suspected KIRTAN_AND_CLASS Combination
+        if result.classification == ContentType.KIRTAN_AND_CLASS and result.cutter_proposal:
+            coarse_s = result.cutter_proposal.kirtan_range[1]
+            coarse_e = result.cutter_proposal.class_range[0]
+            dur = result.cutter_proposal.source_duration_seconds or duration_sec
+
+            exact_cut = None
+            if self.acoustic_verifier:
+                exact_cut = self.acoustic_verifier.verify_boundary(
+                    actual_audio,
+                    coarse_s,
+                    coarse_e,
+                    dur,
+                )
+
+            if exact_cut is not None and exact_cut > 0:
+                result.cutter_proposal.singing_end_seconds = exact_cut
+                result.cutter_proposal.confidence = "HIGH"
+                result.cutter_proposal.method = "acoustic_local_boundary_verified"
+                result.process_by_tool_6 = True
+                result.confidence = ConfidenceLevel.HIGH
+                result.review_required = False
+                result.review_reason = None
+            else:
+                result.cutter_proposal.singing_end_seconds = None
+                result.cutter_proposal.confidence = "LOW"
+                result.cutter_proposal.method = "acoustic_verification_failed"
+                result.process_by_tool_6 = False
+                result.confidence = ConfidenceLevel.MEDIUM
+                result.review_required = True
+                result.review_reason = "Exact singing end boundary could not be verified acoustically from local audio; manual review required"
 
         # 5. Persistence
         if not dry_run:
