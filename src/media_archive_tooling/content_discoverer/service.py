@@ -433,6 +433,10 @@ class ContentDiscovererService:
 
         # 4. Classification from Excerpts
         result = self.classifier.classify(artifact)
+        # Content identification and exact cut-point certainty are distinct.
+        # Keep the former when an ambiguous boundary lowers automatic-cut
+        # confidence, so the operator can see why review is still needed.
+        result.runtime_provenance["classification_confidence"] = result.confidence.value
         result.source_path = str(media_path)
         if derived_mp3_path:
             result.derived_audio_path = str(derived_mp3_path)

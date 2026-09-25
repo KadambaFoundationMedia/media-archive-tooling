@@ -197,8 +197,12 @@ remains recoverable.
 To open the review portal later against an existing registry:
 
 ```sh
-./run-media-archive.sh --review-only --registry-path "/path/to/registry.db"
+./run-media-archive.sh --review-only
 ```
+
+`--registry-path` is only needed when you deliberately used a different
+registry for a separate test run. Normal runs and the portal use the same
+default registry automatically.
 
 The older Tool 1 review helper remains available for a standalone dry-run and
 portal session:

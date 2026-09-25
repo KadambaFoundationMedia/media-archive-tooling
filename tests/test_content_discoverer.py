@@ -1628,6 +1628,7 @@ def test_boundary_confidence_gating_routes_ambiguous_transitions_to_review(env, 
     res_ambiguous = env["service"].discover_content(tid)
     assert res_ambiguous.classification == ContentType.KIRTAN_AND_CLASS
     assert res_ambiguous.confidence == ConfidenceLevel.MEDIUM
+    assert res_ambiguous.runtime_provenance["classification_confidence"] == "HIGH"
     assert res_ambiguous.process_by_tool_6 is False
     assert res_ambiguous.review_required is True
     assert res_ambiguous.cutter_proposal is not None

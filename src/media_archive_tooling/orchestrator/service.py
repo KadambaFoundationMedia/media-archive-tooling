@@ -457,8 +457,15 @@ class MainToolingScriptService:
             )
             boundary_str = f" | Boundary: {content_res.cutter_proposal.suggested_cut_points}" if content_res.cutter_proposal else ""
             route_str = " -> process_by_tool_6" if content_res.process_by_tool_6 else ""
+            provenance = content_res.runtime_provenance
+            content_confidence = (
+                provenance.get("classification_confidence", content_res.confidence.value)
+                if isinstance(provenance, dict) else content_res.confidence.value
+            )
+            boundary_confidence = content_res.cutter_proposal.confidence if content_res.cutter_proposal else None
             summary_str = (
-                f"Tool 5 — Content Discovery: {content_res.classification.value} ({content_res.confidence.value}) | "
+                f"Tool 5 — Content Discovery: {content_res.classification.value} "
+                f"(type {content_confidence}, boundary {boundary_confidence or 'n/a'}) | "
                 f"Mantra: {content_res.mantra_type.value}{boundary_str}{route_str}"
             )
             t5_stage = StageResult(
@@ -468,6 +475,8 @@ class MainToolingScriptService:
                 details={
                     "classification": content_res.classification.value,
                     "confidence": content_res.confidence.value,
+                    "content_confidence": content_confidence,
+                    "boundary_confidence": boundary_confidence,
                     "mantra_type": content_res.mantra_type.value,
                     "process_by_tool_6": content_res.process_by_tool_6,
                     "cut_point_seconds": content_res.cutter_proposal.singing_end_seconds if content_res.cutter_proposal else None,
@@ -795,6 +804,19 @@ class MainToolingScriptService:
                     selected_row = t2_res.selected_media_row_id
                     enriched_title = t2_res.renamer_enrichment.title_full if (t2_res.renamer_enrichment and t2_res.renamer_enrichment.confirmed) else None
                     related_series = t2_res.selected_field_evidence.get("related_series", [])
+                    display_candidate = next(
+                        (c for c in t2_res.candidates if c.media_row_id == selected_row),
+                        t2_res.candidates[0] if cand_count == 1 else None,
+                    )
+                    candidate_preview = None
+                    if display_candidate is not None:
+                        row = display_candidate.normalized_row or display_candidate.raw_row
+                        candidate_preview = {
+                            "row_id": display_candidate.media_row_id,
+                            "title": row.get("title") or row.get("Title"),
+                            "place": row.get("place") or row.get("Place"),
+                            "country": row.get("country") or row.get("Country"),
+                        }
 
                     t2_summary = f"Tool 2 — Media DB: {dec_str} (candidates: {cand_count})"
                     if selected_row:
@@ -817,6 +839,7 @@ class MainToolingScriptService:
                             "decision": dec_str,
                             "candidate_count": cand_count,
                             "selected_media_row_id": selected_row,
+                            "candidate_preview": candidate_preview,
                             "confirmed_title": enriched_title,
                             "related_series": related_series,
                         },
@@ -1054,7 +1077,11 @@ class MainToolingScriptService:
                         elif t4_res.operation == SyncOperation.UPDATE:
                             op_str = f"WOULD UPDATE row #{tool4_row_id or '—'}"
                         elif t4_res.operation == SyncOperation.NOOP:
-                            op_str = f"WOULD NOOP (row #{tool4_row_id or '—'} already in sync)"
+                            op_str = f"NO CHANGE (row #{tool4_row_id or '—'} already in sync)"
+                        elif t4_res.operation == SyncOperation.BLOCKED:
+                            op_str = "BLOCKED (no write)"
+                        elif t4_res.operation == SyncOperation.CONFLICT:
+                            op_str = "CONFLICT (no write; review required)"
                         else:
                             op_str = f"WOULD {t4_res.operation.value.upper()}"
 

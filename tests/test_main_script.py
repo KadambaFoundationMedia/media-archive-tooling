@@ -1552,6 +1552,46 @@ def test_tool4_console_is_short_but_verbose_shows_redacted_field_details(capsys)
     assert "private text" not in verbose_output
 
 
+def test_console_shows_draft_candidate_and_separate_type_boundary_confidence(capsys):
+    reporter = TerminalReporter(verbose=False)
+    reporter.report_stage_result(StageResult(
+        stage_name=StageName.TOOL_1_INITIAL,
+        summary="Initial proposal",
+        details={"when": "2008-01-04", "what": "", "where": "",
+                 "proposed_filename": "2008-01-04-2_ID-12345678.mp3"},
+    ))
+    reporter.report_stage_result(StageResult(
+        stage_name=StageName.TOOL_2_REVIEW,
+        summary="Probable match",
+        details={"decision": "PROBABLE_EXISTING_MEDIA", "candidate_count": 1,
+                 "candidate_preview": {"row_id": 3146, "title": "Stockholm",
+                                       "place": "Stockholm", "country": "Sweden"}},
+    ))
+    reporter.report_stage_result(StageResult(
+        stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
+        summary="Content discovery",
+        details={"classification": "KIRTAN_AND_CLASS", "content_confidence": "HIGH",
+                 "boundary_confidence": "MEDIUM", "cut_point_seconds": 1699.527,
+                 "review_required": True},
+    ))
+    output = capsys.readouterr().out
+    assert "Draft: 2008-01-04-2_ID-12345678.mp3" in output
+    assert "Candidate row #3146: Stockholm | Stockholm, Sweden" in output
+    assert "KIRTAN_AND_CLASS (HIGH type) | proposed cut 28:19 (MEDIUM boundary)" in output
+    assert output.endswith("\n\n")
+
+
+def test_console_summary_omits_registry_path_review_command(capsys):
+    TerminalReporter().report_summary(RunSummary(
+        run_id="test", workflow=WorkflowType.ALL, is_dry_run=True,
+        total_discovered=1, review_required=1, registry_path=".renamer/registry.db",
+    ))
+    output = capsys.readouterr().out
+    assert "Summary: 1 file(s)" in output
+    assert "--registry-path" not in output
+    assert "Review portal:" not in output
+
+
 def test_tool5_progress_events_are_logged_even_without_verbose(env_setup, capsys):
     media = env_setup["media_dir"] / "class.mp3"
     media.write_bytes(b"sample audio")
