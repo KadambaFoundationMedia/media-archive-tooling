@@ -243,7 +243,11 @@ where appropriate. Cover at least:
    prayer or spoken opening.
 5. Exact cut, output-duration/decodability validation, source-change check,
    disk preflight, collision refusal, second-output failure, interruption,
-   idempotent retry, and no permanent third audio copy after success.
+   idempotent retry, and no permanent third audio copy after success. A prior
+   split record is reusable only after its class and singing successors are
+   found at their current tracked locations and their identities/hashes are
+   verified. Missing outputs or a restored original must not produce a false
+   success; route uncertain lineage to review/recovery without deleting media.
 6. Dry-run changes no archive file, registry, scratch, transcript, or Baserow
    state; Tool 4 is the sole Baserow writer and preserves unrelated fields.
 7. Existing class row is updated, singing row is separate, and Tool 4 failure

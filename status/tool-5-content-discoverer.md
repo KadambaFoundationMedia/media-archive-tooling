@@ -65,7 +65,38 @@ combinations have promising boundaries, but these release blockers remain:
    - Pure-class transcripts with acoustic pauses classify as `CLASS` with `process_by_tool_6 = False`.
    - Regression test in `tests/test_content_discoverer.py` verified.
 
-All 512 tests in the suite pass. The five benchmark dry-runs show zero discarded class opening audio.
+Builder report: all 512 tests pass, and five benchmark dry-runs were reported
+to show zero discarded class opening audio. The independent re-review below
+found that one unforced dry-run reused stale split lineage instead of
+re-evaluating the current file.
+
+### Independent planner re-review of PR #67 (2026-09-25) — CHANGES REQUESTED
+
+CI is green and the planner independently ran the full suite (`512 passed`).
+The single-cut Sweden fix, ceremony routing, and pure-class negative test are
+present. Do not merge yet because one current dry-run produces a false success:
+
+- **T6-R-010 — Validate a recorded split before idempotent reuse.** The local
+  registry has a prior `file_splits` row for `2008-01-04-2.mp3`, but neither
+  recorded output path exists; the restored input does exist. Running
+  `media-archive cut --dry-run --json 92c47ed3` returns `success=true`,
+  `dry_run=false`, and `reused_existing_split=true`, without testing the
+  current cut. `--dry-run --force` gives a real preview, but ordinary dry-run
+  and live retry must not claim success from missing/mismatched outputs.
+  Check current Tool 11 locations as well as stored output paths and hashes
+  before reuse; when lineage cannot be verified, return review/recovery state
+  without deleting the restored source or creating a duplicate row. Add a
+  regression for missing outputs and restored source.
+
+The refreshed proposal for this 2008 sample is 1699.527 s versus manual
+1693.048 s (+6.479 s). Simhachalam remains 466.630 s versus manual 459.592 s
+(+7.038 s). Both are still marked `HIGH`/automatic. These late cuts do not
+discard the later class opening under the new single-cut rule, but they do not
+support a claim of <=1.5 s boundary accuracy. Inspect the transition audio;
+if the precise singing end cannot be confirmed, route those cases to waveform
+review instead of asserting a high-confidence exact boundary. Report the
+five manual-versus-current cut points and the first retained class audio in
+the next handoff. No live media or Baserow writes are authorized for review.
 
 ## Tool 5-to-7 transcription boundary — pending implementation (2026-09-24)
 
