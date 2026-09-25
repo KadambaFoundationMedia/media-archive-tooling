@@ -9,6 +9,20 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
 
+## Planner Tool 2 candidate display follow-up — 2026-09-25
+
+The owner requested that Tool 2's terminal candidate preview also show
+populated `Notes`, `Filename`, and `media_archive_path`. Planner maintenance
+branch `planner/tool2-candidate-details` adds these fields while preserving the
+compact default display (long Notes are abbreviated on the console; complete
+values remain in the structured log). This also preserves the original live
+Baserow row in `MediaCandidate.raw_row`; previously that field duplicated the
+normalized projection and thus lost Notes/archive-path values. Candidate
+matching, review gating, Baserow access policy, and writes are unchanged.
+
+Builder handoff: after syncing `main`, retain this raw-vs-normalized distinction
+and the conditional console fields in subsequent Tool 2/Main Script work.
+
 ## Planner console follow-up — 2026-09-25
 
 The owner requested a small refinement to the compact terminal output. The

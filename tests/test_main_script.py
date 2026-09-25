@@ -1565,7 +1565,10 @@ def test_console_shows_draft_candidate_and_separate_type_boundary_confidence(cap
         summary="Probable match",
         details={"decision": "PROBABLE_EXISTING_MEDIA", "candidate_count": 1,
                  "candidate_preview": {"row_id": 3146, "title": "Stockholm",
-                                       "place": "Stockholm", "country": "Sweden"}},
+                                       "place": "Stockholm", "country": "Sweden",
+                                       "notes": "Original filename: source.mp3\nArchive notes",
+                                       "filename": "source.mp3",
+                                       "media_archive_path": "/archive/source.mp3"}},
     ))
     reporter.report_stage_result(StageResult(
         stage_name=StageName.TOOL_5_CONTENT_DISCOVERY,
@@ -1577,8 +1580,45 @@ def test_console_shows_draft_candidate_and_separate_type_boundary_confidence(cap
     output = capsys.readouterr().out
     assert "Draft: 2008-01-04-2_ID-12345678.mp3" in output
     assert "Candidate row #3146: Stockholm | Stockholm, Sweden" in output
+    assert "Notes: Original filename: source.mp3 Archive notes" in output
+    assert "Filename: source.mp3" in output
+    assert "media_archive_path: /archive/source.mp3" in output
     assert "KIRTAN_AND_CLASS (HIGH type) | proposed cut 28:19 (MEDIUM boundary)" in output
     assert output.endswith("\n\n")
+
+
+def test_tool2_candidate_preview_keeps_raw_notes_and_archive_path(env_setup):
+    media = env_setup["media_dir"] / "2008-01-04-2.mp3"
+    media.write_bytes(b"sample")
+    service = env_setup["service"]
+    service.workflow = WorkflowType.RENAMER
+    service.dry_run = True
+    original_review = env_setup["tool2_service"].review_file.side_effect
+
+    def review_with_candidate(*args, **kwargs):
+        result = original_review(*args, **kwargs)
+        result.decision = ReviewDecision.PROBABLE_EXISTING_MEDIA
+        result.review_required = True
+        result.candidates = [MediaCandidate(
+            media_row_id=3146,
+            normalized_row={"title": "Stockholm", "place": "Stockholm",
+                            "country": "Sweden", "filename": "source.mp3"},
+            raw_row={"Notes": "Original filename: source.mp3", "media_archive_path": "/archive/source.mp3"},
+        )]
+        return result
+
+    env_setup["tool2_service"].review_file.side_effect = review_with_candidate
+    summary = service.run([media])
+    stage = next(s for s in summary.file_results[0].stage_results if s.stage_name == StageName.TOOL_2_REVIEW)
+    assert stage.details["candidate_preview"] == {
+        "row_id": 3146,
+        "title": "Stockholm",
+        "place": "Stockholm",
+        "country": "Sweden",
+        "notes": "Original filename: source.mp3",
+        "filename": "source.mp3",
+        "media_archive_path": "/archive/source.mp3",
+    }
 
 
 def test_console_summary_omits_registry_path_review_command(capsys):

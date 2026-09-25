@@ -489,8 +489,8 @@ class MediaDatabaseReconciliationEngine:
         if parser_res.identity.tracking_id:
             source_ids.append(parser_res.identity.tracking_id)
 
-        # Pre-normalize snapshot rows
-        norm_media_rows = [normalize_media_row(r) for r in snapshot.media_rows]
+        # Keep each live row alongside its normalized projection so reviewers
+        # can inspect populated fields that are not used for matching.
         norm_cat_rows = [normalize_category_title_row(r) for r in snapshot.category_title_rows]
         norm_travel_rows = [normalize_travel_schedule_row(r) for r in snapshot.travel_schedule_rows]
 
@@ -513,7 +513,8 @@ class MediaDatabaseReconciliationEngine:
         candidates: List[MediaCandidate] = []
         related_series_context: List[Dict[str, Any]] = []
 
-        for row in norm_media_rows:
+        for raw_row in snapshot.media_rows:
+            row = normalize_media_row(raw_row)
             reasons = []
             identity_evidence = []
             score = 0.0
@@ -693,7 +694,7 @@ class MediaDatabaseReconciliationEngine:
 
                 candidate = MediaCandidate(
                     media_row_id=row["id"],
-                    raw_row=row,
+                    raw_row=raw_row,
                     normalized_row=row,
                     retrieval_reasons=reasons,
                     identity_evidence=identity_evidence,

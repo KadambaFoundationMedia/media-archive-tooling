@@ -57,6 +57,14 @@ class TerminalReporter:
                 kind = "Matched" if d.get("selected_media_row_id") == preview["row_id"] else "Candidate"
                 facts = " | ".join(item for item in (title, location) if item)
                 line += f"\n    {kind} row #{preview['row_id']}: {facts or 'details unavailable'}"
+                for field, label in (
+                    ("notes", "Notes"),
+                    ("filename", "Filename"),
+                    ("media_archive_path", "media_archive_path"),
+                ):
+                    if preview.get(field):
+                        limit = 500 if self.verbose else 200
+                        line += f"\n    {label}: {self._brief(preview[field], limit)}"
             return line
         if stage == StageName.TOOL_3_REVIEW and d.get("decision"):
             location = f" — {self._brief(d['location'], 70)}" if d.get("location") else ""

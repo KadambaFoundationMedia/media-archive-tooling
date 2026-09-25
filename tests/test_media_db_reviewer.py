@@ -346,6 +346,30 @@ def test_07_exact_full_date_scripture_what_place_unique_candidate():
     assert result.renamer_enrichment.title_full == "Love in the Spiritual World"
 
 
+def test_candidate_retains_live_raw_fields_for_console_preview():
+    raw_row = {
+        "id": 201,
+        "Date": "2014-08-04",
+        "What": "BG-01-18",
+        "Place, location": "Leipzig",
+        "Country": "Germany",
+        "Title": "Love in the Spiritual World",
+        "Filename": "old-source.mp3",
+        "Notes": "Original filename: old-source.mp3",
+        "media_archive_path": "/archive/old-source.mp3",
+    }
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-13T00:00:00Z", state="LIVE_CURRENT",
+        complete=True, media_rows=[raw_row],
+    )
+    result = MediaDatabaseReconciliationEngine().reconcile(make_parser_result(), snapshot)
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.normalized_row["title"] == raw_row["Title"]
+    assert candidate.raw_row["Notes"] == raw_row["Notes"]
+    assert candidate.raw_row["media_archive_path"] == raw_row["media_archive_path"]
+
+
 # ---------------------------------------------------------------------------
 # Test 8: Exact date + specific WHAT + corroborating field unique candidate -> confirmed match
 # ---------------------------------------------------------------------------
