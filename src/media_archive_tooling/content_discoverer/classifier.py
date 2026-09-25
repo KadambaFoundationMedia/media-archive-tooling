@@ -577,15 +577,33 @@ class ContentClassifier:
         total_duration = artifact.duration_seconds
         has_class_evidence = len(class_ranges) >= 1
         has_mantra_evidence = len(mantra_ranges) >= 1
-        has_initiation_evidence = len(initiation_ranges) >= 2  # multiple ceremony vows/names
-        has_vyasa_puja_evidence = len(vyasa_puja_ranges) >= 1
+
+        source_lower = (
+            str(artifact.input_path)
+            + " "
+            + str(meta.get("folder_context", ""))
+            + " "
+            + str(meta.get("category_hint", ""))
+        ).lower()
+
+        has_initiation_source = (
+            any(p in source_lower for p in ["initiation", "diksa", "diksha", "harinama diksa"])
+            or meta.get("category_hint") == "Initiation"
+        )
+        has_initiation_evidence = len(initiation_ranges) >= 2 or has_initiation_source
+
+        has_vyasa_puja_source = (
+            any(p in source_lower for p in ["vyasa-puja", "vyasa puja", "vyasapuja", "vyasa_puja"])
+            or meta.get("category_hint") == "Vyasa Puja"
+        )
+        has_vyasa_puja_evidence = len(vyasa_puja_ranges) >= 1 or has_vyasa_puja_source
         has_festival_evidence = len(festival_ranges) >= 1
         has_home_evidence = len(home_program_ranges) >= 1
 
         # Check for Initiation (Section 7.3 & Tool 6 build plan)
         if has_initiation_evidence:
-            first_vow = min(r[0] for r in initiation_ranges)
-            last_vow = max(r[1] for r in initiation_ranges)
+            first_vow = min(r[0] for r in initiation_ranges) if initiation_ranges else 0.0
+            last_vow = max(r[1] for r in initiation_ranges) if initiation_ranges else 0.0
             split_point = first_vow if first_vow > 60.0 else last_vow
             stage_desc_parts = []
             seen_stages = set()
@@ -593,13 +611,13 @@ class ContentClassifier:
                 if stage not in seen_stages:
                     seen_stages.add(stage)
                     stage_desc_parts.append(f"{stage} at {int(sec)//60:02d}:{int(sec)%60:02d}")
-            stage_desc = "; ".join(stage_desc_parts) if stage_desc_parts else f"initiation vows at {int(first_vow)//60:02d}:{int(first_vow)%60:02d}"
+            stage_desc = "; ".join(stage_desc_parts) if stage_desc_parts else f"initiation ceremony"
 
             cutter_prop = CutterBoundaryProposal(
                 kirtan_range=(0.0, split_point),
                 class_range=(split_point, total_duration),
                 coarse_gap_bracket=(max(0.0, split_point - 10.0), split_point),
-                singing_end_seconds=split_point,
+                singing_end_seconds=split_point if split_point > 0.0 else None,
                 source_duration_seconds=total_duration,
                 source_sha256=artifact.input_sha256,
                 method="initiation_ceremony_stages",
@@ -649,10 +667,14 @@ class ContentClassifier:
         has_combination_clue = meta.get("has_combination_clue", False)
         mantra_hint = meta.get("mantra_hint")
 
+        has_independent_singing = has_mantra_evidence or len(singing_ranges) >= 1
+        has_source_clue = (
+            has_combination_clue
+            or (bool(mantra_hint) and mantra_hint != MantraType.NONE.value)
+        )
         has_singing_evidence = (
-            has_mantra_evidence
-            or len(singing_ranges) >= 1
-            or (len(cand_transitions) >= 1 and cand_transitions[0][0] >= 90.0)
+            has_independent_singing
+            or (has_source_clue and len(cand_transitions) >= 1 and cand_transitions[0][0] >= 90.0)
         )
 
         if has_singing_evidence and has_class_evidence:
@@ -682,7 +704,6 @@ class ContentClassifier:
             if cand_transitions:
                 singing_end, speech_start = cand_transitions[0]
                 if verse_intro_seg is not None:
-                    class_start = verse_intro_seg.start_seconds
                     method = "acoustic_verse_intro_transition"
                     evidence.append(
                         ContentEvidence(
@@ -694,16 +715,15 @@ class ContentClassifier:
                         )
                     )
                 else:
-                    class_start = speech_start
                     method = "acoustic_silence_transition"
 
-                coarse_gap = (singing_end, class_start)
+                coarse_gap = (singing_end, singing_end)
                 cutter_prop = CutterBoundaryProposal(
                     kirtan_range=(0.0, singing_end),
-                    class_range=(class_start, total_duration),
+                    class_range=(singing_end, total_duration),
                     coarse_gap_bracket=coarse_gap,
                     singing_end_seconds=singing_end,
-                    class_start_seconds=class_start,
+                    class_start_seconds=singing_end,
                     source_duration_seconds=total_duration,
                     source_sha256=artifact.input_sha256,
                     method=method,
@@ -734,14 +754,23 @@ class ContentClassifier:
 
             # Requires distinct ordered time ranges: initial sustained kirtan + later class
             if latest_kirtan_before_class > 60.0 and earliest_class >= latest_kirtan_before_class - 10.0:
-                class_start = verse_intro_seg.start_seconds if verse_intro_seg is not None else earliest_class
-                coarse_gap = (latest_kirtan_before_class, class_start)
+                if verse_intro_seg is not None:
+                    evidence.append(
+                        ContentEvidence(
+                            kind="verse_introduction",
+                            start_seconds=verse_intro_seg.start_seconds,
+                            end_seconds=verse_intro_seg.end_seconds,
+                            raw_excerpt=verse_intro_seg.text,
+                            normalized_text=normalize_text(verse_intro_seg.text),
+                        )
+                    )
+                coarse_gap = (latest_kirtan_before_class, latest_kirtan_before_class)
                 cutter_prop = CutterBoundaryProposal(
                     kirtan_range=(0.0, latest_kirtan_before_class),
-                    class_range=(class_start, total_duration),
+                    class_range=(latest_kirtan_before_class, total_duration),
                     coarse_gap_bracket=coarse_gap,
                     singing_end_seconds=None,
-                    class_start_seconds=class_start,
+                    class_start_seconds=latest_kirtan_before_class,
                     source_duration_seconds=total_duration,
                     source_sha256=artifact.input_sha256,
                     method="text_segment_coarse_estimate",

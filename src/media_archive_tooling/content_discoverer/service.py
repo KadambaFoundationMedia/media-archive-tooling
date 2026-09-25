@@ -17,6 +17,7 @@ from .classifier import ContentClassifier
 from .models import (
     ConfidenceLevel,
     ContentDiscoveryResult,
+    ContentEvidence,
     ContentType,
     CutterBoundaryProposal,
     DerivedAudioDetails,
@@ -428,6 +429,7 @@ class ContentDiscovererService:
         artifact.raw_metadata["has_combination_clue"] = has_combination_clue
         artifact.raw_metadata["mantra_hint"] = mantra_hint
         artifact.raw_metadata["category_hint"] = category_hint
+        artifact.raw_metadata["folder_context"] = str(media_path.parent)
 
         # 4. Classification from Excerpts
         result = self.classifier.classify(artifact)
@@ -443,21 +445,36 @@ class ContentDiscovererService:
             coarse_e = result.cutter_proposal.class_range[0]
             dur = result.cutter_proposal.source_duration_seconds or duration_sec
 
-            # Acoustically refine class speech onset if possible
+            # Acoustically refine class speech onset if possible (stored as evidence metadata, not destructive cut boundary)
             if self.acoustic_verifier and hasattr(self.acoustic_verifier, "find_speech_onset"):
+                verse_intro_ev = next((e for e in result.evidence if e.kind == "verse_introduction"), None)
+                target_times = []
+                if verse_intro_ev:
+                    target_times.append(verse_intro_ev.start_seconds)
                 raw_c_start = result.cutter_proposal.class_start_seconds or coarse_e
-                if raw_c_start > 0:
-                    search_s = max(0.0, raw_c_start - 5.0)
-                    search_e = min(dur, raw_c_start + 15.0)
+                if raw_c_start > 0 and raw_c_start not in target_times:
+                    target_times.append(raw_c_start)
+
+                for t_target in target_times:
+                    search_s = max(0.0, t_target - 5.0)
+                    search_e = min(dur, t_target + 15.0)
                     refined_onset = self.acoustic_verifier.find_speech_onset(
                         actual_audio,
                         search_s,
                         search_e,
-                        target_time=raw_c_start,
+                        target_time=t_target,
                     )
-                    if refined_onset is not None and abs(refined_onset - raw_c_start) <= 10.0:
-                        result.cutter_proposal.class_start_seconds = refined_onset
-                        result.cutter_proposal.class_range = (refined_onset, dur)
+                    if refined_onset is not None and abs(refined_onset - t_target) <= 10.0:
+                        if not any(e.kind == "speech_onset" and abs(e.start_seconds - refined_onset) < 0.1 for e in result.evidence):
+                            result.evidence.append(
+                                ContentEvidence(
+                                    kind="speech_onset",
+                                    start_seconds=refined_onset,
+                                    end_seconds=refined_onset,
+                                    raw_excerpt="acoustic speech onset",
+                                    normalized_text="speech onset",
+                                )
+                            )
 
             if result.cutter_proposal.singing_end_seconds is not None and result.cutter_proposal.confidence == "HIGH":
                 # Already verified acoustically via transition detection

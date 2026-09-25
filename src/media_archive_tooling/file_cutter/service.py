@@ -523,6 +523,23 @@ class FileCutterService:
                     review_reason=f"File classification '{classification}' is not KIRTAN_AND_CLASS; a cut point alone cannot approve non-combination recording for two-part cut",
                 )
 
+            # Multi-part ceremonies (Vyasa-puja, Initiation) must never be automatically two-part cut
+            source_p = Path(source_path)
+            source_fn = source_p.name.lower()
+            source_parent = source_p.parent.name.lower()
+            is_ceremony_source = any(p in source_fn or p in source_parent for p in ["vyasa-puja", "vyasa puja", "vyasapuja", "vyasa_puja", "initiation", "diksa", "diksha"])
+            if classification in ("VYASA_PUJA", "INITIATION") or is_ceremony_source:
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=current_sha256,
+                    source_duration_seconds=duration,
+                    cut_point_seconds=0.0,
+                    success=False,
+                    review_required=True,
+                    review_reason=f"Multi-part ceremony ({classification or 'ceremony'}) requires multi-part specification and review; not eligible for automatic two-part cut",
+                )
+
             # Save human decision only when NOT dry_run!
             if not dry_run:
                 self.registry.save_human_cut_decision(
@@ -534,8 +551,24 @@ class FileCutterService:
                 )
             human_dec = {"cut_point_seconds": cut_point_override, "source_sha256": current_sha256}
 
+        # Multi-part ceremonies (Vyasa-puja, Initiation) must never be automatically two-part cut
+        source_p = Path(source_path)
+        source_fn = source_p.name.lower()
+        source_parent = source_p.parent.name.lower()
+        is_ceremony_source = any(p in source_fn or p in source_parent for p in ["vyasa-puja", "vyasa puja", "vyasapuja", "vyasa_puja", "initiation", "diksa", "diksha"])
+        if classification in ("VYASA_PUJA", "INITIATION") or is_ceremony_source:
+            return FileCutterResult(
+                tracking_id=tracking_id,
+                source_path=str(source_path),
+                source_sha256=current_sha256,
+                source_duration_seconds=duration,
+                cut_point_seconds=0.0,
+                success=False,
+                review_required=True,
+                review_reason=f"Multi-part ceremony ({classification or 'ceremony'}) requires multi-part specification and review; not eligible for automatic two-part cut",
+            )
+
         cut_point: Optional[float] = None
-        class_start_point: Optional[float] = None
         if human_dec and human_dec.get("source_sha256") == current_sha256:
             # Validate content type for stored human cut decision as well
             if classification != "KIRTAN_AND_CLASS":
@@ -550,16 +583,10 @@ class FileCutterService:
                     review_reason=f"File classification '{classification}' is not KIRTAN_AND_CLASS; a cut point alone cannot approve non-combination recording for two-part cut",
                 )
             cut_point = float(human_dec["cut_point_seconds"])
-            if human_dec.get("class_start_seconds") is not None:
-                class_start_point = float(human_dec["class_start_seconds"])
         elif classification == "KIRTAN_AND_CLASS" and crev.get("confidence") == "HIGH":
             prop = crev.get("cutter_proposal")
             if prop and prop.get("confidence") == "HIGH" and prop.get("singing_end_seconds") is not None:
                 cut_point = float(prop["singing_end_seconds"])
-                if prop.get("class_start_seconds") is not None:
-                    class_start_point = float(prop["class_start_seconds"])
-                elif prop.get("class_range") and len(prop["class_range"]) >= 1 and float(prop["class_range"][0]) > 0:
-                    class_start_point = float(prop["class_range"][0])
             else:
                 return FileCutterResult(
                     tracking_id=tracking_id,
@@ -670,7 +697,6 @@ class FileCutterService:
 
         # 6. Dry Run Execution
         if dry_run:
-            actual_c_start = class_start_point if class_start_point is not None else cut_point
             singing_trim = self.audio_cutter.detect_leading_silence(
                 working_audio_path,
                 start_seconds=0.0,
@@ -678,9 +704,10 @@ class FileCutterService:
             )
             class_trim = self.audio_cutter.detect_leading_silence(
                 working_audio_path,
-                start_seconds=actual_c_start,
-                end_seconds=min(duration, actual_c_start + 60.0),
+                start_seconds=cut_point,
+                end_seconds=min(duration, cut_point + 60.0),
             )
+            first_retained_class = round(cut_point + class_trim, 3)
             return FileCutterResult(
                 tracking_id=tracking_id,
                 source_path=str(source_path),
@@ -696,7 +723,7 @@ class FileCutterService:
                 class_output_path=str(class_dest),
                 class_tracking_id=tracking_id,
                 class_sha256="dry_run_hash_class",
-                class_duration_seconds=round((duration - actual_c_start) - class_trim, 3),
+                class_duration_seconds=round((duration - cut_point) - class_trim, 3),
                 class_leading_silence_seconds=class_trim,
                 class_pending_tool_11_move=True,
                 success=True,
@@ -705,6 +732,7 @@ class FileCutterService:
                     "is_video": is_video,
                     "working_audio_path": str(working_audio_path),
                     "projected_audio_file_path": str(class_dest) if is_video else None,
+                    "first_retained_class_audio_seconds": first_retained_class,
                 },
             )
 
@@ -717,7 +745,7 @@ class FileCutterService:
         spec = AudioCutSpec(
             source_path=working_audio_path,
             cut_point_seconds=cut_point,
-            class_start_seconds=class_start_point,
+            class_start_seconds=cut_point,
             source_duration_seconds=duration,
             singing_output_path=singing_dest,
             class_output_path=class_dest,

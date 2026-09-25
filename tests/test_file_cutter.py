@@ -1414,38 +1414,96 @@ def test_in_place_split_rollback_restores_original_source(env):
     assert not singing_dest.exists()
 
 
-def test_two_boundary_audio_cut_omits_transition_gap(env):
-    """AudioCutSpec with distinct cut_point_seconds (kirtan end) and class_start_seconds cuts cleanly and omits dead air gap."""
-    # 10s source: singing 0-3s, silence gap 3-5s, class 5-10s
-    src = make_audio_file(env["media_dir"] / "two_boundary_source.mp3", duration=10.0)
+def test_single_cut_at_singing_end_preserves_class_opening(env):
+    """T5-R-006: Tool 6 uses one cut at singing end; both outputs meet at singing_end_seconds without discarding class opening."""
+    # 10s source: singing 0-3s, opening/prayer 3-5s, verse intro 5-10s
+    src = make_audio_file(env["media_dir"] / "single_boundary_source.mp3", duration=10.0)
     tid = env["register_test_file"](
         src,
-        tracking_id="trk_twobound",
+        tracking_id="trk_singlebound",
         what_val="SB-01-19-31",
         mantra_type="Jaya-Radha-Madhava",
         singing_end_seconds=3.0,
         source_duration_seconds=10.0,
     )
-    # Manually update cutter proposal to have class_start_seconds=5.0
+    # Even if cutter proposal or metadata has a later verse_intro/speech_start marker (e.g. 5.0s),
+    # the class file MUST start at singing_end_seconds (3.0s) so the opening (3-5s) is not discarded.
     crev = env["registry"].get_content_review(tid)
     prop = crev["cutter_proposal"]
     prop["class_start_seconds"] = 5.0
-    prop["class_range"] = [5.0, 10.0]
+    prop["class_range"] = [3.0, 10.0]
     with env["registry"]._get_conn() as conn:
         conn.execute("UPDATE content_reviews SET cutter_proposal_json = ? WHERE tracking_id = ?", (json.dumps(prop), tid))
         conn.commit()
 
     res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
     assert res.success is True
+    assert res.cut_point_seconds == 3.0
 
     # Inspect outputs:
-    # Singing part was cut from 0 to 3s (duration ~3s)
+    # 1. Singing part was cut from 0 to 3s (duration ~3s)
     info_s = env["audio_cutter"].inspect_audio(Path(res.singing_output_path))
     assert 2.5 <= info_s["duration"] <= 3.5
 
-    # Class part was cut from 5s to 10s (duration ~5s), NOT from 3s to 10s (which would be 7s)!
+    # 2. Class part was cut from 3s to 10s (duration ~7s), preserving the prayer/opening between 3s and 5s!
     info_c = env["audio_cutter"].inspect_audio(Path(res.class_output_path))
-    assert 4.5 <= info_c["duration"] <= 5.5
+    assert 6.5 <= info_c["duration"] <= 7.5
 
 
+def test_sweden_like_class_opening_preserved(env):
+    """T5-R-006 regression: Sweden example where singing ends at 2.5s and verse intro is at 4.5s.
+    Class file must start at 2.5s and preserve opening audio."""
+    src = make_audio_file(env["media_dir"] / "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3", duration=8.0)
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_sweden_regress",
+        what_val="SB-03-06-06",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=2.5,
+        source_duration_seconds=8.0,
+    )
+    # Metadata contains later verse introduction near 4.5s
+    crev = env["registry"].get_content_review(tid)
+    res_data = crev.get("result") or {}
+    res_data["evidence"] = [
+        {"kind": "verse_introduction", "start_seconds": 4.5, "end_seconds": 6.0, "raw_excerpt": "we are reading from", "normalized_text": "we are reading from"}
+    ]
+    with env["registry"]._get_conn() as conn:
+        conn.execute("UPDATE content_reviews SET result_json = ? WHERE tracking_id = ?", (json.dumps(res_data), tid))
+        conn.commit()
+
+    # Dry-run check
+    dry_res = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert dry_res.success is True
+    assert dry_res.cut_point_seconds == 2.5
+    # First retained class audio is at cut_point (2.5s), retaining the full opening before 4.5s
+    assert dry_res.details["first_retained_class_audio_seconds"] <= 2.6
+    assert 5.0 <= dry_res.class_duration_seconds <= 5.6
+
+    # Live cut check
+    live_res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert live_res.success is True
+    info_c = env["audio_cutter"].inspect_audio(Path(live_res.class_output_path))
+    # Full duration from 2.5s to 8.0s (~5.5s) is preserved, not truncated to 8.0 - 4.5 = 3.5s!
+    assert 5.0 <= info_c["duration"] <= 6.0
+
+
+def test_t5_r_007_never_two_part_cut_vyasa_puja_or_initiation(env):
+    """T5-R-007: Cutter service refuses automatic two-part cutting for Vyasa-puja or Initiation recordings."""
+    vp_dir = env["media_dir"] / "Vyasa-puja 2015"
+    vp_dir.mkdir(parents=True, exist_ok=True)
+    src_vp = make_audio_file(vp_dir / "ZOOM0004.MP3", duration=10.0)
+
+    tid_vp = env["register_test_file"](
+        src_vp,
+        tracking_id="trk_vyasapuja_test",
+        classification="VYASA_PUJA",
+        singing_end_seconds=3.0,
+        source_duration_seconds=10.0,
+    )
+
+    res_vp = env["cutter_service"].cut_file(tid_vp, dry_run=True, root_dir=env["tmp_path"])
+    assert res_vp.success is False
+    assert res_vp.review_required is True
+    assert "multi-part" in (res_vp.review_reason or "").lower()
 

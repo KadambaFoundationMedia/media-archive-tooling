@@ -229,7 +229,7 @@ class AudioCutter:
         # 1. Leading silence detection
         singing_trim = 0.0
         class_trim = 0.0
-        actual_class_start = spec.class_start_seconds if spec.class_start_seconds is not None else spec.cut_point_seconds
+        actual_class_start = spec.cut_point_seconds
         if spec.trim_silence:
             singing_trim = self.detect_leading_silence(
                 source_path,

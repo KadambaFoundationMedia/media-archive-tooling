@@ -136,9 +136,9 @@ def test_02_jaya_radha_madhava_then_class(env):
     assert res.cutter_proposal is not None
     assert res.cutter_proposal.kirtan_start_sec == 0.0
     assert res.cutter_proposal.kirtan_end_sec == 700.0
-    assert res.cutter_proposal.class_start_sec == 743.0
+    assert res.cutter_proposal.class_start_sec == 700.0
     assert "kirtan 00:00-11:40" in res.cutter_proposal.suggested_cut_points
-    assert "class begins 12:23" in res.cutter_proposal.suggested_cut_points
+    assert "class begins 11:40" in res.cutter_proposal.suggested_cut_points
 
 
 # ---------------------------------------------------------------------------
@@ -1440,8 +1440,146 @@ def test_43_two_boundary_kirtan_and_class_cut_proposal(env, monkeypatch):
     assert result.cutter_proposal is not None
     assert result.cutter_proposal.kirtan_start_sec == 0.0
     assert result.cutter_proposal.kirtan_end_sec == 703.956
-    # Must pick the verse introduction at 12:22 (742s), NOT 12:44 (764s)!
-    assert result.cutter_proposal.class_start_sec == 742.0
-    assert "kirtan 00:00-11:43; class begins 12:22" == result.cutter_proposal.suggested_cut_points
+    # Single cut point: class output meets at singing_end (703.956s), not discarding speech opening
+    assert result.cutter_proposal.class_start_sec == 703.956
+    assert result.cutter_proposal.class_range[0] == 703.956
+    # Speech onset and verse intro are preserved as metadata in evidence for Tool 8
+    assert any(e.kind == "verse_introduction" and 739.0 <= e.start_seconds <= 748.0 for e in result.evidence)
+    assert any(e.kind == "speech_onset" and e.start_seconds == 742.0 for e in result.evidence)
 
 
+def test_t5_r_008_acoustic_pause_alone_not_singing_evidence(env, monkeypatch):
+    """T5-R-008: A pure-class transcript with an acoustic pause transition but no singing evidence yields CLASS."""
+    media_file = env["media_dir"] / "pure_class_lecture.mp3"
+    media_file.write_text("class lecture audio bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_pure_class_pause")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    # Candidate acoustic transition after 90s, but NO singing, NO mantra text, NO filename combination clue
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.956,
+        candidate_transitions=[(703.956, 742.0)],
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 3600.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="class_sha",
+            transcript_sha256="tx_class_sha",
+            duration_seconds=3600.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=600.0, text="We are reading from Srimad-Bhagavatam Third Canto Chapter Six Text Six."),
+                TranscriptSegment(start_seconds=750.0, end_seconds=3500.0, text="Srila Prabhupada explains in the purport that Krishna is the supreme controller and cause of all causes."),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    # Must NOT classify as KIRTAN_AND_CLASS; an acoustic pause alone is not singing evidence
+    assert result.classification == ContentType.CLASS
+    assert result.process_by_tool_6 is False
+    assert result.cutter_proposal is None
+
+
+def test_t5_r_007_vyasa_puja_folder_context_routes_to_review(env, monkeypatch):
+    """T5-R-007: Media file inside Vyasa-puja folder context is classified as VYASA_PUJA and routed to review."""
+    vp_dir = env["media_dir"] / "Vyasa-puja 2015"
+    vp_dir.mkdir(parents=True, exist_ok=True)
+    media_file = vp_dir / "ZOOM0004.MP3"
+    media_file.write_text("vyasa puja recording audio bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_vyasapuja_folder")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=381.785,
+        candidate_transitions=[(381.785, 449.785)],
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 4200.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="vp_sha",
+            transcript_sha256="tx_vp_sha",
+            duration_seconds=4200.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=350.0, text="Hare Krishna kirtan singing"),
+                TranscriptSegment(start_seconds=450.0, end_seconds=4000.0, text="Reading from Srimad Bhagavatam"),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.VYASA_PUJA
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.process_by_tool_6 is False
+    assert result.review_required is True
+    assert "Vyasa-puja" in (result.review_reason or "")
+
+
+def test_t5_r_006_sweden_class_opening_preserved(env, monkeypatch):
+    """T5-R-006: Sweden example where singing ends at 149.396s and verse intro is at 183.183s.
+    CutterBoundaryProposal class_range starts at singing_end (149.396s), preserving 'Om namo bhagavate'."""
+    media_file = env["media_dir"] / "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3"
+    media_file.write_text("sweden audio bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_sweden_tool5")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=149.396,
+        candidate_transitions=[(149.396, 150.911)],
+        speech_onset=150.911,
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 4509.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="sweden_sha",
+            transcript_sha256="tx_sweden_sha",
+            duration_seconds=4509.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=145.0, text="jaya radha madhava kunja bihari"),
+                TranscriptSegment(start_seconds=150.5, end_seconds=175.0, text="om namo bhagavate vasudevaya. Hare Krishna. Welcome to everybody."),
+                TranscriptSegment(start_seconds=183.0, end_seconds=220.0, text="We are reading from Srimad-Bhagavatam, Third Canto, Chapter Six, Text Six."),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.process_by_tool_6 is True
+    assert result.cutter_proposal is not None
+    assert result.cutter_proposal.singing_end_seconds == 149.396
+    # Class start must meet at 149.396s, NOT at 183.183s!
+    assert result.cutter_proposal.class_start_sec == 149.396
+    assert result.cutter_proposal.class_range[0] == 149.396
+    # Preserves opening in metadata
+    assert any(e.kind == "om_namo" and 150.0 <= e.start_seconds <= 175.0 for e in result.evidence)
+    assert any(e.kind == "verse_introduction" and 180.0 <= e.start_seconds <= 220.0 for e in result.evidence)

@@ -93,7 +93,17 @@ class AcousticBoundaryVerifier:
             gap_before = ev[0] - prev_end
             if gap_before >= min_sustained_sound:
                 singing_end = ev[0]
-                cluster = [e for e in events if 0.0 <= e[0] - singing_end <= 60.0]
+                # If first silence is a micro-pause (< 0.5s) followed closely (< 5s) by a longer silence,
+                # the longer silence marks the true conclusion of the music.
+                if ev[2] < 0.5:
+                    subsequent = [
+                        e for e in events[i + 1:]
+                        if 0.0 < e[0] - ev[0] <= 5.0 and e[2] >= 0.5
+                    ]
+                    if subsequent:
+                        singing_end = max(subsequent, key=lambda e: e[2])[0]
+
+                cluster = [e for e in events if 0.0 <= e[0] - ev[0] <= 60.0]
                 speech_start = cluster[-1][1] if len(cluster) > 1 else ev[1]
                 candidates.append((round(singing_end, 3), round(speech_start, 3)))
 
