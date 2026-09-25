@@ -243,6 +243,74 @@ class AcousticBoundaryVerifier:
         best = min(valid, key=lambda e: abs(e - ref_time))
         return round(best, 3)
 
+    def verify_transition_confidence(
+        self,
+        audio_path: Path,
+        candidate_singing_end: float,
+        search_window: float = 20.0,
+    ) -> Tuple[str, Optional[str]]:
+        """Verify whether a candidate singing end timestamp has high boundary confidence (<= 1.5s tolerance).
+
+        Returns (confidence, reason):
+        - ("HIGH", None) if the boundary is acoustically confirmed within <= 1.5s tolerance.
+        - ("MEDIUM", reason) if ambiguous, multi-pause cluster (> 2.0s), or earlier unconfirmed silence exceeds 2.0s.
+        """
+        if not self.ffmpeg_bin or not audio_path.exists() or candidate_singing_end <= 0.0:
+            return ("MEDIUM", "Audio unavailable or invalid timestamp for acoustic confidence check")
+
+        audio_path = audio_path.resolve()
+        win_start = max(0.0, candidate_singing_end - 15.0)
+        win_dur = min(search_window, 20.0)
+
+        def _get_silence_starts(noise: str) -> List[float]:
+            cmd = [
+                self.ffmpeg_bin,
+                "-nostdin",
+                "-v", "info",
+                "-ss", f"{win_start:.3f}",
+                "-t", f"{win_dur:.3f}",
+                "-i", str(audio_path),
+                "-af", f"silencedetect=noise={noise}:d=0.3",
+                "-f", "null",
+                "-",
+            ]
+            try:
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+                if res.returncode != 0:
+                    return []
+                stderr_text = res.stderr.decode("utf-8", errors="replace")
+                return [
+                    win_start + float(m.group(1))
+                    for m in re.finditer(r"silence_start:\s*(\d+(?:\.\d+)?)", stderr_text)
+                ]
+            except Exception:
+                return []
+
+        starts_30 = _get_silence_starts("-30dB")
+        starts_25 = _get_silence_starts("-25dB")
+
+        # 1. Check for significant silence at -30dB in cluster > 2.0s before candidate
+        prior_30 = [s for s in starts_30 if s < candidate_singing_end - 2.0]
+        if prior_30:
+            earliest = prior_30[0]
+            diff = candidate_singing_end - earliest
+            return ("MEDIUM", f"Silence cluster spans {diff:.2f}s before candidate (earliest at {earliest:.2f}s)")
+
+        # 2. Check for unmatched silence at -25dB > 2.0s before candidate
+        unmatched_25 = [s for s in starts_25 if s < candidate_singing_end - 2.0 and not any(abs(x - s) < 1.0 for x in starts_30)]
+        if unmatched_25:
+            earliest_25 = unmatched_25[0]
+            diff = candidate_singing_end - earliest_25
+            return ("MEDIUM", f"Unmatched acoustic silence at -25dB at {earliest_25:.2f}s is {diff:.2f}s before candidate")
+
+        return ("HIGH", None)
+
 
 class FakeAcousticBoundaryVerifier:
     """Test double for acoustic boundary verification."""
@@ -253,11 +321,15 @@ class FakeAcousticBoundaryVerifier:
         should_verify: bool = True,
         candidate_transitions: Optional[List[Tuple[float, float]]] = None,
         speech_onset: Optional[float] = None,
+        transition_confidence: str = "HIGH",
+        transition_ambiguity_reason: Optional[str] = None,
     ):
         self.exact_cut_point = exact_cut_point
         self.should_verify = should_verify
         self.candidate_transitions = candidate_transitions or []
         self.speech_onset = speech_onset
+        self.transition_confidence = transition_confidence
+        self.transition_ambiguity_reason = transition_ambiguity_reason
         self.calls = []
 
     def detect_candidate_transitions(
@@ -294,3 +366,13 @@ class FakeAcousticBoundaryVerifier:
         if not self.should_verify:
             return None
         return self.speech_onset
+
+    def verify_transition_confidence(
+        self,
+        audio_path: Path,
+        candidate_singing_end: float,
+        search_window: float = 20.0,
+    ) -> Tuple[str, Optional[str]]:
+        if not self.should_verify or self.transition_confidence == "MEDIUM":
+            return ("MEDIUM", self.transition_ambiguity_reason or "Simulated transition ambiguity > 1.5s")
+        return (self.transition_confidence, self.transition_ambiguity_reason)

@@ -98,6 +98,69 @@ review instead of asserting a high-confidence exact boundary. Report the
 five manual-versus-current cut points and the first retained class audio in
 the next handoff. No live media or Baserow writes are authorized for review.
 
+### Resolution of Independent Planner Re-Review Findings (2026-09-25)
+
+1. **T6-R-010 (Validate recorded split before idempotent reuse)**: [RESOLVED]
+   - `FileCutterService` now verifies recorded split successors before idempotent reuse:
+     - Checks both output files (singing and class) across current Tool 11 registry tracked locations as well as stored output paths.
+     - Confirms both outputs physically exist on disk and verify against their recorded SHA-256 hashes.
+     - Detects whether the source file was restored on disk (`source_restored`).
+     - If outputs are missing, hashes mismatch, or the source file was restored, unforced dry-run and live executions refuse false success, returning `success=False`, `reused_existing_split=False`, `lineage_unverified=True`, and `review_required=True` without deleting the restored source file.
+     - In `LocalRegistry.record_file_split()`, existing splits for the source tracking ID are cleaned up before recording a new split, preventing duplicate rows upon forced re-splitting.
+     - Regression test `test_t6_r_010_validate_recorded_split_before_idempotent_reuse` in `tests/test_file_cutter.py` verifies missing outputs, restored source protection, no duplicate rows, unforced refusal, forced preview, and hash tampering.
+
+2. **Transition Boundary Confidence Gating (2008 and Simhachalam)**: [RESOLVED]
+   - Added `verify_transition_confidence` to `AcousticBoundaryVerifier` (and `FakeAcousticBoundaryVerifier`) to detect acoustic ambiguity:
+     - Detects silence cluster spans (>2.0s jump between initial pause and candidate cut point).
+     - Detects unmatched silences across energy levels (-25dB vs -30dB).
+   - In `ContentDiscovererService`, if acoustic transition confidence is not `HIGH`, the classification confidence is downgraded to `ConfidenceLevel.MEDIUM`, `process_by_tool_6=False`, `review_required=True`, and `cutter_proposal.confidence="MEDIUM"`:
+     - `2008-01-04-2.mp3` (+6.48s delta vs manual 1693.048s) detected silence cluster spanning 4.99s -> routed to waveform review (`ConfidenceLevel.MEDIUM`, `process_by_tool_6=False`).
+     - `2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3` (+7.04s delta vs manual 459.592s) detected unmatched -25dB silence at 459.32s (7.31s before candidate) -> routed to waveform review (`ConfidenceLevel.MEDIUM`, `process_by_tool_6=False`).
+     - Unambiguous sharp transitions (`Sweden` at 149.164s [-0.23s delta] and `Oslo` at 703.973s [-0.20s delta]) retain `ConfidenceLevel.HIGH` and auto-route to Tool 6 (`process_by_tool_6=True`).
+   - Regression test `test_boundary_confidence_gating_routes_ambiguous_transitions_to_review` in `tests/test_content_discoverer.py` verified.
+
+### Builder benchmark report (2026-09-25)
+
+Evaluation of the five benchmark samples with manual-versus-proposed cut points and first retained class audio:
+
+1. **Sweden** (`HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3`):
+   - Manual singing end: `149.396s` | Manual class start: `150.189s`
+   - Proposed Cut Point: `149.164s` (delta: `-0.232s` within <=1.5s tolerance)
+   - First Retained Class Audio: `149.164s` (0.000s leading silence trimmed; preserves "Om namo bhagavate" and speech opening)
+   - Route: `KIRTAN_AND_CLASS` (`HIGH`), `process_by_tool_6=True`, `review_required=False`
+   - Unforced Tool 6 Dry-Run: `SUCCESS`
+
+2. **Oslo** (`KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA`):
+   - Manual singing end: `704.176s` | Manual class start: `740.945s`
+   - Proposed Cut Point: `703.973s` (delta: `-0.203s` within <=1.5s tolerance)
+   - First Retained Class Audio: `703.973s` (preserves all class opening speech)
+   - Route: `KIRTAN_AND_CLASS` (`HIGH`), `process_by_tool_6=True`, `review_required=False`
+   - Unforced Tool 6 Dry-Run: `SUCCESS`
+
+3. **2008** (`2008-01-04-2.mp3`):
+   - Manual singing end: `1693.048s` | Manual class start: `1759.929s`
+   - Proposed Cut Point: `1699.527s` (delta: `+6.479s` > 1.5s tolerance)
+   - First Retained Class Audio (forced preview): `1699.527s`
+   - Route: `KIRTAN_AND_CLASS` (`MEDIUM`), `process_by_tool_6=False`, `review_required=True`
+   - Reason: "Singing end boundary exceeds 1.5s confidence tolerance (Silence cluster spans 4.99s before candidate (earliest at 1694.53s)); manual review required"
+   - Unforced Tool 6 Dry-Run: Refused (`lineage_unverified=True`, `review_required=True`, restored source preserved)
+
+4. **Simhachalam** (`2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3`):
+   - Manual singing end: `459.592s` | Manual class start: `479.918s`
+   - Proposed Cut Point: `466.630s` (delta: `+7.038s` > 1.5s tolerance)
+   - First Retained Class Audio (forced preview): `466.630s`
+   - Route: `KIRTAN_AND_CLASS` (`MEDIUM`), `process_by_tool_6=False`, `review_required=True`
+   - Reason: "Singing end boundary exceeds 1.5s confidence tolerance (Unmatched acoustic silence at -25dB at 459.32s is 7.31s before candidate); manual review required"
+   - Unforced Tool 6 Dry-Run: Refused (`review_required=True`, routed to review portal waveform player)
+
+5. **Vyasa-puja** (`Vyasa-puja 2015/ZOOM0004.MP3`):
+   - Manual singing end: `381.927s` | Manual class start: `450.397s`
+   - Proposed Cut Point: `None`
+   - First Retained Class Audio: `N/A`
+   - Route: `VYASA_PUJA` (`HIGH`), `process_by_tool_6=False`, `review_required=True`
+   - Reason: "Vyasa-puja recordings require multi-part specification and review; not auto-cut by Tool 6"
+   - Unforced Tool 6 Dry-Run: Refused (auto-cut ineligible)
+
 ## Tool 5-to-7 transcription boundary — pending implementation (2026-09-24)
 
 The owner moved **full transcription** out of Tool 5. Tool 5 must classify

@@ -1507,3 +1507,93 @@ def test_t5_r_007_never_two_part_cut_vyasa_puja_or_initiation(env):
     assert res_vp.review_required is True
     assert "multi-part" in (res_vp.review_reason or "").lower()
 
+
+def test_t6_r_010_validate_recorded_split_before_idempotent_reuse(env):
+    """T6-R-010: Validate a recorded split before idempotent reuse.
+
+    Missing outputs or a restored source must refuse false success, avoid deleting
+    restored inputs or creating duplicate rows, and route uncertain lineage to review/recovery.
+    """
+    src = make_audio_file(env["media_dir"] / "2008-01-04-2.mp3", duration=8.0)
+    src_bytes = src.read_bytes()
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_t6_r_010",
+        singing_end_seconds=3.0,
+        source_duration_seconds=8.0,
+    )
+
+    # 1. Complete an initial cut
+    live_res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert live_res.success is True
+    singing_p = Path(live_res.singing_output_path)
+    class_p = Path(live_res.class_output_path)
+    assert singing_p.is_file()
+    assert class_p.is_file()
+    assert not src.exists()  # Original deleted on successful audio cut
+
+    # Verify initial split is in registry
+    split_rec = env["registry"].get_file_split_by_source(tid)
+    assert split_rec is not None
+
+    # 2. Simulate user restoring original source file and deleting split outputs
+    singing_p.unlink()
+    class_p.unlink()
+    src.write_bytes(src_bytes)
+    assert src.is_file()
+    assert not singing_p.exists()
+    assert not class_p.exists()
+
+    # Reset registry file pointer to point to restored source
+    env["registry"].update_file_status(
+        tracking_id=tid,
+        status="registered",
+        proposed_filename=src.name,
+        current_path=str(src),
+        what_val="Class",
+    )
+
+    # 3. Dry-run without force MUST NOT claim success or reuse stale split
+    dry_stale = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert dry_stale.success is False
+    assert dry_stale.dry_run is True
+    assert dry_stale.review_required is True
+    assert dry_stale.details["reused_existing_split"] is False
+    assert dry_stale.details["lineage_unverified"] is True
+    assert dry_stale.details["missing_outputs"] is True
+    assert dry_stale.details["source_restored"] is True
+    assert "cannot be verified" in (dry_stale.review_reason or "")
+    assert src.is_file()  # Restored source never deleted
+
+    # 4. Live cut without force MUST NOT claim success, delete restored source, or duplicate rows
+    live_stale = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert live_stale.success is False
+    assert live_stale.review_required is True
+    assert live_stale.details["lineage_unverified"] is True
+    assert src.is_file()  # Restored source remains intact
+
+    # Verify no duplicate rows created
+    with env["registry"]._get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM file_splits WHERE source_tracking_id = ?", (tid,))
+        count = cursor.fetchone()[0]
+        assert count == 1  # Only the original row exists
+
+    # 5. Forced dry-run gives a real preview of current file
+    forced_dry = env["cutter_service"].cut_file(tid, dry_run=True, force=True, root_dir=env["tmp_path"])
+    assert forced_dry.success is True
+    assert forced_dry.dry_run is True
+    assert forced_dry.cut_point_seconds == 3.0
+    assert forced_dry.details.get("first_retained_class_audio_seconds") is not None
+    assert src.is_file()
+
+    # 6. Test output hash mismatch routes to review
+    # Re-create outputs with tampered content
+    singing_p.write_bytes(b"tampered singing bytes")
+    class_p.write_bytes(b"tampered class bytes")
+    src.unlink()  # Remove source so source_restored is False
+
+    tampered_res = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert tampered_res.success is False
+    assert tampered_res.review_required is True
+    assert "hash" in (tampered_res.review_reason or "").lower()

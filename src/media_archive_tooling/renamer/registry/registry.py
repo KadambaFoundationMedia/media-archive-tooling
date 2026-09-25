@@ -1502,6 +1502,7 @@ class LocalRegistry:
         now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM file_splits WHERE source_tracking_id = ?", (split_data["source_tracking_id"],))
             cursor.execute("""
             INSERT INTO file_splits (
                 source_tracking_id, source_path, source_sha256, source_duration_seconds,

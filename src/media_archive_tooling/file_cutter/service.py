@@ -326,6 +326,124 @@ class FileCutterService:
         tracking_id = file_rec["tracking_id"]
         source_path = Path(file_rec["current_path"]).resolve()
 
+        # Check if already split (Idempotency)
+        existing_split = self.registry.get_file_split_by_source(tracking_id)
+        if existing_split and not force:
+            # T6-R-010: Validate recorded split before idempotent reuse
+            singing_tid = existing_split.get("singing_tracking_id")
+            class_tid = existing_split.get("class_tracking_id")
+
+            # Check Tool 11 current locations from registry files table, or fallback to stored paths
+            singing_rec = self.registry.get_file(singing_tid) if singing_tid else None
+            if singing_rec and singing_rec.get("current_path") and Path(singing_rec["current_path"]).is_file():
+                singing_p = Path(singing_rec["current_path"]).resolve()
+            elif existing_split.get("singing_path") and Path(existing_split["singing_path"]).is_file():
+                singing_p = Path(existing_split["singing_path"]).resolve()
+            else:
+                singing_p = None
+
+            class_rec = self.registry.get_file(class_tid) if class_tid else None
+            if class_rec and class_rec.get("current_path") and Path(class_rec["current_path"]).is_file():
+                class_p = Path(class_rec["current_path"]).resolve()
+            elif existing_split.get("class_path") and Path(existing_split["class_path"]).is_file():
+                class_p = Path(existing_split["class_path"]).resolve()
+            else:
+                class_p = None
+
+            outputs_exist = (singing_p is not None and class_p is not None)
+            hashes_match = False
+            if outputs_exist:
+                hash_s = compute_sha256(singing_p)
+                hash_c = compute_sha256(class_p)
+                hashes_match = (
+                    hash_s == existing_split.get("singing_sha256")
+                    and hash_c == existing_split.get("class_sha256")
+                )
+
+            # Check if source input was restored on disk (for non-video audio where source is removed upon cut)
+            split_details = {}
+            if existing_split.get("split_details_json"):
+                try:
+                    split_details = json.loads(existing_split["split_details_json"])
+                except Exception:
+                    pass
+            is_video_split = split_details.get("is_video", False) or source_path.suffix.lower() in {
+                ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"
+            }
+            orig_path_str = file_rec.get("original_path") or existing_split.get("source_path")
+            source_p_exists = source_path.is_file() and (
+                str(source_path) == str(Path(orig_path_str).resolve())
+                or source_path.name == Path(orig_path_str).name
+            )
+            source_restored = source_p_exists and not is_video_split
+
+            if not outputs_exist or not hashes_match or source_restored:
+                reasons = []
+                if not outputs_exist:
+                    missing = []
+                    if singing_p is None:
+                        missing.append(f"singing ({existing_split.get('singing_path')})")
+                    if class_p is None:
+                        missing.append(f"class ({existing_split.get('class_path')})")
+                    reasons.append(f"output files missing on disk: {', '.join(missing)}")
+                elif not hashes_match:
+                    reasons.append("output physical hashes do not match recorded split hashes")
+                if source_restored:
+                    reasons.append(f"original source audio file is present on disk despite recorded completed split ({source_path})")
+
+                review_msg = (
+                    f"Prior split recorded in registry (ID {existing_split.get('id')}) cannot be verified: "
+                    f"{'; '.join(reasons)}. Recovery or manual review required; use --force to re-cut."
+                )
+                logger.warning(review_msg)
+                return FileCutterResult(
+                    tracking_id=tracking_id,
+                    source_path=str(source_path),
+                    source_sha256=file_rec.get("source_sha256", "") or (compute_sha256(source_path) if source_path.is_file() else ""),
+                    source_duration_seconds=float(existing_split.get("source_duration_seconds") or 0.0),
+                    cut_point_seconds=float(existing_split.get("cut_point_seconds") or 0.0),
+                    singing_output_path=str(singing_p) if singing_p else existing_split.get("singing_path"),
+                    singing_tracking_id=singing_tid,
+                    class_output_path=str(class_p) if class_p else existing_split.get("class_path"),
+                    class_tracking_id=class_tid,
+                    success=False,
+                    review_required=True,
+                    review_reason=review_msg,
+                    error_message="Recorded split lineage unverified",
+                    dry_run=dry_run,
+                    details={
+                        "reused_existing_split": False,
+                        "lineage_unverified": True,
+                        "missing_outputs": not outputs_exist,
+                        "source_restored": source_restored,
+                    },
+                )
+
+            logger.info("File %s already completed split (ID %s) and outputs verified on disk", tracking_id, existing_split["id"])
+            return FileCutterResult(
+                tracking_id=tracking_id,
+                source_path=existing_split["source_path"],
+                source_sha256=existing_split["source_sha256"],
+                source_duration_seconds=existing_split["source_duration_seconds"],
+                cut_point_seconds=existing_split["cut_point_seconds"],
+                singing_output_path=str(singing_p),
+                singing_tracking_id=existing_split["singing_tracking_id"],
+                singing_sha256=existing_split["singing_sha256"],
+                singing_duration_seconds=existing_split["singing_duration_seconds"],
+                singing_leading_silence_seconds=existing_split["singing_leading_silence_seconds"],
+                singing_pending_tool_11_move=bool(existing_split["singing_pending_tool_11_move"]),
+                class_output_path=str(class_p),
+                class_tracking_id=existing_split["class_tracking_id"],
+                class_sha256=existing_split["class_sha256"],
+                class_duration_seconds=existing_split["class_duration_seconds"],
+                class_leading_silence_seconds=existing_split["class_leading_silence_seconds"],
+                class_pending_tool_11_move=bool(existing_split["class_pending_tool_11_move"]),
+                success=True,
+                dry_run=dry_run,
+                tool_version=existing_split["tool_version"],
+                details={"reused_existing_split": True},
+            )
+
         if not source_path.is_file():
             return FileCutterResult(
                 tracking_id=tracking_id,
@@ -337,33 +455,6 @@ class FileCutterService:
                 review_required=True,
                 review_reason=f"Source file missing from disk: {source_path}",
                 error_message="File missing on disk",
-            )
-
-        # Check if already split (Idempotency)
-        existing_split = self.registry.get_file_split_by_source(tracking_id)
-        if existing_split and not force:
-            logger.info("File %s already completed split (ID %s)", tracking_id, existing_split["id"])
-            return FileCutterResult(
-                tracking_id=tracking_id,
-                source_path=existing_split["source_path"],
-                source_sha256=existing_split["source_sha256"],
-                source_duration_seconds=existing_split["source_duration_seconds"],
-                cut_point_seconds=existing_split["cut_point_seconds"],
-                singing_output_path=existing_split["singing_path"],
-                singing_tracking_id=existing_split["singing_tracking_id"],
-                singing_sha256=existing_split["singing_sha256"],
-                singing_duration_seconds=existing_split["singing_duration_seconds"],
-                singing_leading_silence_seconds=existing_split["singing_leading_silence_seconds"],
-                singing_pending_tool_11_move=bool(existing_split["singing_pending_tool_11_move"]),
-                class_output_path=existing_split["class_path"],
-                class_tracking_id=existing_split["class_tracking_id"],
-                class_sha256=existing_split["class_sha256"],
-                class_duration_seconds=existing_split["class_duration_seconds"],
-                class_leading_silence_seconds=existing_split["class_leading_silence_seconds"],
-                class_pending_tool_11_move=bool(existing_split["class_pending_tool_11_move"]),
-                success=True,
-                tool_version=existing_split["tool_version"],
-                details={"reused_existing_split": True},
             )
 
         # 2. Determine working audio file (Handling Video vs Audio) & fingerprint check

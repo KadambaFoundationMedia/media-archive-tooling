@@ -477,11 +477,25 @@ class ContentDiscovererService:
                             )
 
             if result.cutter_proposal.singing_end_seconds is not None and result.cutter_proposal.confidence == "HIGH":
-                # Already verified acoustically via transition detection
-                result.process_by_tool_6 = True
-                result.confidence = ConfidenceLevel.HIGH
-                result.review_required = False
-                result.review_reason = None
+                t_conf = "HIGH"
+                t_reason = None
+                if self.acoustic_verifier and hasattr(self.acoustic_verifier, "verify_transition_confidence"):
+                    t_conf, t_reason = self.acoustic_verifier.verify_transition_confidence(
+                        actual_audio,
+                        result.cutter_proposal.singing_end_seconds,
+                    )
+                if t_conf == "HIGH":
+                    result.process_by_tool_6 = True
+                    result.confidence = ConfidenceLevel.HIGH
+                    result.review_required = False
+                    result.review_reason = None
+                else:
+                    result.cutter_proposal.confidence = "MEDIUM"
+                    result.cutter_proposal.method = "acoustic_transition_ambiguous"
+                    result.process_by_tool_6 = False
+                    result.confidence = ConfidenceLevel.MEDIUM
+                    result.review_required = True
+                    result.review_reason = f"Singing end boundary exceeds 1.5s confidence tolerance ({t_reason}); manual review required"
             else:
                 exact_cut = None
                 if self.acoustic_verifier:

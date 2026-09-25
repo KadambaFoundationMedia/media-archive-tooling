@@ -1583,3 +1583,69 @@ def test_t5_r_006_sweden_class_opening_preserved(env, monkeypatch):
     # Preserves opening in metadata
     assert any(e.kind == "om_namo" and 150.0 <= e.start_seconds <= 175.0 for e in result.evidence)
     assert any(e.kind == "verse_introduction" and 180.0 <= e.start_seconds <= 220.0 for e in result.evidence)
+
+
+def test_boundary_confidence_gating_routes_ambiguous_transitions_to_review(env, monkeypatch):
+    """Transition boundary confidence gating:
+    - Ambiguous transitions exceeding 1.5s tolerance route to waveform review (MEDIUM, process_by_tool_6=False).
+    - Unambiguous sharp transitions route to automatic Tool 6 (HIGH, process_by_tool_6=True).
+    """
+    media_file = env["media_dir"] / "2008-01-04-2.mp3"
+    media_file.write_text("audio dummy bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_conf_gate")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    # 1. Ambiguous boundary test: cluster jump or unmatched silence > 1.5s
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=1699.527,
+        candidate_transitions=[(1699.527, 1756.094)],
+        transition_confidence="MEDIUM",
+        transition_ambiguity_reason="Silence cluster spans 4.99s before candidate",
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 5986.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="dummy_sha",
+            transcript_sha256="tx_dummy_sha",
+            duration_seconds=5986.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=1600.0, text="jaya radha madhava kunja bihari"),
+                TranscriptSegment(start_seconds=1760.0, end_seconds=2000.0, text="om namo bhagavate vasudevaya. Reading from Srimad Bhagavatam"),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    res_ambiguous = env["service"].discover_content(tid)
+    assert res_ambiguous.classification == ContentType.KIRTAN_AND_CLASS
+    assert res_ambiguous.confidence == ConfidenceLevel.MEDIUM
+    assert res_ambiguous.process_by_tool_6 is False
+    assert res_ambiguous.review_required is True
+    assert res_ambiguous.cutter_proposal is not None
+    assert res_ambiguous.cutter_proposal.confidence == "MEDIUM"
+    assert res_ambiguous.cutter_proposal.method == "acoustic_transition_ambiguous"
+    assert "1.5s confidence tolerance" in (res_ambiguous.review_reason or "")
+
+    # 2. Unambiguous sharp boundary test
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.973,
+        candidate_transitions=[(703.973, 764.163)],
+        transition_confidence="HIGH",
+    )
+
+    res_sharp = env["service"].discover_content(tid)
+    assert res_sharp.classification == ContentType.KIRTAN_AND_CLASS
+    assert res_sharp.confidence == ConfidenceLevel.HIGH
+    assert res_sharp.process_by_tool_6 is True
+    assert res_sharp.review_required is False
+    assert res_sharp.cutter_proposal is not None
+    assert res_sharp.cutter_proposal.confidence == "HIGH"
