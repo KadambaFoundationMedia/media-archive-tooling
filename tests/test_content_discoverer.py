@@ -136,9 +136,9 @@ def test_02_jaya_radha_madhava_then_class(env):
     assert res.cutter_proposal is not None
     assert res.cutter_proposal.kirtan_start_sec == 0.0
     assert res.cutter_proposal.kirtan_end_sec == 700.0
-    assert res.cutter_proposal.class_start_sec == 743.0
+    assert res.cutter_proposal.class_start_sec == 700.0
     assert "kirtan 00:00-11:40" in res.cutter_proposal.suggested_cut_points
-    assert "class begins 12:23" in res.cutter_proposal.suggested_cut_points
+    assert "class begins 11:40" in res.cutter_proposal.suggested_cut_points
 
 
 # ---------------------------------------------------------------------------
@@ -1229,3 +1229,444 @@ def test_36_transcription_heartbeat_reports_slow_subprocess(monkeypatch):
     assert progress[0] == ("transcribe_metal", "start")
     assert ("transcribe_metal", "heartbeat") in progress
     assert progress[-1] == ("transcribe_metal", "done")
+
+
+def test_37_detect_candidate_transitions(tmp_path, monkeypatch):
+    """AcousticBoundaryVerifier discovers continuous music boundary (first silence >= 150s)."""
+    from media_archive_tooling.content_discoverer.acoustic_verifier import (
+        AcousticBoundaryVerifier,
+        FakeAcousticBoundaryVerifier,
+    )
+
+    audio_file = tmp_path / "test.mp3"
+    audio_file.write_bytes(b"dummy")
+
+    verifier = AcousticBoundaryVerifier(ffmpeg_bin="/usr/bin/ffmpeg")
+
+    # 1. First silence >= 150s with subsequent speech onset
+    stderr_sim = (
+        "[silencedetect @ 0x1] silence_start: 703.956\n"
+        "[silencedetect @ 0x1] silence_end: 708.500 | silence_duration: 4.544\n"
+        "[silencedetect @ 0x1] silence_start: 715.000\n"
+        "[silencedetect @ 0x1] silence_end: 742.120 | silence_duration: 27.120\n"
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=stderr_sim.encode()),
+    )
+
+    candidates = verifier.detect_candidate_transitions(audio_file, total_duration=6000.0)
+    assert len(candidates) == 1
+    assert candidates[0] == (703.956, 742.12)
+
+    # 2. First silence < 150s -> rejected as normal conversational pause
+    stderr_early = (
+        "[silencedetect @ 0x1] silence_start: 45.0\n"
+        "[silencedetect @ 0x1] silence_end: 46.0 | silence_duration: 1.0\n"
+    )
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=stderr_early.encode()),
+    )
+    assert verifier.detect_candidate_transitions(audio_file, total_duration=6000.0) == []
+
+    # 3. Short file <= 180s -> returns [] without running ffmpeg
+    assert verifier.detect_candidate_transitions(audio_file, total_duration=150.0) == []
+
+    # 4. FakeAcousticBoundaryVerifier test double
+    fake_verifier = FakeAcousticBoundaryVerifier(candidate_transitions=[(700.0, 740.0)])
+    assert fake_verifier.detect_candidate_transitions(audio_file, 6000.0) == [(700.0, 740.0)]
+
+
+def test_38_whisper_singing_hallucination_and_filename_combination_detection():
+    """Classifier handles Whisper hallucinated text (*Dies singing*) combined with filename prior."""
+    classifier = ContentClassifier()
+
+    segments = [
+        TranscriptSegment(
+            start_seconds=10.0,
+            end_seconds=70.0,
+            text="*Dies singing* Thank you for watching! Thank you for watching!",
+        ),
+        TranscriptSegment(
+            start_seconds=745.0,
+            end_seconds=820.0,
+            text="It is verse thirty-one. First Canto Chapter nineteen. Today we are reading Srimad Bhagavatam.",
+        ),
+    ]
+
+    from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+
+    artifact = TranscriptArtifact(
+        tracking_id="trk_comb1",
+        input_path="/media/KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA",
+        input_sha256="fake_sha",
+        transcript_sha256="fake_tx_sha",
+        duration_seconds=6000.0,
+        segments=segments,
+        raw_metadata={
+            "candidate_transitions": [(703.956, 742.0)],
+            "has_combination_clue": True,
+            "mantra_hint": "JAYA_RADHA_MADHAVA",
+        },
+    )
+
+    result = classifier.classify(artifact)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.mantra_type == MantraType.JAYA_RADHA_MADHAVA
+    assert result.process_by_tool_6 is True
+    assert result.cutter_proposal is not None
+    assert result.cutter_proposal.singing_end_seconds == 703.956
+    assert result.review_required is False
+
+
+def test_39_adaptive_excerpt_window_around_candidate_transition(env, monkeypatch):
+    """ContentDiscovererService adapts excerpt windows to bracket candidate transition."""
+    media_file = env["media_dir"] / "KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.mp3"
+    media_file.write_text("audio dummy bytes")
+
+    tid = env["register_media"](media_file, tracking_id="trk_adaptive")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.956,
+        candidate_transitions=[(703.956, 742.0)],
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 6000.0,
+    )
+
+    windows_requested = []
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        nonlocal windows_requested
+        windows_requested = list(excerpt_windows or [])
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="dummy_sha",
+            transcript_sha256="tx_dummy",
+            duration_seconds=6000.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=60.0, text="*Dies singing*"),
+                TranscriptSegment(start_seconds=745.0, end_seconds=790.0, text="First Canto Chapter nineteen verse thirty-one Srimad Bhagavatam"),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.mantra_type == MantraType.JAYA_RADHA_MADHAVA
+    assert result.cutter_proposal.singing_end_seconds == 703.956
+
+    # Verify that an excerpt window specifically targeted the speech onset around 742.0s
+    has_onset_window = any(730.0 <= w[0] <= 745.0 for w in windows_requested)
+    assert has_onset_window, f"Expected window around speech onset 742s, got: {windows_requested}"
+
+
+def test_42_verse_introduction_matching():
+    """ContentClassifier.is_verse_intro_text matches 'We are reading from' and 'Chapter, Canto, Verse' combinations."""
+    from media_archive_tooling.content_discoverer.classifier import ContentClassifier
+
+    # 1. Exact phrase from user audio:
+    assert ContentClassifier.is_verse_intro_text("it's 31 first canto chapter 9 the appearance of sukadeva goswami text 31") is True
+    assert ContentClassifier.is_verse_intro_text("first canto chapter 19 the appearance of sukadeva goswami text 31") is True
+
+    # 2. Reading from combinations
+    assert ContentClassifier.is_verse_intro_text("we are reading from srimad bhagavatam first canto") is True
+    assert ContentClassifier.is_verse_intro_text("we are reading today from bhagavad-gita chapter 4 text 10") is True
+    assert ContentClassifier.is_verse_intro_text("reading from caitanya caritamrta") is True
+
+    # 3. Chapter and verse combinations
+    assert ContentClassifier.is_verse_intro_text("chapter 19 text 31") is True
+    assert ContentClassifier.is_verse_intro_text("canto 1 chapter 19") is True
+    assert ContentClassifier.is_verse_intro_text("text 31 chapter 19") is True
+
+    # 4. Negative / non-verse intro texts
+    assert ContentClassifier.is_verse_intro_text("jaya radha madhava kunja bihari") is False
+    assert ContentClassifier.is_verse_intro_text("hare krishna hare krishna krishna krishna hare hare") is False
+    assert ContentClassifier.is_verse_intro_text("thank you very much for coming tonight") is False
+
+
+def test_43_two_boundary_kirtan_and_class_cut_proposal(env, monkeypatch):
+    """Combination recording correctly cuts kirtan at singing_end and class at verse introduction."""
+    media_file = env["media_dir"] / "2011-08-29_KKS_SB-01-19-31_with_Radha_Madhava_Oslo.mp3"
+    media_file.write_text("audio dummy bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_comb_intro")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.956,
+        candidate_transitions=[(703.956, 764.0)],
+        speech_onset=742.0,  # Acoustically verified 12:22 onset
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 6200.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="dummy_sha",
+            transcript_sha256="tx_dummy",
+            duration_seconds=6200.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=700.0, text="jaya radha madhava kunja bihari"),
+                TranscriptSegment(start_seconds=739.0, end_seconds=748.0, text="It's 31. First Canto, Chapter 19, The Appearance of Sukadeva Goswami, text 31."),
+                TranscriptSegment(start_seconds=764.0, end_seconds=1200.0, text="om namo bhagavate vasudevaya. we continue reading the purport."),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.mantra_type == MantraType.JAYA_RADHA_MADHAVA
+    assert result.process_by_tool_6 is True
+    assert result.cutter_proposal is not None
+    assert result.cutter_proposal.kirtan_start_sec == 0.0
+    assert result.cutter_proposal.kirtan_end_sec == 703.956
+    # Single cut point: class output meets at singing_end (703.956s), not discarding speech opening
+    assert result.cutter_proposal.class_start_sec == 703.956
+    assert result.cutter_proposal.class_range[0] == 703.956
+    # Speech onset and verse intro are preserved as metadata in evidence for Tool 8
+    assert any(e.kind == "verse_introduction" and 739.0 <= e.start_seconds <= 748.0 for e in result.evidence)
+    assert any(e.kind == "speech_onset" and e.start_seconds == 742.0 for e in result.evidence)
+
+
+def test_t5_r_008_acoustic_pause_alone_not_singing_evidence(env, monkeypatch):
+    """T5-R-008: A pure-class transcript with an acoustic pause transition but no singing evidence yields CLASS."""
+    media_file = env["media_dir"] / "pure_class_lecture.mp3"
+    media_file.write_text("class lecture audio bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_pure_class_pause")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    # Candidate acoustic transition after 90s, but NO singing, NO mantra text, NO filename combination clue
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.956,
+        candidate_transitions=[(703.956, 742.0)],
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 3600.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="class_sha",
+            transcript_sha256="tx_class_sha",
+            duration_seconds=3600.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=600.0, text="We are reading from Srimad-Bhagavatam Third Canto Chapter Six Text Six."),
+                TranscriptSegment(start_seconds=750.0, end_seconds=3500.0, text="Srila Prabhupada explains in the purport that Krishna is the supreme controller and cause of all causes."),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    # Must NOT classify as KIRTAN_AND_CLASS; an acoustic pause alone is not singing evidence
+    assert result.classification == ContentType.CLASS
+    assert result.process_by_tool_6 is False
+    assert result.cutter_proposal is None
+
+
+def test_t5_r_007_vyasa_puja_folder_context_routes_to_review(env, monkeypatch):
+    """T5-R-007: Media file inside Vyasa-puja folder context is classified as VYASA_PUJA and routed to review."""
+    vp_dir = env["media_dir"] / "Vyasa-puja 2015"
+    vp_dir.mkdir(parents=True, exist_ok=True)
+    media_file = vp_dir / "ZOOM0004.MP3"
+    media_file.write_text("vyasa puja recording audio bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_vyasapuja_folder")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=381.785,
+        candidate_transitions=[(381.785, 449.785)],
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 4200.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="vp_sha",
+            transcript_sha256="tx_vp_sha",
+            duration_seconds=4200.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=350.0, text="Hare Krishna kirtan singing"),
+                TranscriptSegment(start_seconds=450.0, end_seconds=4000.0, text="Reading from Srimad Bhagavatam"),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.VYASA_PUJA
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.process_by_tool_6 is False
+    assert result.review_required is True
+    assert "Vyasa-puja" in (result.review_reason or "")
+
+
+def test_t5_r_006_sweden_class_opening_preserved(env, monkeypatch):
+    """T5-R-006: Sweden example where singing ends at 149.396s and verse intro is at 183.183s.
+    CutterBoundaryProposal class_range starts at singing_end (149.396s), preserving 'Om namo bhagavate'."""
+    media_file = env["media_dir"] / "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3"
+    media_file.write_text("sweden audio bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_sweden_tool5")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=149.396,
+        candidate_transitions=[(149.396, 150.911)],
+        speech_onset=150.911,
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 4509.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="sweden_sha",
+            transcript_sha256="tx_sweden_sha",
+            duration_seconds=4509.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=145.0, text="jaya radha madhava kunja bihari"),
+                TranscriptSegment(start_seconds=150.5, end_seconds=175.0, text="om namo bhagavate vasudevaya. Hare Krishna. Welcome to everybody."),
+                TranscriptSegment(start_seconds=183.0, end_seconds=220.0, text="We are reading from Srimad-Bhagavatam, Third Canto, Chapter Six, Text Six."),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    result = env["service"].discover_content(tid)
+    assert result.classification == ContentType.KIRTAN_AND_CLASS
+    assert result.confidence == ConfidenceLevel.HIGH
+    assert result.process_by_tool_6 is True
+    assert result.cutter_proposal is not None
+    assert result.cutter_proposal.singing_end_seconds == 149.396
+    # Class start must meet at 149.396s, NOT at 183.183s!
+    assert result.cutter_proposal.class_start_sec == 149.396
+    assert result.cutter_proposal.class_range[0] == 149.396
+    # Preserves opening in metadata
+    assert any(e.kind == "om_namo" and 150.0 <= e.start_seconds <= 175.0 for e in result.evidence)
+    assert any(e.kind == "verse_introduction" and 180.0 <= e.start_seconds <= 220.0 for e in result.evidence)
+
+
+def test_boundary_confidence_gating_routes_ambiguous_transitions_to_review(env, monkeypatch):
+    """Transition boundary confidence gating:
+    - Ambiguous transitions exceeding 1.5s tolerance route to waveform review (MEDIUM, process_by_tool_6=False).
+    - Unambiguous sharp transitions route to automatic Tool 6 (HIGH, process_by_tool_6=True).
+    """
+    media_file = env["media_dir"] / "2008-01-04-2.mp3"
+    media_file.write_text("audio dummy bytes")
+    tid = env["register_media"](media_file, tracking_id="trk_conf_gate")
+
+    from media_archive_tooling.content_discoverer.acoustic_verifier import FakeAcousticBoundaryVerifier
+
+    # 1. Ambiguous boundary test: cluster jump or unmatched silence > 1.5s
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=1699.527,
+        candidate_transitions=[(1699.527, 1756.094)],
+        transition_confidence="MEDIUM",
+        transition_ambiguity_reason="Silence cluster spans 4.99s before candidate",
+    )
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.service.probe_audio_duration",
+        lambda p: 5986.0,
+    )
+
+    def fake_transcribe(audio_path, tracking_id, excerpt_windows=None, **kwargs):
+        from media_archive_tooling.content_discoverer.models import TranscriptArtifact
+        return TranscriptArtifact(
+            tracking_id=tracking_id,
+            input_path=str(audio_path),
+            input_sha256="dummy_sha",
+            transcript_sha256="tx_dummy_sha",
+            duration_seconds=5986.0,
+            segments=[
+                TranscriptSegment(start_seconds=10.0, end_seconds=1600.0, text="jaya radha madhava kunja bihari"),
+                TranscriptSegment(start_seconds=1760.0, end_seconds=2000.0, text="om namo bhagavate vasudevaya. Reading from Srimad Bhagavatam"),
+            ],
+        )
+
+    env["transcription_adapter"].transcribe = fake_transcribe
+
+    res_ambiguous = env["service"].discover_content(tid)
+    assert res_ambiguous.classification == ContentType.KIRTAN_AND_CLASS
+    assert res_ambiguous.confidence == ConfidenceLevel.MEDIUM
+    assert res_ambiguous.process_by_tool_6 is False
+    assert res_ambiguous.review_required is True
+    assert res_ambiguous.cutter_proposal is not None
+    assert res_ambiguous.cutter_proposal.confidence == "MEDIUM"
+    assert res_ambiguous.cutter_proposal.method == "acoustic_transition_ambiguous"
+    assert "1.5s confidence tolerance" in (res_ambiguous.review_reason or "")
+
+    # 2. Unambiguous sharp boundary test
+    env["service"].acoustic_verifier = FakeAcousticBoundaryVerifier(
+        exact_cut_point=703.973,
+        candidate_transitions=[(703.973, 764.163)],
+        transition_confidence="HIGH",
+    )
+
+    res_sharp = env["service"].discover_content(tid)
+    assert res_sharp.classification == ContentType.KIRTAN_AND_CLASS
+    assert res_sharp.confidence == ConfidenceLevel.HIGH
+    assert res_sharp.process_by_tool_6 is True
+    assert res_sharp.review_required is False
+    assert res_sharp.cutter_proposal is not None
+    assert res_sharp.cutter_proposal.confidence == "HIGH"
+
+
+def test_transition_confidence_fails_closed_without_nearby_acoustic_evidence(tmp_path, monkeypatch):
+    """A failed or evidence-free FFmpeg check cannot authorize an automatic cut."""
+    from media_archive_tooling.content_discoverer.acoustic_verifier import AcousticBoundaryVerifier
+
+    audio = tmp_path / "recording.mp3"
+    audio.write_bytes(b"test audio")
+    verifier = AcousticBoundaryVerifier(ffmpeg_bin="ffmpeg")
+
+    class FailedProcess:
+        returncode = 1
+        stderr = b"decode failed"
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run",
+        lambda *args, **kwargs: FailedProcess(),
+    )
+    confidence, reason = verifier.verify_transition_confidence(audio, 100.0)
+    assert confidence == "MEDIUM"
+    assert "No -30dB silence onset" in reason

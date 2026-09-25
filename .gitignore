@@ -37,6 +37,7 @@ var/
 
 # Private media roots. Keep only the public empty-directory placeholders.
 sample-files/*
+sample-files-org/*
 !sample-files/.gitkeep
 renamed-files/*
 !renamed-files/.gitkeep

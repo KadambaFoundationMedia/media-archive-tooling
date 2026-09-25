@@ -70,6 +70,31 @@ MAHA_MANTRA_PATTERNS = [
     r"\brama\s+rama\s+hare\s+hare\b",
 ]
 
+SINGING_INDICATOR_PATTERNS = [
+    r"\b\*dies\s+singing\*\b",
+    r"(?:[\*\[\(](?:singing|music|singing\s+continues|applause)[\*\]\)]|[♪♫]|^\s*(?:singing|music|applause)\s*$)",
+    r"\bsatsang\s+with\s+mooji\b",
+    r"\b(i'?m\s+sorry\.?\s*){2,}",
+    r"\b(thank\s+you\.?\s*){2,}",
+    r"\bki\s+jai\b",
+    r"\bvaisnava\b",
+]
+
+SPOKEN_DISCOURSE_PATTERNS = [
+    r"\bwe\s+are\s+reading\b",
+    r"\bfirst\s+canto\b",
+    r"\bsecond\s+canto\b",
+    r"\bthird\s+canto\b",
+    r"\bfourth\s+canto\b",
+    r"\bfifth\s+canto\b",
+    r"\bsixth\s+canto\b",
+    r"\bseventh\s+canto\b",
+    r"\beighth\s+canto\b",
+    r"\bninth\s+canto\b",
+    r"\btenth\s+canto\b",
+    r"\bappearance\s+of\s+sukadeva\b",
+]
+
 # ---------------------------------------------------------------------------
 # Class Structure Matchers
 # ---------------------------------------------------------------------------
@@ -199,6 +224,115 @@ HOME_PROGRAM_PATTERNS = [
 class ContentClassifier:
     """Classifies audio transcripts and identifies mantra and cutter boundaries."""
 
+    @staticmethod
+    def is_verse_intro_text(text: str) -> bool:
+        """Evaluate if text contains scripture verse introduction phrasing.
+
+        Per user guidance: Looks for 'We are reading from' or for 'Chapter, Canto and/or Verse'
+        or a combination of that.
+        """
+        # 1. Reading from phrases
+        has_reading_from = bool(
+            re.search(r"\b(?:we\s+are\s+)?reading(?:\s+today)?(?:\s+from)?\b", text)
+        )
+
+        # 2. Canto patterns
+        has_canto = bool(
+            re.search(
+                r"\b(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+(?:canto|kandron|kanto)|canto\s+(?:\d+|[a-z]+))\b",
+                text,
+            )
+        )
+
+        # 3. Chapter patterns
+        has_chapter = bool(
+            re.search(
+                r"\b(?:chapter\s+(?:\d+|[a-z]+)|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+chapter)\b",
+                text,
+            )
+        )
+
+        # 4. Verse / Text patterns
+        has_verse = bool(
+            re.search(
+                r"\b(?:(?:verse|text)\s+(?:\d+|[a-z]+)|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th)?)\s+(?:verse|text))\b",
+                text,
+            )
+        )
+
+        # 5. Scripture title patterns
+        has_scripture = bool(
+            re.search(
+                r"\b(?:srimad[\s-]+bhagavatam|bhagavad[\s-]+gita|caitanya[\s-]+caritamrta|srimad[\s-]+bhagavata|gita|bhagavatam)\b",
+                text,
+            )
+        )
+
+        # 6. Combined chapter/canto and verse numbers, or reference citation (e.g. "It's 31... text 31", "1.19.31")
+        has_citation = bool(
+            re.search(
+                r"\b(?:it\s*['’]?s\s+|text\s+|verse\s+)?(?:\d+|[a-z]+)[\s,\.:-]+(?:canto|chapter|text|verse|\d+)\b",
+                text,
+            )
+        )
+
+        # Match criteria:
+        # A) Explicit "reading from" + (scripture or canto or chapter or verse or citation)
+        if has_reading_from and (has_scripture or has_canto or has_chapter or has_verse or has_citation):
+            return True
+        # B) Combinations of Canto, Chapter, Verse (any two present)
+        features = [has_canto, has_chapter, has_verse]
+        if sum(bool(f) for f in features) >= 2:
+            return True
+        # C) Scripture + (canto or chapter or verse)
+        if has_scripture and (has_canto or has_chapter or has_verse):
+            return True
+        # D) Canto or Chapter with citation/verse number
+        if (has_canto or has_chapter) and (has_verse or has_citation):
+            return True
+        # E) Standalone explicit reading from
+        if re.search(r"\b(?:we\s+are\s+)?reading\s+from\b", text):
+            return True
+
+        return False
+
+    def find_verse_introduction(
+        self,
+        speech_segments: List[TranscriptSegment],
+        singing_end: float = 0.0,
+    ) -> Optional[TranscriptSegment]:
+        """Find the earliest transcript segment representing scripture verse introduction."""
+        if singing_end > 0.0:
+            # Look for verse intro candidates around or after singing concludes
+            candidates = [s for s in speech_segments if s.start_seconds >= max(0.0, singing_end - 15.0)]
+        else:
+            candidates = list(speech_segments)
+
+        if not candidates:
+            return None
+
+        # 1. First check each segment individually
+        for seg in candidates:
+            norm = normalize_text(seg.text)
+            if not norm:
+                continue
+            if self.is_verse_intro_text(norm):
+                return seg
+
+        # 2. Check adjacent segment pairs in case phrasing spans a segment boundary
+        for idx in range(len(candidates) - 1):
+            seg1 = candidates[idx]
+            seg2 = candidates[idx + 1]
+            norm1 = normalize_text(seg1.text)
+            norm2 = normalize_text(seg2.text)
+            if not norm1 or not norm2:
+                continue
+            combined = norm1 + " " + norm2
+            if self.is_verse_intro_text(combined):
+                return seg1
+
+        return None
+
     def classify(self, artifact: TranscriptArtifact) -> ContentDiscoveryResult:
         meta = dict(artifact.raw_metadata or {})
         meta["duration_seconds"] = artifact.duration_seconds
@@ -224,9 +358,10 @@ class ContentClassifier:
 
         evidence: List[ContentEvidence] = []
 
-        # 1. Detect Mantras
+        # 1. Detect Mantras and Singing Indicators
         detected_mantra = MantraType.NONE
         mantra_ranges: List[Tuple[float, float, str]] = []
+        singing_ranges: List[Tuple[float, float, str]] = []
 
         for seg in speech_segments:
             norm = normalize_text(seg.text)
@@ -285,6 +420,18 @@ class ContentClassifier:
                         normalized_text=norm,
                     )
                 )
+            # Whisper singing / music / hallucination indicators
+            elif any(re.search(pat, norm) for pat in SINGING_INDICATOR_PATTERNS):
+                singing_ranges.append((seg.start_seconds, seg.end_seconds, "singing_indicator"))
+                evidence.append(
+                    ContentEvidence(
+                        kind="singing_detected",
+                        start_seconds=seg.start_seconds,
+                        end_seconds=seg.end_seconds,
+                        raw_excerpt=seg.text,
+                        normalized_text=norm,
+                    )
+                )
 
         # 2. Detect Class Indicators
         class_ranges: List[Tuple[float, float, str]] = []
@@ -301,7 +448,7 @@ class ContentClassifier:
                         normalized_text=norm,
                     )
                 )
-            if any(re.search(pat, norm) for pat in READING_INTRO_PATTERNS):
+            if any(re.search(pat, norm) for pat in READING_INTRO_PATTERNS + SPOKEN_DISCOURSE_PATTERNS):
                 class_ranges.append((seg.start_seconds, seg.end_seconds, "reading_intro"))
                 evidence.append(
                     ContentEvidence(
@@ -332,6 +479,19 @@ class ContentClassifier:
                         end_seconds=seg.end_seconds,
                         raw_excerpt=seg.text,
                         normalized_text=norm,
+                    )
+                )
+            # Sustained spoken discourse (> 20 words without music/singing or home/festival patterns)
+            words = norm.split()
+            if len(words) >= 20 and not any(re.search(pat, norm) for pat in SINGING_INDICATOR_PATTERNS + MAHA_MANTRA_PATTERNS + JAYA_RADHA_MADHAVA_PATTERNS + HOME_PROGRAM_PATTERNS + FESTIVAL_PATTERNS):
+                class_ranges.append((seg.start_seconds, seg.end_seconds, "spoken_discourse"))
+                evidence.append(
+                    ContentEvidence(
+                        kind="spoken_discourse",
+                        start_seconds=seg.start_seconds,
+                        end_seconds=seg.end_seconds,
+                        raw_excerpt=seg.text[:100] + ("..." if len(seg.text) > 100 else ""),
+                        normalized_text=norm[:100],
                     )
                 )
 
@@ -417,15 +577,33 @@ class ContentClassifier:
         total_duration = artifact.duration_seconds
         has_class_evidence = len(class_ranges) >= 1
         has_mantra_evidence = len(mantra_ranges) >= 1
-        has_initiation_evidence = len(initiation_ranges) >= 2  # multiple ceremony vows/names
-        has_vyasa_puja_evidence = len(vyasa_puja_ranges) >= 1
+
+        source_lower = (
+            str(artifact.input_path)
+            + " "
+            + str(meta.get("folder_context", ""))
+            + " "
+            + str(meta.get("category_hint", ""))
+        ).lower()
+
+        has_initiation_source = (
+            any(p in source_lower for p in ["initiation", "diksa", "diksha", "harinama diksa"])
+            or meta.get("category_hint") == "Initiation"
+        )
+        has_initiation_evidence = len(initiation_ranges) >= 2 or has_initiation_source
+
+        has_vyasa_puja_source = (
+            any(p in source_lower for p in ["vyasa-puja", "vyasa puja", "vyasapuja", "vyasa_puja"])
+            or meta.get("category_hint") == "Vyasa Puja"
+        )
+        has_vyasa_puja_evidence = len(vyasa_puja_ranges) >= 1 or has_vyasa_puja_source
         has_festival_evidence = len(festival_ranges) >= 1
         has_home_evidence = len(home_program_ranges) >= 1
 
         # Check for Initiation (Section 7.3 & Tool 6 build plan)
         if has_initiation_evidence:
-            first_vow = min(r[0] for r in initiation_ranges)
-            last_vow = max(r[1] for r in initiation_ranges)
+            first_vow = min(r[0] for r in initiation_ranges) if initiation_ranges else 0.0
+            last_vow = max(r[1] for r in initiation_ranges) if initiation_ranges else 0.0
             split_point = first_vow if first_vow > 60.0 else last_vow
             stage_desc_parts = []
             seen_stages = set()
@@ -433,13 +611,13 @@ class ContentClassifier:
                 if stage not in seen_stages:
                     seen_stages.add(stage)
                     stage_desc_parts.append(f"{stage} at {int(sec)//60:02d}:{int(sec)%60:02d}")
-            stage_desc = "; ".join(stage_desc_parts) if stage_desc_parts else f"initiation vows at {int(first_vow)//60:02d}:{int(first_vow)%60:02d}"
+            stage_desc = "; ".join(stage_desc_parts) if stage_desc_parts else f"initiation ceremony"
 
             cutter_prop = CutterBoundaryProposal(
                 kirtan_range=(0.0, split_point),
                 class_range=(split_point, total_duration),
                 coarse_gap_bracket=(max(0.0, split_point - 10.0), split_point),
-                singing_end_seconds=split_point,
+                singing_end_seconds=split_point if split_point > 0.0 else None,
                 source_duration_seconds=total_duration,
                 source_sha256=artifact.input_sha256,
                 method="initiation_ceremony_stages",
@@ -485,21 +663,114 @@ class ContentClassifier:
             )
 
         # Check for Kirtan and Class combination (Section 7.3)
-        if has_mantra_evidence and has_class_evidence:
+        cand_transitions = meta.get("candidate_transitions") or []
+        has_combination_clue = meta.get("has_combination_clue", False)
+        mantra_hint = meta.get("mantra_hint")
+
+        has_independent_singing = has_mantra_evidence or len(singing_ranges) >= 1
+        has_source_clue = (
+            has_combination_clue
+            or (bool(mantra_hint) and mantra_hint != MantraType.NONE.value)
+        )
+        has_singing_evidence = (
+            has_independent_singing
+            or (has_source_clue and len(cand_transitions) >= 1 and cand_transitions[0][0] >= 90.0)
+        )
+
+        if has_singing_evidence and has_class_evidence:
             earliest_class = min(r[0] for r in class_ranges)
+
+            # Resolve mantra type from hint if not detected from Sanskrit lyric text
+            if detected_mantra == MantraType.NONE:
+                if mantra_hint:
+                    try:
+                        detected_mantra = MantraType(mantra_hint)
+                    except Exception:
+                        try:
+                            detected_mantra = MantraType[mantra_hint]
+                        except Exception:
+                            detected_mantra = MantraType.KIRTAN
+                else:
+                    detected_mantra = MantraType.KIRTAN
+
+            # Check for verse introduction in speech segments
+            primary_singing_end = cand_transitions[0][0] if cand_transitions else 0.0
+            if primary_singing_end <= 0.0:
+                all_singing = mantra_ranges + singing_ranges
+                primary_singing_end = max((r[1] for r in all_singing), default=0.0)
+            verse_intro_seg = self.find_verse_introduction(speech_segments, singing_end=primary_singing_end)
+
+            # If acoustic candidate transition verified singing end:
+            if cand_transitions:
+                singing_end, speech_start = cand_transitions[0]
+                if verse_intro_seg is not None:
+                    method = "acoustic_verse_intro_transition"
+                    evidence.append(
+                        ContentEvidence(
+                            kind="verse_introduction",
+                            start_seconds=verse_intro_seg.start_seconds,
+                            end_seconds=verse_intro_seg.end_seconds,
+                            raw_excerpt=verse_intro_seg.text,
+                            normalized_text=normalize_text(verse_intro_seg.text),
+                        )
+                    )
+                else:
+                    method = "acoustic_silence_transition"
+
+                coarse_gap = (singing_end, singing_end)
+                cutter_prop = CutterBoundaryProposal(
+                    kirtan_range=(0.0, singing_end),
+                    class_range=(singing_end, total_duration),
+                    coarse_gap_bracket=coarse_gap,
+                    singing_end_seconds=singing_end,
+                    class_start_seconds=singing_end,
+                    source_duration_seconds=total_duration,
+                    source_sha256=artifact.input_sha256,
+                    method=method,
+                    confidence="HIGH",
+                )
+                return ContentDiscoveryResult(
+                    tracking_id=artifact.tracking_id,
+                    classification=ContentType.KIRTAN_AND_CLASS,
+                    confidence=ConfidenceLevel.HIGH,
+                    mantra_type=detected_mantra,
+                    process_by_tool_6=True,
+                    cutter_proposal=cutter_prop,
+                    transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
+                    transcript_sha256=artifact.transcript_sha256,
+                    input_sha256=artifact.input_sha256,
+                    source_path=artifact.input_path,
+                    evidence=evidence,
+                    review_required=False,
+                    runtime_provenance=meta,
+                )
+
+            # Otherwise, use text-segment coarse boundaries
+            all_singing = mantra_ranges + singing_ranges
             latest_kirtan_before_class = max(
-                (r[1] for r in mantra_ranges if r[1] <= earliest_class + 60.0),
+                (r[1] for r in all_singing if r[1] <= earliest_class + 60.0),
                 default=0.0,
             )
 
             # Requires distinct ordered time ranges: initial sustained kirtan + later class
             if latest_kirtan_before_class > 60.0 and earliest_class >= latest_kirtan_before_class - 10.0:
-                coarse_gap = (latest_kirtan_before_class, earliest_class)
+                if verse_intro_seg is not None:
+                    evidence.append(
+                        ContentEvidence(
+                            kind="verse_introduction",
+                            start_seconds=verse_intro_seg.start_seconds,
+                            end_seconds=verse_intro_seg.end_seconds,
+                            raw_excerpt=verse_intro_seg.text,
+                            normalized_text=normalize_text(verse_intro_seg.text),
+                        )
+                    )
+                coarse_gap = (latest_kirtan_before_class, latest_kirtan_before_class)
                 cutter_prop = CutterBoundaryProposal(
                     kirtan_range=(0.0, latest_kirtan_before_class),
-                    class_range=(earliest_class, total_duration),
+                    class_range=(latest_kirtan_before_class, total_duration),
                     coarse_gap_bracket=coarse_gap,
                     singing_end_seconds=None,
+                    class_start_seconds=latest_kirtan_before_class,
                     source_duration_seconds=total_duration,
                     source_sha256=artifact.input_sha256,
                     method="text_segment_coarse_estimate",
@@ -524,7 +795,18 @@ class ContentClassifier:
 
         # Check for Pure KIRTAN (singing only, no lecture/class discourse)
         # Even if filename suggested a class or combination (Section 7.3)
-        if has_mantra_evidence and not has_class_evidence and not has_festival_evidence:
+        if (has_mantra_evidence or len(singing_ranges) >= 1) and not has_class_evidence and not has_festival_evidence:
+            if detected_mantra == MantraType.NONE:
+                if mantra_hint:
+                    try:
+                        detected_mantra = MantraType(mantra_hint)
+                    except Exception:
+                        try:
+                            detected_mantra = MantraType[mantra_hint]
+                        except Exception:
+                            detected_mantra = MantraType.KIRTAN
+                else:
+                    detected_mantra = MantraType.KIRTAN
             # Singing dominates recording
             return ContentDiscoveryResult(
                 tracking_id=artifact.tracking_id,
@@ -539,25 +821,6 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
-                runtime_provenance=meta,
-            )
-
-        # Check for Pure CLASS (e.g. partial or full class structure)
-        if has_class_evidence:
-            confidence = ConfidenceLevel.HIGH if len(class_ranges) >= 2 else ConfidenceLevel.MEDIUM
-            return ContentDiscoveryResult(
-                tracking_id=artifact.tracking_id,
-                classification=ContentType.CLASS,
-                confidence=confidence,
-                mantra_type=detected_mantra,
-                process_by_tool_6=False,
-                cutter_proposal=None,
-                transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
-                transcript_sha256=artifact.transcript_sha256,
-                input_sha256=artifact.input_sha256,
-                source_path=artifact.input_path,
-                evidence=evidence,
-                review_required=(confidence != ConfidenceLevel.HIGH),
                 runtime_provenance=meta,
             )
 
@@ -594,6 +857,25 @@ class ContentClassifier:
                 source_path=artifact.input_path,
                 evidence=evidence,
                 review_required=False,
+                runtime_provenance=meta,
+            )
+
+        # Check for Pure CLASS (e.g. partial or full class structure)
+        if has_class_evidence:
+            confidence = ConfidenceLevel.HIGH if len(class_ranges) >= 2 else ConfidenceLevel.MEDIUM
+            return ContentDiscoveryResult(
+                tracking_id=artifact.tracking_id,
+                classification=ContentType.CLASS,
+                confidence=confidence,
+                mantra_type=detected_mantra,
+                process_by_tool_6=False,
+                cutter_proposal=None,
+                transcript_path=f".renamer/transcripts/{artifact.tracking_id}.json",
+                transcript_sha256=artifact.transcript_sha256,
+                input_sha256=artifact.input_sha256,
+                source_path=artifact.input_path,
+                evidence=evidence,
+                review_required=(confidence != ConfidenceLevel.HIGH),
                 runtime_provenance=meta,
             )
 

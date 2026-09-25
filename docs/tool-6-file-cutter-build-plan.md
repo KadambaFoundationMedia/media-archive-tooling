@@ -90,6 +90,14 @@ part. The owner confirmed that instrumental music and speech before the first
 vocal should be **preserved**, not treated as silence. Do not use “no singing”
 as permission to delete spoken introductions, prayers, soft speech, musical
 lead-ins, ambient but meaningful content, or a class opening.
+`class_start_seconds`, a verse-introduction time, or a detected speech onset
+must not become a second cut boundary that creates a discarded gap. The class
+output starts at the same exact singing-end point, including any transition
+audio; only demonstrable leading silence may be trimmed conservatively. The
+Sweden SB 3.6.6 benchmark has singing end at 2:29.396, speech onset near
+2:30.189, and a much later verse introduction near 3:03. Starting the class
+at 3:03 would lose the opening and fails acceptance. Tool 8, when defined and
+implemented, handles later class-introduction editing; Tool 6 does not.
 `assets/original-and-edited-recording-structure.md` describes
 one recording and later desired edits; it is not a universal cutting schedule.
 Tool 6 must not perform Tool 8's internal class edits. Record how much leading
@@ -229,10 +237,17 @@ where appropriate. Cover at least:
    bounded evidence mappings, and row associations; only the class output
    proceeds to Tool 7 full transcription.
 4. Only actual leading silence is trimmed; spoken class introductions are
-   retained; a recording-specific example time is never hard-coded.
+   retained; a recording-specific example time is never hard-coded. Include a
+   Sweden-like regression where a later verse introduction is present and
+   assert the two outputs meet at the singing-end point without dropping the
+   prayer or spoken opening.
 5. Exact cut, output-duration/decodability validation, source-change check,
    disk preflight, collision refusal, second-output failure, interruption,
-   idempotent retry, and no permanent third audio copy after success.
+   idempotent retry, and no permanent third audio copy after success. A prior
+   split record is reusable only after its class and singing successors are
+   found at their current tracked locations and their identities/hashes are
+   verified. Missing outputs or a restored original must not produce a false
+   success; route uncertain lineage to review/recovery without deleting media.
 6. Dry-run changes no archive file, registry, scratch, transcript, or Baserow
    state; Tool 4 is the sole Baserow writer and preserves unrelated fields.
 7. Existing class row is updated, singing row is separate, and Tool 4 failure

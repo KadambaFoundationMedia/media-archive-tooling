@@ -1332,3 +1332,268 @@ def test_split_does_not_promote_unconfirmed_date_or_location(env):
     plan = updater.engine.plan_and_revalidate(request, updater.write_adapter.fields)
     assert "Date" not in {diff.field_name for diff in plan.field_diffs if diff.action == FieldAction.SET}
     assert "Place, location" not in {diff.field_name for diff in plan.field_diffs if diff.action == FieldAction.SET}
+
+
+def test_in_place_split_destination_collision_resolution(env):
+    """When source file already occupies the planned canonical class destination filename,
+    Tool 6 must stage cleanly, replace the class file in-place, and produce the singing file."""
+    src = make_audio_file(
+        env["media_dir"] / "2008-04-13_KKS_SB-01-02-19_Oslo.mp3",
+        duration=6.0,
+    )
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_inplace",
+        what_val="SB-01-02-19",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=2.5,
+        source_duration_seconds=6.0,
+    )
+
+    fn_singing, fn_class = env["cutter_service"].plan_output_filenames(tid, "Jaya-Radha-Madhava")
+    assert fn_class == "2008-04-13_KKS_SB-01-02-19_Oslo.mp3"
+    assert (env["media_dir"] / fn_class).resolve() == src.resolve()
+
+    # Dry run must succeed without collision failure
+    dry_res = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert dry_res.success is True
+    assert dry_res.review_required is False
+    assert dry_res.class_output_path == str(src)
+
+    # Live cut must succeed without collision failure
+    res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert res.success is True
+    assert res.review_required is False
+    assert Path(res.singing_output_path).is_file()
+    assert Path(res.class_output_path).is_file()
+    assert Path(res.class_output_path).resolve() == src.resolve()
+
+    info_c = env["audio_cutter"].inspect_audio(Path(res.class_output_path))
+    assert 3.0 <= info_c["duration"] <= 4.0
+
+    info_s = env["audio_cutter"].inspect_audio(Path(res.singing_output_path))
+    assert 2.0 <= info_s["duration"] <= 3.0
+
+
+def test_in_place_split_rollback_restores_original_source(env):
+    """If publication fails during in-place cut, rollback must restore the original source file."""
+    src = make_audio_file(
+        env["media_dir"] / "2008-04-13_KKS_SB-01-02-19_Oslo.mp3",
+        duration=6.0,
+    )
+    orig_bytes = src.read_bytes()
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_inplace_rb",
+        what_val="SB-01-02-19",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=2.5,
+        source_duration_seconds=6.0,
+    )
+
+    call_count = 0
+    original_publish = _atomic_publish_file
+
+    def mock_publish(staged, target):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:  # Fail on class publication
+            raise RuntimeError("Simulated class publish failure during in-place split")
+        original_publish(staged, target)
+
+    with patch("media_archive_tooling.file_cutter.service._atomic_publish_file", side_effect=mock_publish):
+        res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+
+    assert res.success is False
+    assert res.review_required is True
+    # Working input retained and restored!
+    assert src.is_file()
+    assert src.read_bytes() == orig_bytes
+    # Singing output was rolled back
+    singing_dest = env["media_dir"] / "2008-04-13_KKS_Jaya-Radha-Madhava_Oslo.mp3"
+    assert not singing_dest.exists()
+
+
+def test_single_cut_at_singing_end_preserves_class_opening(env):
+    """T5-R-006: Tool 6 uses one cut at singing end; both outputs meet at singing_end_seconds without discarding class opening."""
+    # 10s source: singing 0-3s, opening/prayer 3-5s, verse intro 5-10s
+    src = make_audio_file(env["media_dir"] / "single_boundary_source.mp3", duration=10.0)
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_singlebound",
+        what_val="SB-01-19-31",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=3.0,
+        source_duration_seconds=10.0,
+    )
+    # Even if cutter proposal or metadata has a later verse_intro/speech_start marker (e.g. 5.0s),
+    # the class file MUST start at singing_end_seconds (3.0s) so the opening (3-5s) is not discarded.
+    crev = env["registry"].get_content_review(tid)
+    prop = crev["cutter_proposal"]
+    prop["class_start_seconds"] = 5.0
+    prop["class_range"] = [3.0, 10.0]
+    with env["registry"]._get_conn() as conn:
+        conn.execute("UPDATE content_reviews SET cutter_proposal_json = ? WHERE tracking_id = ?", (json.dumps(prop), tid))
+        conn.commit()
+
+    res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert res.success is True
+    assert res.cut_point_seconds == 3.0
+
+    # Inspect outputs:
+    # 1. Singing part was cut from 0 to 3s (duration ~3s)
+    info_s = env["audio_cutter"].inspect_audio(Path(res.singing_output_path))
+    assert 2.5 <= info_s["duration"] <= 3.5
+
+    # 2. Class part was cut from 3s to 10s (duration ~7s), preserving the prayer/opening between 3s and 5s!
+    info_c = env["audio_cutter"].inspect_audio(Path(res.class_output_path))
+    assert 6.5 <= info_c["duration"] <= 7.5
+
+
+def test_sweden_like_class_opening_preserved(env):
+    """T5-R-006 regression: Sweden example where singing ends at 2.5s and verse intro is at 4.5s.
+    Class file must start at 2.5s and preserve opening audio."""
+    src = make_audio_file(env["media_dir"] / "HH Kadamba Kanana Swami - SB 3.6.6 - Sweden - 27_8_15.mp3", duration=8.0)
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_sweden_regress",
+        what_val="SB-03-06-06",
+        mantra_type="Jaya-Radha-Madhava",
+        singing_end_seconds=2.5,
+        source_duration_seconds=8.0,
+    )
+    # Metadata contains later verse introduction near 4.5s
+    crev = env["registry"].get_content_review(tid)
+    res_data = crev.get("result") or {}
+    res_data["evidence"] = [
+        {"kind": "verse_introduction", "start_seconds": 4.5, "end_seconds": 6.0, "raw_excerpt": "we are reading from", "normalized_text": "we are reading from"}
+    ]
+    with env["registry"]._get_conn() as conn:
+        conn.execute("UPDATE content_reviews SET result_json = ? WHERE tracking_id = ?", (json.dumps(res_data), tid))
+        conn.commit()
+
+    # Dry-run check
+    dry_res = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert dry_res.success is True
+    assert dry_res.cut_point_seconds == 2.5
+    # First retained class audio is at cut_point (2.5s), retaining the full opening before 4.5s
+    assert dry_res.details["first_retained_class_audio_seconds"] <= 2.6
+    assert 5.0 <= dry_res.class_duration_seconds <= 5.6
+
+    # Live cut check
+    live_res = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert live_res.success is True
+    info_c = env["audio_cutter"].inspect_audio(Path(live_res.class_output_path))
+    # Full duration from 2.5s to 8.0s (~5.5s) is preserved, not truncated to 8.0 - 4.5 = 3.5s!
+    assert 5.0 <= info_c["duration"] <= 6.0
+
+
+def test_t5_r_007_never_two_part_cut_vyasa_puja_or_initiation(env):
+    """T5-R-007: Cutter service refuses automatic two-part cutting for Vyasa-puja or Initiation recordings."""
+    vp_dir = env["media_dir"] / "Vyasa-puja 2015"
+    vp_dir.mkdir(parents=True, exist_ok=True)
+    src_vp = make_audio_file(vp_dir / "ZOOM0004.MP3", duration=10.0)
+
+    tid_vp = env["register_test_file"](
+        src_vp,
+        tracking_id="trk_vyasapuja_test",
+        classification="VYASA_PUJA",
+        singing_end_seconds=3.0,
+        source_duration_seconds=10.0,
+    )
+
+    res_vp = env["cutter_service"].cut_file(tid_vp, dry_run=True, root_dir=env["tmp_path"])
+    assert res_vp.success is False
+    assert res_vp.review_required is True
+    assert "multi-part" in (res_vp.review_reason or "").lower()
+
+
+def test_t6_r_010_validate_recorded_split_before_idempotent_reuse(env):
+    """T6-R-010: Validate a recorded split before idempotent reuse.
+
+    Missing outputs or a restored source must refuse false success, avoid deleting
+    restored inputs or creating duplicate rows, and route uncertain lineage to review/recovery.
+    """
+    src = make_audio_file(env["media_dir"] / "2008-01-04-2.mp3", duration=8.0)
+    src_bytes = src.read_bytes()
+    tid = env["register_test_file"](
+        src,
+        tracking_id="trk_t6_r_010",
+        singing_end_seconds=3.0,
+        source_duration_seconds=8.0,
+    )
+
+    # 1. Complete an initial cut
+    live_res = env["cutter_service"].cut_file(tid, root_dir=env["tmp_path"])
+    assert live_res.success is True
+    singing_p = Path(live_res.singing_output_path)
+    class_p = Path(live_res.class_output_path)
+    assert singing_p.is_file()
+    assert class_p.is_file()
+    assert not src.exists()  # Original deleted on successful audio cut
+
+    # Verify initial split is in registry
+    split_rec = env["registry"].get_file_split_by_source(tid)
+    assert split_rec is not None
+
+    # 2. Simulate user restoring original source file and deleting split outputs
+    singing_p.unlink()
+    class_p.unlink()
+    src.write_bytes(src_bytes)
+    assert src.is_file()
+    assert not singing_p.exists()
+    assert not class_p.exists()
+
+    # Reset registry file pointer to point to restored source
+    env["registry"].update_file_status(
+        tracking_id=tid,
+        status="registered",
+        proposed_filename=src.name,
+        current_path=str(src),
+        what_val="Class",
+    )
+
+    # 3. Dry-run without force MUST NOT claim success or reuse stale split
+    dry_stale = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert dry_stale.success is False
+    assert dry_stale.dry_run is True
+    assert dry_stale.review_required is True
+    assert dry_stale.details["reused_existing_split"] is False
+    assert dry_stale.details["lineage_unverified"] is True
+    assert dry_stale.details["missing_outputs"] is True
+    assert dry_stale.details["source_restored"] is True
+    assert "cannot be verified" in (dry_stale.review_reason or "")
+    assert src.is_file()  # Restored source never deleted
+
+    # 4. Live cut without force MUST NOT claim success, delete restored source, or duplicate rows
+    live_stale = env["cutter_service"].cut_file(tid, dry_run=False, root_dir=env["tmp_path"])
+    assert live_stale.success is False
+    assert live_stale.review_required is True
+    assert live_stale.details["lineage_unverified"] is True
+    assert src.is_file()  # Restored source remains intact
+
+    # Verify no duplicate rows created
+    with env["registry"]._get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM file_splits WHERE source_tracking_id = ?", (tid,))
+        count = cursor.fetchone()[0]
+        assert count == 1  # Only the original row exists
+
+    # 5. Forced dry-run gives a real preview of current file
+    forced_dry = env["cutter_service"].cut_file(tid, dry_run=True, force=True, root_dir=env["tmp_path"])
+    assert forced_dry.success is True
+    assert forced_dry.dry_run is True
+    assert forced_dry.cut_point_seconds == 3.0
+    assert forced_dry.details.get("first_retained_class_audio_seconds") is not None
+    assert src.is_file()
+
+    # 6. Test output hash mismatch routes to review
+    # Re-create outputs with tampered content
+    singing_p.write_bytes(b"tampered singing bytes")
+    class_p.write_bytes(b"tampered class bytes")
+    src.unlink()  # Remove source so source_restored is False
+
+    tampered_res = env["cutter_service"].cut_file(tid, dry_run=True, root_dir=env["tmp_path"])
+    assert tampered_res.success is False
+    assert tampered_res.review_required is True
+    assert "hash" in (tampered_res.review_reason or "").lower()

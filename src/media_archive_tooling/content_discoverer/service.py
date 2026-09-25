@@ -17,6 +17,7 @@ from .classifier import ContentClassifier
 from .models import (
     ConfidenceLevel,
     ContentDiscoveryResult,
+    ContentEvidence,
     ContentType,
     CutterBoundaryProposal,
     DerivedAudioDetails,
@@ -293,19 +294,96 @@ class ContentDiscovererService:
         if duration_sec <= 0.0:
             duration_sec = 600.0
 
+        # Extract metadata hints for combination and mantra clues
+        has_combination_clue = False
+        mantra_hint = None
+        category_hint = None
+        orig_fn = ""
+
+        if resolved_tid:
+            file_rec = self.registry.get_file(resolved_tid)
+            if file_rec:
+                orig_fn = file_rec.get("original_filename") or ""
+                pjson = file_rec.get("parser_result_json")
+                if pjson:
+                    try:
+                        pdata = json.loads(pjson)
+                        fmeta = pdata.get("file_metadata") or {}
+                        if fmeta.get("possible_combination"):
+                            has_combination_clue = True
+                        wdata = pdata.get("what") or {}
+                        category_hint = wdata.get("category")
+                        unclass = pdata.get("unclassified_text") or []
+                        unclass_str = " ".join(unclass).lower()
+                        if "radha" in unclass_str or "madhava" in unclass_str:
+                            mantra_hint = MantraType.JAYA_RADHA_MADHAVA.value
+                        elif "kirtan" in unclass_str or "bhajan" in unclass_str:
+                            mantra_hint = MantraType.KIRTAN.value
+                        elif "caitanya" in unclass_str:
+                            mantra_hint = MantraType.JAYA_JAYA_SRI_CAITANYA.value
+                        elif "nrsimha" in unclass_str or "narasimha" in unclass_str:
+                            mantra_hint = MantraType.NRISHMADEVA.value
+                    except Exception:
+                        pass
+
+        if phase1_context:
+            pres = getattr(phase1_context, "parser_result", None)
+            if pres:
+                fmeta = getattr(pres, "file_metadata", None)
+                if fmeta and getattr(fmeta, "possible_combination", False):
+                    has_combination_clue = True
+
+        fn_target = (orig_fn or media_path.name).lower()
+        if any(term in fn_target for term in ["with radha madhava", "radha madhava", "radhamadhava", "radha-madhava"]):
+            has_combination_clue = True
+            mantra_hint = MantraType.JAYA_RADHA_MADHAVA.value
+        elif any(term in fn_target for term in ["with kirtan", "+ kirtan", "& kirtan", "and kirtan"]):
+            has_combination_clue = True
+            if not mantra_hint:
+                mantra_hint = MantraType.KIRTAN.value
+        elif re.search(r"\b(with|and|&|\+|plus|followed\s+by)\b", fn_target):
+            has_combination_clue = True
+
+        # Detect candidate acoustic transitions (continuous music ending in silence)
+        candidate_transitions: List[Tuple[float, float]] = []
+        if duration_sec > 180.0 and self.acoustic_verifier and hasattr(self.acoustic_verifier, "detect_candidate_transitions"):
+            try:
+                candidate_transitions = self.acoustic_verifier.detect_candidate_transitions(
+                    actual_audio,
+                    total_duration=duration_sec,
+                    max_search_sec=min(duration_sec, 2700.0),
+                )
+            except Exception:
+                candidate_transitions = []
+
         excerpt_windows: List[Tuple[float, float]] = []
         if duration_sec <= 120.0:
             excerpt_windows.append((0.0, duration_sec))
         else:
             excerpt_windows.append((0.0, min(120.0, duration_sec)))
+
+            if candidate_transitions:
+                # Add targeted excerpts covering the transition zone from singing_end onwards in overlapping slices
+                for singing_end, speech_start in candidate_transitions[:2]:
+                    trans_start = max(0.0, singing_end)
+                    max_trans_cover = min(duration_sec, max(speech_start + 60.0, singing_end + 180.0))
+                    curr_t = trans_start
+                    while curr_t < max_trans_cover:
+                        w_end = min(duration_sec, curr_t + 45.0)
+                        if w_end > curr_t and not any(abs(w[0] - curr_t) < 15.0 for w in excerpt_windows):
+                            excerpt_windows.append((curr_t, w_end))
+                        curr_t += 35.0
+
             mid_s = max(120.0, duration_sec * 0.4)
             mid_e = min(duration_sec, mid_s + 60.0)
-            if mid_s < duration_sec:
+            if mid_s < duration_sec and not any(abs(w[0] - mid_s) < 30.0 for w in excerpt_windows):
                 excerpt_windows.append((mid_s, mid_e))
             if duration_sec > 600.0:
                 end_s = max(mid_e, duration_sec - 120.0)
-                if end_s < duration_sec:
+                if end_s < duration_sec and not any(abs(w[0] - end_s) < 30.0 for w in excerpt_windows):
                     excerpt_windows.append((end_s, duration_sec))
+
+        excerpt_windows.sort(key=lambda w: w[0])
 
         try:
             artifact = self.transcription_adapter.transcribe(
@@ -344,6 +422,15 @@ class ContentDiscovererService:
                 self.registry.save_content_review(err_result)
             return err_result
 
+        # Populate context in artifact metadata for classification
+        if artifact.raw_metadata is None:
+            artifact.raw_metadata = {}
+        artifact.raw_metadata["candidate_transitions"] = candidate_transitions
+        artifact.raw_metadata["has_combination_clue"] = has_combination_clue
+        artifact.raw_metadata["mantra_hint"] = mantra_hint
+        artifact.raw_metadata["category_hint"] = category_hint
+        artifact.raw_metadata["folder_context"] = str(media_path.parent)
+
         # 4. Classification from Excerpts
         result = self.classifier.classify(artifact)
         result.source_path = str(media_path)
@@ -358,31 +445,83 @@ class ContentDiscovererService:
             coarse_e = result.cutter_proposal.class_range[0]
             dur = result.cutter_proposal.source_duration_seconds or duration_sec
 
-            exact_cut = None
-            if self.acoustic_verifier:
-                exact_cut = self.acoustic_verifier.verify_boundary(
-                    actual_audio,
-                    coarse_s,
-                    coarse_e,
-                    dur,
-                )
+            # Acoustically refine class speech onset if possible (stored as evidence metadata, not destructive cut boundary)
+            if self.acoustic_verifier and hasattr(self.acoustic_verifier, "find_speech_onset"):
+                verse_intro_ev = next((e for e in result.evidence if e.kind == "verse_introduction"), None)
+                target_times = []
+                if verse_intro_ev:
+                    target_times.append(verse_intro_ev.start_seconds)
+                raw_c_start = result.cutter_proposal.class_start_seconds or coarse_e
+                if raw_c_start > 0 and raw_c_start not in target_times:
+                    target_times.append(raw_c_start)
 
-            if exact_cut is not None and exact_cut > 0:
-                result.cutter_proposal.singing_end_seconds = exact_cut
-                result.cutter_proposal.confidence = "HIGH"
-                result.cutter_proposal.method = "acoustic_local_boundary_verified"
-                result.process_by_tool_6 = True
-                result.confidence = ConfidenceLevel.HIGH
-                result.review_required = False
-                result.review_reason = None
+                for t_target in target_times:
+                    search_s = max(0.0, t_target - 5.0)
+                    search_e = min(dur, t_target + 15.0)
+                    refined_onset = self.acoustic_verifier.find_speech_onset(
+                        actual_audio,
+                        search_s,
+                        search_e,
+                        target_time=t_target,
+                    )
+                    if refined_onset is not None and abs(refined_onset - t_target) <= 10.0:
+                        if not any(e.kind == "speech_onset" and abs(e.start_seconds - refined_onset) < 0.1 for e in result.evidence):
+                            result.evidence.append(
+                                ContentEvidence(
+                                    kind="speech_onset",
+                                    start_seconds=refined_onset,
+                                    end_seconds=refined_onset,
+                                    raw_excerpt="acoustic speech onset",
+                                    normalized_text="speech onset",
+                                )
+                            )
+
+            if result.cutter_proposal.singing_end_seconds is not None and result.cutter_proposal.confidence == "HIGH":
+                t_conf = "HIGH"
+                t_reason = None
+                if self.acoustic_verifier and hasattr(self.acoustic_verifier, "verify_transition_confidence"):
+                    t_conf, t_reason = self.acoustic_verifier.verify_transition_confidence(
+                        actual_audio,
+                        result.cutter_proposal.singing_end_seconds,
+                    )
+                if t_conf == "HIGH":
+                    result.process_by_tool_6 = True
+                    result.confidence = ConfidenceLevel.HIGH
+                    result.review_required = False
+                    result.review_reason = None
+                else:
+                    result.cutter_proposal.confidence = "MEDIUM"
+                    result.cutter_proposal.method = "acoustic_transition_ambiguous"
+                    result.process_by_tool_6 = False
+                    result.confidence = ConfidenceLevel.MEDIUM
+                    result.review_required = True
+                    result.review_reason = f"Singing end boundary exceeds 1.5s confidence tolerance ({t_reason}); manual review required"
             else:
-                result.cutter_proposal.singing_end_seconds = None
-                result.cutter_proposal.confidence = "LOW"
-                result.cutter_proposal.method = "acoustic_verification_failed"
-                result.process_by_tool_6 = False
-                result.confidence = ConfidenceLevel.MEDIUM
-                result.review_required = True
-                result.review_reason = "Exact singing end boundary could not be verified acoustically from local audio; manual review required"
+                exact_cut = None
+                if self.acoustic_verifier:
+                    exact_cut = self.acoustic_verifier.verify_boundary(
+                        actual_audio,
+                        coarse_s,
+                        coarse_e,
+                        dur,
+                    )
+
+                if exact_cut is not None and exact_cut > 0:
+                    result.cutter_proposal.singing_end_seconds = exact_cut
+                    result.cutter_proposal.confidence = "HIGH"
+                    result.cutter_proposal.method = "acoustic_local_boundary_verified"
+                    result.process_by_tool_6 = True
+                    result.confidence = ConfidenceLevel.HIGH
+                    result.review_required = False
+                    result.review_reason = None
+                else:
+                    result.cutter_proposal.singing_end_seconds = None
+                    result.cutter_proposal.confidence = "LOW"
+                    result.cutter_proposal.method = "acoustic_verification_failed"
+                    result.process_by_tool_6 = False
+                    result.confidence = ConfidenceLevel.MEDIUM
+                    result.review_required = True
+                    result.review_reason = "Exact singing end boundary could not be verified acoustically from local audio; manual review required"
 
         # 5. Persistence
         if not dry_run:

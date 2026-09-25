@@ -747,6 +747,7 @@ def run_cut(args):
         tracking_id_or_path=args.target,
         dry_run=args.dry_run,
         cut_point_override=args.cut_point,
+        force=getattr(args, "force", False),
     )
 
     if args.json:
@@ -779,6 +780,7 @@ def main():
     cut_parser = subparsers.add_parser("cut", help="Run Tool 6: File Cutter")
     cut_parser.add_argument("target", help="Target media file path or tracking ID to split")
     cut_parser.add_argument("--dry-run", action="store_true", default=False, help="Perform dry-run cut preview without modifying files or database")
+    cut_parser.add_argument("--force", action="store_true", default=False, help="Force re-cutting even if a previous split exists in registry")
     cut_parser.add_argument("--cut-point", type=float, default=None, help="Explicit cut point in seconds (overrides automatic Tool 5 proposal)")
     cut_parser.add_argument("--registry-path", help="Custom SQLite registry path")
     cut_parser.add_argument("--json", action="store_true", default=False, help="Output machine-readable JSON")
