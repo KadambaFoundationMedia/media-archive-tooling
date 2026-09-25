@@ -103,6 +103,111 @@ def test_portal_file_detail_and_update(tmp_path):
     assert updated["status"] == "approved"
 
 
+def test_portal_file_detail_save_action(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_save.db")
+    source = tmp_path / "save_media.mp3"
+    source.write_bytes(b"save media audio")
+    proposal = make_portal_proposal(source, "save001", RenameMode.INITIAL, needs_review=True)
+    reg.save_proposal(proposal)
+    configure_review_context(
+        registry=reg,
+        media_db_updater_service=MagicMock(),
+        review_root=tmp_path,
+    )
+
+    client = TestClient(app)
+    res_post = client.post(
+        "/file/save001/update",
+        data={
+            "action": "save",
+            "when_val": "2012-01-02",
+            "what_val": "CC-Talk",
+            "where_val": "Simhachalam",
+            "proposed_filename": "2012-01-02_KKS_CC-Talk_Simhachalam-de_ID-save001.mp3",
+        },
+        follow_redirects=True,
+    )
+    assert res_post.status_code == 200
+    updated = reg.get_file("save001")
+    assert updated["status"] == "pending"
+    assert updated["when_val"] == "2012-01-02"
+    assert updated["what_val"] == "CC-Talk"
+    history = reg.get_review_actions("save001")
+    assert any(h["action"] == "save" for h in history)
+
+
+def test_portal_file_detail_approve_finalized_proposal(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_appr_fin.db")
+    source = tmp_path / "fin_media.mp3"
+    source.write_bytes(b"fin media audio")
+    proposal = make_portal_proposal(source, "fin001", RenameMode.FINALIZE, needs_review=True)
+    # Finalize proposal has no _ID- tag in proposed filename
+    proposal.proposed_filename = "2012-01-02_KKS_CC-Talk_Simhachalam-de.mp3"
+    reg.save_proposal(proposal)
+    configure_review_context(
+        registry=reg,
+        media_db_updater_service=MagicMock(),
+        review_root=tmp_path,
+    )
+
+    client = TestClient(app)
+    res_post = client.post(
+        "/file/fin001/update",
+        data={
+            "action": "approve",
+            "when_val": "2012-01-02",
+            "what_val": "CC-Talk",
+            "where_val": "Simhachalam",
+            "proposed_filename": "2012-01-02_KKS_CC-Talk_Simhachalam-de.mp3",
+        },
+        follow_redirects=True,
+    )
+    assert res_post.status_code == 200
+    updated = reg.get_file("fin001")
+    assert updated["status"] == "approved"
+
+
+def test_portal_waveform_rendering_with_content_review(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_waveform.db")
+    source = tmp_path / "wave_media.mp3"
+    source.write_bytes(b"wave media audio")
+    proposal = make_portal_proposal(source, "wave001", RenameMode.INITIAL, needs_review=True)
+    reg.save_proposal(proposal)
+    reg.save_content_review({
+        "tracking_id": "wave001",
+        "input_sha256": "dummy_sha",
+        "transcript_sha256": "dummy_transcript_sha",
+        "classification": "KIRTAN_AND_CLASS",
+        "confidence": "HIGH",
+        "mantra_type": "HARE_KRISHNA",
+        "cutter_proposal": {
+            "singing_end_seconds": 120.5,
+            "source_duration_seconds": 600.0,
+            "confidence": "HIGH",
+            "method": "exact_timestamp",
+            "kirtan_range": [0.0, 120.5],
+            "class_range": [120.5, 600.0],
+            "suggested_cut_points": [120.5],
+        },
+        "process_by_tool_6": True,
+        "review_required": False,
+    })
+    configure_review_context(
+        registry=reg,
+        media_db_updater_service=MagicMock(),
+        review_root=tmp_path,
+    )
+
+    client = TestClient(app)
+    res = client.get("/file/wave001")
+    assert res.status_code == 200
+    assert "file-cutter-card" in res.text
+    assert "waveform-canvas" in res.text
+    assert "cut-slider" in res.text
+    assert "Cut Point" in res.text
+
+
+
 def test_batch_approve_uses_application_service(monkeypatch):
     calls = []
 

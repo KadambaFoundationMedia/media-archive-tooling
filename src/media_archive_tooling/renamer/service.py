@@ -15,7 +15,7 @@ from ..media_db_updater.models import SyncStatus
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_REVIEW_ACTIONS = {"approve", "edit", "defer"}
+ALLOWED_REVIEW_ACTIONS = {"approve", "edit", "defer", "save"}
 
 
 class RenamerApplicationService:
@@ -356,14 +356,31 @@ class RenamerApplicationService:
             changes["where_val"] = where_clean
 
         # 4. Regenerate proposal through naming planner to guarantee filename standard adherence
-        proposal = self.planner.plan_rename(parser_res)
+        actual_mode = self.planner.mode
+        stored_mode_val = record.get("proposal_mode")
+        if stored_mode_val:
+            try:
+                actual_mode = RenameMode(stored_mode_val)
+            except ValueError:
+                pass
+        elif record.get("proposed_filename") and "_ID-" not in record.get("proposed_filename"):
+            actual_mode = RenameMode.FINALIZE
+
+        planner = RenamePlanner(mode=actual_mode) if actual_mode != self.planner.mode else self.planner
+        proposal = planner.plan_rename(parser_res)
         final_proposed = proposal.proposed_filename
 
         # If human gave a custom proposed filename, validate it
         if custom_proposed_filename and custom_proposed_filename.strip():
             cpf = custom_proposed_filename.strip()
-            # Strict shared validator check
-            ok_cpf, errors = validate_canonical_filename(cpf, mode=self.planner.mode, tracking_id=tracking_id)
+            # If cpf contains an ID tag, validate in INITIAL mode; otherwise validate in actual_mode (or FINALIZE)
+            val_mode = RenameMode.INITIAL if "_ID-" in cpf else actual_mode
+            ok_cpf, errors = validate_canonical_filename(cpf, mode=val_mode, tracking_id=tracking_id)
+            if not ok_cpf and val_mode != RenameMode.FINALIZE:
+                ok_cpf_fin, errors_fin = validate_canonical_filename(cpf, mode=RenameMode.FINALIZE, tracking_id=tracking_id)
+                if ok_cpf_fin:
+                    ok_cpf = True
+                    actual_mode = RenameMode.FINALIZE
             if not ok_cpf:
                 raise ValueError("; ".join(errors))
             final_proposed = cpf
@@ -398,6 +415,7 @@ class RenamerApplicationService:
             needs_review=needs_review,
             review_reasons=new_review_reasons,
             parser_result_json=parser_res.model_dump_json(),
+            proposal_mode=actual_mode.value,
         )
 
         # 7. Record audit action

@@ -524,34 +524,63 @@ class LocalRegistry:
         needs_review: bool,
         review_reasons: List[str],
         parser_result_json: str,
+        proposal_mode: Optional[str] = None,
     ):
         now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-            UPDATE files SET
-                when_val = ?,
-                what_val = ?,
-                where_val = ?,
-                proposed_filename = ?,
-                status = ?,
-                needs_review = ?,
-                review_reasons = ?,
-                parser_result_json = ?,
-                updated_at = ?
-            WHERE tracking_id = ?
-            """, (
-                when_val,
-                what_val,
-                where_val,
-                proposed_filename,
-                status,
-                1 if needs_review else 0,
-                json.dumps(review_reasons),
-                parser_result_json,
-                now,
-                tracking_id
-            ))
+            if proposal_mode is not None:
+                cursor.execute("""
+                UPDATE files SET
+                    when_val = ?,
+                    what_val = ?,
+                    where_val = ?,
+                    proposed_filename = ?,
+                    status = ?,
+                    needs_review = ?,
+                    review_reasons = ?,
+                    parser_result_json = ?,
+                    proposal_mode = ?,
+                    updated_at = ?
+                WHERE tracking_id = ?
+                """, (
+                    when_val,
+                    what_val,
+                    where_val,
+                    proposed_filename,
+                    status,
+                    1 if needs_review else 0,
+                    json.dumps(review_reasons),
+                    parser_result_json,
+                    proposal_mode,
+                    now,
+                    tracking_id
+                ))
+            else:
+                cursor.execute("""
+                UPDATE files SET
+                    when_val = ?,
+                    what_val = ?,
+                    where_val = ?,
+                    proposed_filename = ?,
+                    status = ?,
+                    needs_review = ?,
+                    review_reasons = ?,
+                    parser_result_json = ?,
+                    updated_at = ?
+                WHERE tracking_id = ?
+                """, (
+                    when_val,
+                    what_val,
+                    where_val,
+                    proposed_filename,
+                    status,
+                    1 if needs_review else 0,
+                    json.dumps(review_reasons),
+                    parser_result_json,
+                    now,
+                    tracking_id
+                ))
             conn.commit()
 
     def get_review_actions(self, tracking_id: str) -> List[Dict[str, Any]]:

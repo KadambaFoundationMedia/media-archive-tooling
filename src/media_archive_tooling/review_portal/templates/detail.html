@@ -379,14 +379,15 @@
         {% if content_review and content_review.cutter_proposal %}
         <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; align-items: center;">
             <span style="font-size: 12px; color: var(--muted-color); font-weight: 600;">Jump to timestamps:</span>
-            {% if content_review.cutter_proposal.kirtan_start_sec is defined and content_review.cutter_proposal.kirtan_start_sec is not none %}
-            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ content_review.cutter_proposal.kirtan_start_sec }})">Kirtan Start ({{ content_review.cutter_proposal.kirtan_start_sec }}s)</button>
+            {% set cp = content_review.cutter_proposal %}
+            {% set k_end = cp.singing_end_seconds if cp.singing_end_seconds is defined and cp.singing_end_seconds is not none else (cp.kirtan_range[1] if cp.kirtan_range is defined else none) %}
+            {% set c_start = cp.class_start_seconds if cp.class_start_seconds is defined and cp.class_start_seconds is not none else (cp.class_range[0] if cp.class_range is defined else none) %}
+            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio(0)">Kirtan Start (0s)</button>
+            {% if k_end is not none %}
+            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ k_end }})">Singing End ({{ k_end }}s)</button>
             {% endif %}
-            {% if content_review.cutter_proposal.kirtan_end_sec is defined and content_review.cutter_proposal.kirtan_end_sec is not none %}
-            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ content_review.cutter_proposal.kirtan_end_sec }})">Kirtan End ({{ content_review.cutter_proposal.kirtan_end_sec }}s)</button>
-            {% endif %}
-            {% if content_review.cutter_proposal.class_start_sec is defined and content_review.cutter_proposal.class_start_sec is not none %}
-            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ content_review.cutter_proposal.class_start_sec }})">Class Start ({{ content_review.cutter_proposal.class_start_sec }}s)</button>
+            {% if c_start is not none and c_start != k_end %}
+            <button type="button" class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="seekAudio({{ c_start }})">Class Start ({{ c_start }}s)</button>
             {% endif %}
         </div>
         {% endif %}
@@ -991,6 +992,20 @@
                 }
                 if (data.peaks) {
                     drawWaveform(data.peaks);
+                }
+
+                const container = document.getElementById('waveform-container');
+                if (container) {
+                    container.style.cursor = 'pointer';
+                    container.onclick = (e) => {
+                        const rect = container.getBoundingClientRect();
+                        const clickX = e.clientX - rect.left;
+                        const pct = Math.max(0, Math.min(1, clickX / rect.width));
+                        const newCut = pct * totalDurationSeconds;
+                        const slider = document.getElementById('cut-slider');
+                        if (slider) slider.value = newCut;
+                        updateCutDisplay(newCut);
+                    };
                 }
             } catch (e) {
                 console.warn("Waveform load failed:", e);

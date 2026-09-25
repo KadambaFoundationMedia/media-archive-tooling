@@ -458,6 +458,8 @@ class MainToolingScriptService:
                 phase1_context=phase1_context,
                 progress_callback=report_progress,
             )
+            if content_res is not None:
+                self.registry.save_content_review(content_res)
             boundary_str = f" | Boundary: {content_res.cutter_proposal.suggested_cut_points}" if content_res.cutter_proposal else ""
             route_str = " -> process_by_tool_6" if content_res.process_by_tool_6 else ""
             provenance = content_res.runtime_provenance
