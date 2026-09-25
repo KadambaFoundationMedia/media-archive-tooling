@@ -295,6 +295,11 @@ class AcousticBoundaryVerifier:
         starts_30 = _get_silence_starts("-30dB")
         starts_25 = _get_silence_starts("-25dB")
 
+        # A successful transition check needs local acoustic evidence. Empty
+        # results also cover FFmpeg failures, so they must not authorize a cut.
+        if not any(abs(s - candidate_singing_end) <= 1.5 for s in starts_30):
+            return ("MEDIUM", "No -30dB silence onset confirms the proposed singing end within 1.5s")
+
         # 1. Check for significant silence at -30dB in cluster > 2.0s before candidate
         prior_30 = [s for s in starts_30 if s < candidate_singing_end - 2.0]
         if prior_30:

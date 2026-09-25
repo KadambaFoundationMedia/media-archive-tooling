@@ -100,6 +100,13 @@ the next handoff. No live media or Baserow writes are authorized for review.
 
 ### Resolution of Independent Planner Re-Review Findings (2026-09-25)
 
+Planner safety follow-up: `verify_transition_confidence()` now requires a
+nearby -30dB silence onset before returning `HIGH`; FFmpeg failure or empty
+silence output returns `MEDIUM` instead of authorizing an automatic cut. A
+regression covers this fail-closed path. The planner reran the four real
+acoustic checks after this change: 2008 and Simhachalam remain `MEDIUM`, while
+Sweden and Oslo remain `HIGH`. The full local suite passes (515 tests).
+
 1. **T6-R-010 (Validate recorded split before idempotent reuse)**: [RESOLVED]
    - `FileCutterService` now verifies recorded split successors before idempotent reuse:
      - Checks both output files (singing and class) across current Tool 11 registry tracked locations as well as stored output paths.

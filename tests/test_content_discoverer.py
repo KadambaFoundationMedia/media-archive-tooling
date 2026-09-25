@@ -1649,3 +1649,24 @@ def test_boundary_confidence_gating_routes_ambiguous_transitions_to_review(env, 
     assert res_sharp.review_required is False
     assert res_sharp.cutter_proposal is not None
     assert res_sharp.cutter_proposal.confidence == "HIGH"
+
+
+def test_transition_confidence_fails_closed_without_nearby_acoustic_evidence(tmp_path, monkeypatch):
+    """A failed or evidence-free FFmpeg check cannot authorize an automatic cut."""
+    from media_archive_tooling.content_discoverer.acoustic_verifier import AcousticBoundaryVerifier
+
+    audio = tmp_path / "recording.mp3"
+    audio.write_bytes(b"test audio")
+    verifier = AcousticBoundaryVerifier(ffmpeg_bin="ffmpeg")
+
+    class FailedProcess:
+        returncode = 1
+        stderr = b"decode failed"
+
+    monkeypatch.setattr(
+        "media_archive_tooling.content_discoverer.acoustic_verifier.subprocess.run",
+        lambda *args, **kwargs: FailedProcess(),
+    )
+    confidence, reason = verifier.verify_transition_confidence(audio, 100.0)
+    assert confidence == "MEDIUM"
+    assert "No -30dB silence onset" in reason
