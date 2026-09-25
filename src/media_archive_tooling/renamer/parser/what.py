@@ -83,6 +83,7 @@ def parse_what(
     categories_ref: Optional[List[Dict[str, Any]]] = None,
     vedabase_validator: Optional[Any] = None,
     specific_titles_ref: Optional[List[Dict[str, Any]]] = None,
+    category_resolver: Optional[Any] = None,
 ) -> Tuple[WhatResult, str, Optional[str]]:
     """Resolve WHAT topic and category from filename and folder context."""
     categories = categories_ref or load_category_definitions()
@@ -233,6 +234,77 @@ def parse_what(
         return res, cleaned.strip(), conflict
 
     # 3. Check Category Title matching terms
+    if category_resolver is not None:
+        resolution = category_resolver(working)
+        status_val = resolution.status.value if hasattr(resolution.status, "value") else str(resolution.status)
+        if status_val == "MATCHED":
+            matched_term = resolution.matched_term or ""
+            pat = rf"(?:^|[\s_.\-,/()\[\]])({re.escape(matched_term)}(?:-[A-Za-z0-9]+)?)(?=[_.\s\-,/()\[\]]|$)"
+            m = re.search(pat, working, re.IGNORECASE)
+            if m:
+                raw_tok = m.group(1).strip(" _.-")
+                span = m.span(1)
+                canon_what = sanitize_filename_token(to_ascii_latin(raw_tok))
+                cleaned = working[:span[0]] + " " + working[span[1]:]
+            else:
+                raw_tok = matched_term
+                canon_what = sanitize_filename_token(to_ascii_latin(raw_tok))
+                cleaned = working
+
+            details_data = {
+                "matched_term": resolution.matched_term,
+                "category": resolution.category,
+                "row_id": resolution.matched_row_id,
+                "table_id": resolution.table_id,
+                "read_at": resolution.read_at,
+            }
+            res = WhatResult(
+                selected_value=canon_what,
+                category=resolution.category,
+                state=ResolutionState.STRONG,
+                candidates=[canon_what, resolution.category],
+                evidence=[
+                    Evidence(
+                        source="category_title_reference",
+                        raw_value=raw_tok,
+                        details=json.dumps(details_data),
+                    )
+                ]
+            )
+            return res, cleaned.strip(), conflict
+
+        elif status_val == "AMBIGUOUS":
+            return WhatResult(
+                selected_value=None,
+                category=None,
+                state=ResolutionState.AMBIGUOUS,
+                candidates=[],
+                evidence=[
+                    Evidence(
+                        source="category_title_reference",
+                        raw_value=working,
+                        details=resolution.reason,
+                    )
+                ]
+            ), working, resolution.reason
+
+        elif status_val == "DATABASE_UNAVAILABLE":
+            err_msg = f"Category title reference database unavailable: {resolution.reason}"
+            return WhatResult(
+                selected_value=None,
+                category=None,
+                state=ResolutionState.UNRESOLVED,
+                candidates=[],
+                evidence=[
+                    Evidence(
+                        source="category_title_reference",
+                        raw_value=working,
+                        details=err_msg,
+                    )
+                ]
+            ), working, err_msg
+
+    # Fallback to local categories definitions if category_resolver is None or NO_MATCH
     matched_cats = []
     best_match = None
     best_len = 0
@@ -254,8 +326,16 @@ def parse_what(
     if best_match:
         span = best_match.span()
         raw_matched = working[span[0]:span[1]].strip(" _.-")
+        # Check if raw_matched is part of a compound token like CC-Talk
+        pat = rf"(?:^|[\s_.\-,/()\[\]])({re.escape(raw_matched)}(?:-[A-Za-z0-9]+)?)(?=[_.\s\-,/()\[\]]|$)"
+        m_tok = re.search(pat, working, re.IGNORECASE)
+        if m_tok and m_tok.group(1).lower() != raw_matched.lower():
+            full_tok = m_tok.group(1).strip(" _.-")
+            span = m_tok.span(1)
+            canon_what = sanitize_filename_token(to_ascii_latin(full_tok))
+        else:
+            canon_what = sanitize_filename_token(to_ascii_latin(best_category))
         cleaned = working[:span[0]] + " " + working[span[1]:]
-        canon_what = sanitize_filename_token(to_ascii_latin(best_category))
         res = WhatResult(
             selected_value=canon_what,
             category=best_category,

@@ -1,12 +1,18 @@
 import inspect
-from datetime import datetime, timezone
 import json
 import logging
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from ..common.ascii_latin import to_ascii_latin
 from ..renamer.models import EnrichmentEvidence, ParserResult
 from ..renamer.registry.registry import LocalRegistry
-from .baserow_provider import BaserowSnapshotProvider, BaserowUnavailableError
+from .baserow_provider import (
+    BaserowSnapshotProvider,
+    BaserowUnavailableError,
+    normalize_category_title_row,
+)
 from .engine import (
     MediaDatabaseReconciliationEngine,
     compose_what_val,
@@ -17,6 +23,8 @@ from .engine import (
 )
 from .models import (
     BaserowSnapshot,
+    CategoryTitleResolution,
+    CategoryTitleResolutionStatus,
     FieldComparisonState,
     MediaDatabaseReviewResult,
     RenamerEnrichment,
@@ -474,4 +482,129 @@ class MediaDatabaseReviewService:
             reviewer=reviewer,
             auto_enrich=auto_enrich,
         )
+
+    def resolve_category_title(
+        self,
+        term_or_title: str,
+        snapshot: Optional[BaserowSnapshot] = None,
+    ) -> CategoryTitleResolution:
+        """Resolve an uncertain title or WHAT term against live Baserow category_title table.
+
+        Performs conservative whole term/phrase matching after punctuation,
+        case, and Latin transliteration normalization.
+        Prefers a unique, more specific term.
+        Does NOT match substrings inside unrelated words (e.g. 'access' must not match 'CC').
+        Returns typed CategoryTitleResolution.
+        """
+        now_str = datetime.now(timezone.utc).isoformat()
+        clean_query = to_ascii_latin(str(term_or_title or "")).strip()
+        if not clean_query:
+            return CategoryTitleResolution(
+                status=CategoryTitleResolutionStatus.NO_MATCH,
+                read_at=now_str,
+                reason="Empty query term",
+            )
+
+        # 1. Obtain rows from snapshot or live provider
+        table_id = None
+        raw_rows = []
+        read_at = now_str
+        if snapshot is not None:
+            raw_rows = snapshot.category_title_rows
+            read_at = snapshot.snapshot_at
+            table_id = getattr(self.provider, "category_table_id", None)
+            if not raw_rows and snapshot.state == "DATABASE_UNAVAILABLE":
+                return CategoryTitleResolution(
+                    status=CategoryTitleResolutionStatus.DATABASE_UNAVAILABLE,
+                    read_at=read_at,
+                    table_id=table_id,
+                    reason="Baserow database snapshot state is DATABASE_UNAVAILABLE",
+                )
+        else:
+            try:
+                raw_rows, read_at, table_id = self.provider.fetch_category_title_rows_live()
+            except BaserowUnavailableError as e:
+                return CategoryTitleResolution(
+                    status=CategoryTitleResolutionStatus.DATABASE_UNAVAILABLE,
+                    read_at=now_str,
+                    table_id=getattr(self.provider, "category_table_id", None),
+                    reason=str(e),
+                )
+            except Exception as e:
+                return CategoryTitleResolution(
+                    status=CategoryTitleResolutionStatus.DATABASE_UNAVAILABLE,
+                    read_at=now_str,
+                    table_id=getattr(self.provider, "category_table_id", None),
+                    reason=f"Unexpected error fetching category_title rows: {e}",
+                )
+
+        if not raw_rows:
+            return CategoryTitleResolution(
+                status=CategoryTitleResolutionStatus.DATABASE_UNAVAILABLE,
+                read_at=read_at,
+                table_id=table_id,
+                reason="Live category_title table returned 0 rows or is unpopulated",
+            )
+
+        # 2. Normalize rows
+        norm_rows = [normalize_category_title_row(r) for r in raw_rows]
+
+        # 3. Match terms
+        query_lower = clean_query.lower()
+        matches = []
+        for row in norm_rows:
+            cat_name = row.get("category")
+            if not cat_name:
+                continue
+            for raw_term in row.get("title_matching_terms", []):
+                norm_term = to_ascii_latin(raw_term).strip().lower()
+                if not norm_term:
+                    continue
+
+                words = [re.escape(w) for w in re.split(r"[\s_.\-]+", norm_term) if w]
+                if not words:
+                    continue
+                term_pattern_str = r"[\s_.\-]+".join(words)
+                pattern = rf"(?:^|[\s_.\-,/()\[\]]){term_pattern_str}(?=[_.\s\-,/()\[\]]|$)"
+                m = re.search(pattern, query_lower)
+                if m:
+                    matches.append({
+                        "row_id": row["id"],
+                        "category": cat_name,
+                        "matched_term": raw_term,
+                        "term_len": len(norm_term),
+                        "span": m.span(),
+                    })
+
+        if not matches:
+            return CategoryTitleResolution(
+                status=CategoryTitleResolutionStatus.NO_MATCH,
+                read_at=read_at,
+                table_id=table_id,
+                reason=f"No category_title terms matched query '{term_or_title}'",
+            )
+
+        # 4. Group by category and find maximum specificity (term length)
+        max_len = max(m["term_len"] for m in matches)
+        top_matches = [m for m in matches if m["term_len"] == max_len]
+
+        unique_cats = list(dict.fromkeys(m["category"] for m in top_matches))
+        if len(unique_cats) > 1:
+            return CategoryTitleResolution(
+                status=CategoryTitleResolutionStatus.AMBIGUOUS,
+                read_at=read_at,
+                table_id=table_id,
+                reason=f"Ambiguous category_title matches for '{term_or_title}': multiple categories matched with equal specificity ({unique_cats})",
+            )
+
+        best = top_matches[0]
+        return CategoryTitleResolution(
+            status=CategoryTitleResolutionStatus.MATCHED,
+            matched_row_id=best["row_id"],
+            matched_term=best["matched_term"],
+            category=best["category"],
+            read_at=read_at,
+            table_id=table_id,
+        )
+
 

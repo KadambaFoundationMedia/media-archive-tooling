@@ -9,6 +9,7 @@ Enforces:
 - Strict select-option rules (only Country and Place, location may create options).
 """
 from datetime import datetime, timezone
+import json
 import logging
 from pathlib import Path
 import re
@@ -161,6 +162,8 @@ CATEGORY_ALIASES: Dict[str, str] = {
     "c.c.": "caitanya caritamrta",
     "caitanya-caritamrta": "caitanya caritamrta",
     "caitanya caritamrta": "caitanya caritamrta",
+    "chaitanya charitamrita": "caitanya caritamrta",
+    "chaitanya-charitamrita": "caitanya caritamrta",
 }
 
 
@@ -440,6 +443,101 @@ class MediaDatabaseUpdateEngine:
             return None, True
         return None, False
 
+    def _resolve_and_revalidate_category(
+        self,
+        request: MediaDbSyncRequest,
+        target_cat: Optional[str],
+        cat_fld: Optional[Dict[str, Any]],
+        conflicts: List[str],
+        diag_notes: List[str],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Revalidate category_title reference via Tool 2 and map to exact live Media schema option.
+
+        Returns (matched_category_option, failure_conflict_or_none).
+        """
+        if not cat_fld:
+            conflict = "Missing field in schema: Category"
+            conflicts.append(conflict)
+            return None, conflict
+
+        # 1. Check for category_title_reference evidence in request provenance
+        cat_ev = None
+        if request.what_provenance:
+            for ev in request.what_provenance:
+                src = ev.get("source") if isinstance(ev, dict) else getattr(ev, "source", None)
+                if src in ("category_title_reference", "baserow_category_title"):
+                    cat_ev = ev
+                    break
+
+        prior_category = None
+        prior_row_id = None
+        matched_term = None
+        if cat_ev:
+            raw_tok = cat_ev.get("raw_value") if isinstance(cat_ev, dict) else getattr(cat_ev, "raw_value", None)
+            details_str = cat_ev.get("details") if isinstance(cat_ev, dict) else getattr(cat_ev, "details", None)
+            if details_str and isinstance(details_str, str) and details_str.startswith("{"):
+                try:
+                    ev_dict = json.loads(details_str)
+                    prior_category = ev_dict.get("category")
+                    prior_row_id = ev_dict.get("row_id")
+                    matched_term = ev_dict.get("matched_term")
+                except Exception:
+                    pass
+            query_term = raw_tok or matched_term or request.what_val or target_cat
+
+            # Mandatory pre-write recheck via Tool 2
+            if self.tool2_service is None:
+                conflict = "Category title reference service is unconfigured"
+                conflicts.append(conflict)
+                return None, conflict
+
+            try:
+                resolution = self.tool2_service.resolve_category_title(query_term)
+            except Exception as e:
+                conflict = f"Category title reference revalidation failed: {e}"
+                conflicts.append(conflict)
+                return None, conflict
+
+            status_val = resolution.status.value if hasattr(resolution.status, "value") else str(resolution.status)
+            if status_val == "DATABASE_UNAVAILABLE":
+                conflict = f"Category title reference table is unavailable: {resolution.reason}"
+                conflicts.append(conflict)
+                return None, conflict
+            elif status_val == "AMBIGUOUS":
+                conflict = f"Ambiguous category_title matches for '{query_term}': {resolution.reason}"
+                conflicts.append(conflict)
+                return None, conflict
+            elif status_val == "NO_MATCH":
+                conflict = f"No category_title matches found for '{query_term}'"
+                conflicts.append(conflict)
+                return None, conflict
+            elif status_val == "MATCHED":
+                if prior_category and resolution.category and resolution.category.lower() != prior_category.lower():
+                    conflict = (
+                        f"Stale category_title reference: was '{prior_category}' (row {prior_row_id}), "
+                        f"now matches '{resolution.category}' (row {resolution.matched_row_id})"
+                    )
+                    conflicts.append(conflict)
+                    return None, conflict
+                target_cat = resolution.category
+
+        if not target_cat:
+            return None, None
+
+        # 2. Map to existing live Media Category select option
+        options = cat_fld.get("select_options", [])
+        matched_cat, ambig = self._match_select_option(options, target_cat, is_category=True)
+        if matched_cat:
+            return matched_cat, None
+        elif ambig:
+            conflict = f"Ambiguous Category option for '{target_cat}'"
+            conflicts.append(conflict)
+            return None, conflict
+        else:
+            conflict = f"Category option '{target_cat}' not found in live schema (creation disallowed)"
+            conflicts.append(conflict)
+            return None, conflict
+
     def plan_and_revalidate(
         self,
         request: MediaDbSyncRequest,
@@ -692,14 +790,12 @@ class MediaDatabaseUpdateEngine:
         else:
             target_cat = request.what_category
 
-        if cat_fld and target_cat:
-            matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), target_cat, is_category=True)
+        if target_cat:
+            matched_cat, _ = self._resolve_and_revalidate_category(
+                request, target_cat, cat_fld, conflicts, diag_notes
+            )
             if matched_cat:
                 diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
-            elif ambig:
-                conflicts.append(f"Ambiguous Category option for '{target_cat}'")
-            else:
-                conflicts.append(f"Category option '{target_cat}' not found in live schema (creation disallowed)")
 
         # 4. Tag (Scripture verse)
         verse = _extract_scripture_verse(request.what_val, request.what_verse)
@@ -1206,13 +1302,11 @@ class MediaDatabaseUpdateEngine:
                         target_cat = appr_cat.approved_value or request.what_category
                         cat_fld = fields_by_name.get("category")
                         if cat_fld and target_cat:
-                            matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), target_cat, is_category=True)
+                            matched_cat, _ = self._resolve_and_revalidate_category(
+                                request, target_cat, cat_fld, conflicts, diag_notes
+                            )
                             if matched_cat:
                                 diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=matched_cat, action=FieldAction.SET))
-                            elif ambig:
-                                conflicts.append(f"Ambiguous Category option for '{target_cat}'")
-                            else:
-                                conflicts.append(f"Category option '{target_cat}' not found in live schema")
                 else:
                     conflicts.append(f"Category approval precondition failed: DB has '{curr_cat}', expected '{expected_pre}'")
                     diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=appr_cat.approved_value, action=FieldAction.CONFLICT))
@@ -1222,7 +1316,9 @@ class MediaDatabaseUpdateEngine:
                 diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
         elif request.what_category and "category" in fields_by_name:
             cat_fld = fields_by_name["category"]
-            matched_cat, ambig = self._match_select_option(cat_fld.get("select_options", []), request.what_category, is_category=True)
+            matched_cat, _ = self._resolve_and_revalidate_category(
+                request, request.what_category, cat_fld, conflicts, diag_notes
+            )
             if matched_cat:
                 if not curr_cat:
                     diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
@@ -1231,10 +1327,9 @@ class MediaDatabaseUpdateEngine:
                 else:
                     conflicts.append(f"Category conflict: DB has '{curr_cat}', incoming is '{matched_cat}'")
                     diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=matched_cat, action=FieldAction.CONFLICT))
-            elif ambig:
-                conflicts.append(f"Ambiguous Category option for '{request.what_category}'")
             else:
-                conflicts.append(f"Category option '{request.what_category}' not found in live schema")
+                if curr_cat:
+                    diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
         else:
             if curr_cat:
                 diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))

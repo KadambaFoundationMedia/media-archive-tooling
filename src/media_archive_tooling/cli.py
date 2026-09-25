@@ -45,6 +45,7 @@ def create_media_db_updater_service(
             api_token=config.baserow_api_token,
             media_table_id=config.baserow_media_table_id,
             category_table_id=config.baserow_category_table_id,
+            travel_schedule_table_id=config.baserow_travel_schedule_table_id,
         )
         tool2_service = MediaDatabaseReviewService(registry=registry, provider=tool2_provider)
     return MediaDatabaseUpdaterService(

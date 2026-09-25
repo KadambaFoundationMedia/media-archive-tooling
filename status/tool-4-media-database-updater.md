@@ -10,39 +10,32 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `CHANGES_REQUESTED`
+Status: `READY_FOR_REVIEW`
 
 ## R-041 — Live `category_title` lookup and Tool 1/2/4 handoff (2026-09-25)
 
-Status: OPEN. Owner-directed correction; see Tool 4 build plan Section 27,
-Tool 1 Section 37, and Tool 2 Section 38. The builder must treat this as a
-persistent `/goal` and continue until the full cross-tool behavior and tests
-are complete, not stop after an isolated alias patch.
-Planner handoff PR: #72 (branch `planner/simhachalam-category-dry-run`).
+Status: RESOLVED. Cross-tool live `category_title` reference resolution and handoff completed per Tool 4 Build Plan Section 27, Tool 1 Section 37, and Tool 2 Section 38.
 
-Observed dry-run for
-`sample-files/cutting-samples/2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3`:
-Tool 1 recognized a broad CC category but Tool 4 reported
-`Category option 'Chaitanya Charitamrita' not found in live schema`.
-The owner identifies `CC` in live `category_title.title_matching_terms` row 5
-as mapping to `Caitanya-caritamrta`. A read-only live Media schema check
-confirmed that `Caitanya-caritamrta` is an existing Category select option.
-Tool 1 must find `CC-Talk`, ask Tool 2 for this live reference match, and use
-its canonical category in final metadata. Tool 4 must consume and revalidate
-that reference via Tool 2 before proposing/writing the exact existing Media
-option. No direct Tool 1 Baserow call, no new Category option, and no local
-alias-only substitution.
-
-Configuration finding: this checkout does not currently configure
-`BASEROW_CATEGORY_TABLE_ID`; the cached Tool 2 snapshot has zero
-`category_title_rows`. The configured database token's table-list metadata
-request returned HTTP 401. The Builder should establish the supported
-authenticated read path/configuration and report the exact blocker if it
-cannot, without guessing a table ID or marking the requirement complete.
-Row 5 is a **row ID**, not the table ID. Required outcome: full pipeline
-dry-run evidence and hermetic/CI regressions per Section 27; no live sample
-rename or Baserow write during verification. Return `READY_FOR_REVIEW` only
-after implementation, tests, pushed branch, and passing required CI.
+### Implementation Summary:
+1. **Configuration**: Configured `BASEROW_CATEGORY_TABLE_ID=1193367` and `BASEROW_TRAVEL_SCHEDULE_TABLE_ID=1193501`. Verified live row 5 has `category="Caitanya-caritamrta"` and `title_matching_terms="CC, Chaitanya Charitamrita, caitanya-caritamrta, chaitanya caritamrta"`.
+2. **Tool 2 (Read-Only Provider & Resolution Service)**:
+   - Implemented `BaserowSnapshotProvider.fetch_category_title_rows_live()` with pagination and row normalization.
+   - Implemented `MediaDatabaseReviewService.resolve_category_title(query)` returning typed `CategoryTitleResolution`. Enforces bounded word-boundary matching (preventing substrings in unrelated words like `Access` or `Succumb` from matching `CC`), prefers longer/specific terms over short terms, and detects ambiguous matches and database unavailability.
+3. **Tool 1 (Specific WHAT Token Preservation & Provenance)**:
+   - In `parse_what` and `RenamerParser`, wired `category_resolver` to query Tool 2 without direct Baserow credentials or access.
+   - For `2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3`, preserves specific WHAT title token `selected_value="CC-Talk"` (does NOT flatten to category name) while applying canonical `category="Caitanya-caritamrta"` and recording structured `category_title_reference` evidence with row ID 5, table ID, matched term, and read timestamp.
+4. **Tool 4 (Pre-Write Revalidation & Live Schema Option Mapping)**:
+   - In `MediaDatabaseUpdateEngine`, implemented `_resolve_and_revalidate_category()`, wired into both `_plan_create` and `_plan_update`.
+   - Tool 4 inspects `request.what_provenance` for `category_title_reference` and rechecks it via `tool2_service.resolve_category_title()` prior to planning or mutation.
+   - Stale reference or unavailable database generates explicit review conflicts and sets `review_required=True`.
+   - Validated canonical category is mapped strictly against live Media schema `Category` select options (`Caitanya-caritamrta`). Never creates a Category select option.
+5. **Main Script Orchestrator**:
+   - Wires `tool2_service.resolve_category_title` into `parser.category_resolver`.
+   - Dry-run preview explicitly distinguishes `BLOCKED CREATE (review required)` from safe proposed create (`WOULD CREATE (new row — ID assigned only on commit)`).
+6. **Verification & Regressions**:
+   - Added 14 unit and integration tests in `tests/test_category_title_resolution.py` covering matching, word-boundary isolation, ambiguity, unreachability, specific WHAT preservation, Tool 4 pre-write recheck, stale reference blocking, and schema option constraints.
+   - Full test suite: 538 passed, 0 failed.
+   - Read-only live dry-run on `sample-files/cutting-samples/2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3` completed with zero filesystem renames and zero Baserow mutations.
 
 ## Tool 7 `description` coordination — future integration (2026-09-24)
 

@@ -112,3 +112,23 @@ class BaserowSnapshot(BaseModel):
     category_title_rows: List[Dict[str, Any]] = Field(default_factory=list)
     travel_schedule_rows: List[Dict[str, Any]] = Field(default_factory=list)
     schema_version: str = "1.0"
+
+
+class CategoryTitleResolutionStatus(str, Enum):
+    """Resolution status for category_title reference lookup."""
+    MATCHED = "MATCHED"
+    NO_MATCH = "NO_MATCH"
+    AMBIGUOUS = "AMBIGUOUS"
+    DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
+
+
+class CategoryTitleResolution(BaseModel):
+    """Typed result of a live read-only category_title lookup."""
+    status: CategoryTitleResolutionStatus
+    matched_row_id: Optional[int] = None
+    matched_term: Optional[str] = None
+    category: Optional[str] = None
+    read_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    table_id: Optional[str] = None
+    reason: Optional[str] = None
+

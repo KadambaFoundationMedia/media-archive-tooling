@@ -157,6 +157,9 @@ class MainToolingScriptService:
         self.planner_initial = RenamePlanner(mode=RenameMode.INITIAL)
         self.planner_finalize = RenamePlanner(mode=RenameMode.FINALIZE)
 
+        if self.tool2_service is not None and getattr(self.parser, "category_resolver", None) is None:
+            self.parser.category_resolver = self.tool2_service.resolve_category_title
+
     def purge(self, dry_run: bool = False) -> Tuple[int, Any]:
         """Perform standalone alpha/beta test data cleanup (Section 5 of purge plan)."""
         with self.registry.acquire_lock():
@@ -1080,9 +1083,15 @@ class MainToolingScriptService:
                         tool4_fields = {d.field_name: d.new_value for d in (t4_res.field_diffs or [])}
 
                         if t4_res.operation == SyncOperation.CREATE:
-                            op_str = "WOULD CREATE (new row — ID assigned only on commit)"
+                            if t4_res.review_required:
+                                op_str = "BLOCKED CREATE (review required)"
+                            else:
+                                op_str = "WOULD CREATE (new row — ID assigned only on commit)"
                         elif t4_res.operation == SyncOperation.UPDATE:
-                            op_str = f"WOULD UPDATE row #{tool4_row_id or '—'}"
+                            if t4_res.review_required:
+                                op_str = f"BLOCKED UPDATE (row #{tool4_row_id or '—'}; review required)"
+                            else:
+                                op_str = f"WOULD UPDATE row #{tool4_row_id or '—'}"
                         elif t4_res.operation == SyncOperation.NOOP:
                             op_str = f"NO CHANGE (row #{tool4_row_id or '—'} already in sync)"
                         elif t4_res.operation == SyncOperation.BLOCKED:
@@ -1097,6 +1106,9 @@ class MainToolingScriptService:
                             diff_summary = ", ".join(f"{d.field_name}='{d.new_value}'" for d in t4_res.field_diffs if d.action.value == "SET")
                             if diff_summary:
                                 t4_summary += f" [{diff_summary}]"
+                        if t4_res.conflicts:
+                            conflict_summary = "; ".join(t4_res.conflicts)
+                            t4_summary += f" [Review blockers: {conflict_summary}]"
 
                         if t4_res.review_required:
                             status = FileExecutionStatus.REVIEW_REQUIRED
@@ -1599,6 +1611,9 @@ def create_main_tooling_service(
             snapshot_path=config.baserow_snapshot_path,
         )
         tool2_service = MediaDatabaseReviewService(registry=registry, provider=t2_provider)
+
+    if parser.category_resolver is None and tool2_service is not None:
+        parser.category_resolver = tool2_service.resolve_category_title
 
     # Tool 3 Travel Schedule Reviewer
     if travel_service is None:

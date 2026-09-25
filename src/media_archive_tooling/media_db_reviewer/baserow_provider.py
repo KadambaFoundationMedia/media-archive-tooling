@@ -444,6 +444,34 @@ class BaserowSnapshotProvider:
         except Exception as e:
             raise BaserowUnavailableError(f"Failed to fetch travel schedule rows: {e}") from e
 
+    def fetch_category_title_rows_live(self) -> Tuple[List[Dict[str, Any]], str, Optional[str]]:
+        """Fetch all rows from category_title reference table with complete pagination.
+
+        Returns (rows, timestamp, table_id).
+        Raises BaserowUnavailableError if table ID is unconfigured or API fails.
+        """
+        now_str = datetime.now(timezone.utc).isoformat()
+        if self._injected_snapshot is not None:
+            return (
+                self._injected_snapshot.category_title_rows,
+                self._injected_snapshot.snapshot_at,
+                getattr(self, "category_table_id", None) or "mock_category_table",
+            )
+
+        if not self.category_table_id:
+            raise BaserowUnavailableError("BASEROW_CATEGORY_TABLE_ID is not configured; category_title reference is unavailable")
+        if not self.api_url or not self.api_token:
+            raise BaserowUnavailableError("Baserow API credentials (url or token) are missing; category_title reference is unavailable")
+
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                rows = self._fetch_table_rows(client, self.category_table_id)
+                return rows, now_str, self.category_table_id
+        except BaserowUnavailableError:
+            raise
+        except Exception as e:
+            raise BaserowUnavailableError(f"Failed to fetch category_title rows: {e}") from e
+
 
 # Alias for explicit live-naming
 BaserowLiveProvider = BaserowSnapshotProvider

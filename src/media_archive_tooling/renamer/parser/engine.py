@@ -52,11 +52,13 @@ class RenamerParser:
         vedabase_validator: Optional[Any] = None,
         location_lookup_provider: Optional[Any] = None,
         registry: Optional[Any] = None,
+        category_resolver: Optional[Any] = None,
     ):
         self.categories_ref = categories_ref
         self.vedabase_validator = vedabase_validator
         self.location_lookup_provider = location_lookup_provider
         self.registry = registry
+        self.category_resolver = category_resolver
         self.where_resolver = WhereResolver(
             locations_data=locations_ref,
             countries_data=countries_ref,
@@ -123,6 +125,7 @@ class RenamerParser:
             parent_folder=parent_folder,
             categories_ref=self.categories_ref,
             vedabase_validator=self.vedabase_validator,
+            category_resolver=self.category_resolver,
         )
 
         # 6. Resolve WHERE
