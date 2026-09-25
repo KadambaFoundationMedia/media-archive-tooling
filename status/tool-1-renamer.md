@@ -17,7 +17,7 @@ the term and asks Tool 2 for a live `category_title` match, then uses the
 returned category in its final metadata. Tool 1 still does not query Baserow
 or hold credentials. The separate country-suffix regression for
 `Simhachalam_de` is being handled as narrow planner maintenance; preserve it
-when touching the parser.
+when touching the parser. Planner PR: #72.
 
 Downstream coordination (2026-09-23): `docs/full-pipeline-workflow-amendment.md`
 fixes the later order as Tool 1 final naming **before** Tool 11 moving and Tool

@@ -18,6 +18,7 @@ Status: OPEN. Owner-directed correction; see Tool 4 build plan Section 27,
 Tool 1 Section 37, and Tool 2 Section 38. The builder must treat this as a
 persistent `/goal` and continue until the full cross-tool behavior and tests
 are complete, not stop after an isolated alias patch.
+Planner handoff PR: #72 (branch `planner/simhachalam-category-dry-run`).
 
 Observed dry-run for
 `sample-files/cutting-samples/2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3`:
