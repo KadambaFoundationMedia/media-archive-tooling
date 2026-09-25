@@ -9,6 +9,19 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
 
+## Planner console-log maintenance — 2026-09-25
+
+At the owner's request, normal Main Script console output is now compact:
+one key result per tool, Tool 4 row/key-field summary, a brief review reason,
+and one Tool 5 analysis notice with occasional heartbeat rather than one
+start/finish pair per audio excerpt. `--verbose` shows additional per-excerpt
+progress and field diagnostics **only on the console**. The unified JSONL log
+records all Tool 5 progress events and remains equally detailed in both
+modes. The Builder must preserve this separation when integrating Tools 7–11;
+new tools should report a compact default result and full structured log
+details. No media or Baserow behavior changed. Planner verification: 518
+tests passed (two dependency warnings).
+
 ## Tool 5–7 future integration — pending implementation (2026-09-24)
 
 The accepted runner still reflects the accepted Tool 5 implementation, which
