@@ -59,7 +59,6 @@ GitHub Actions run #57 on the reviewed PR head passed the required `Python 3.12 
 
 Committed walkthrough artifacts:
 - Tool 2 authoritative walkthrough: `docs/tool-2-media-database-reviewer-walkthrough.md`
-- Repository root walkthrough: `walkthrough.md`
 - Tool 1 historical walkthrough: `docs/tool-1-renamer-walkthrough.md`
 
 ## Acceptance decision

@@ -124,4 +124,3 @@ confirmed title/metadata enrichments: 1
 - **Status Document**: [status/tool-2-media-database-reviewer.md](../status/tool-2-media-database-reviewer.md)
 - **Tool 1 Historical Walkthrough**: [docs/tool-1-renamer-walkthrough.md](tool-1-renamer-walkthrough.md)
 - **Tool 2 Committed Walkthrough**: [docs/tool-2-media-database-reviewer-walkthrough.md](tool-2-media-database-reviewer-walkthrough.md)
-- **Repo Root Walkthrough**: [walkthrough.md](../walkthrough.md)
