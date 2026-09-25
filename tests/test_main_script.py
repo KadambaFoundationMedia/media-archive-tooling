@@ -2190,3 +2190,41 @@ def test_60_fresh_remote_review_and_metadata_sync(env_setup):
         cp4 = reg.get_stage_checkpoint(tid1, StageName.TOOL_4_SYNC.value)
         assert cp4 is not None
         assert cp4["details"]["operation"] == "UPDATE"
+
+
+def test_tool_3_stage_checkpoint_invalidated_when_travel_reference_changes(env_setup):
+    """Tool 3 stage checkpoint is reused if reference is unchanged, but invalidated if reference checksum changes."""
+    svc = env_setup["service"]
+    reg = env_setup["registry"]
+    media_dir = env_setup["media_dir"]
+    travel_svc = env_setup["travel_service"]
+
+    test_file = media_dir / "2022-09-19_KKS_SB-1-2-19_Oslo_no.mp3"
+    test_file.write_bytes(b"dummy audio for t3 invalidation test")
+
+    # First run processes and checkpoints Tool 3
+    summary1 = svc.run([test_file])
+    assert summary1.completed == 1
+
+    tracked = reg.list_files()
+    assert len(tracked) == 1
+    tid = tracked[0]["tracking_id"]
+    cp3 = reg.get_stage_checkpoint(tid, StageName.TOOL_3_REVIEW.value)
+    assert cp3 is not None
+    assert cp3["status"] == "COMPLETED"
+
+    renamed_file = media_dir / summary1.file_results[0].final_path
+
+    # Second run with unchanged travel reference reuses checkpoint (review_file NOT called)
+    with patch.object(travel_svc, "review_file") as mock_review:
+        summary2 = svc.run([renamed_file])
+        assert summary2.unchanged == 1
+        mock_review.assert_not_called()
+
+    # Third run with changed reference checksum invalidates checkpoint (review_file IS called)
+    with patch.object(travel_svc.reference_store, "get_canonical_sha256", return_value="altered_travel_sha_9999"):
+        with patch.object(travel_svc, "review_file", wraps=travel_svc.review_file) as mock_review_inv:
+            summary3 = svc.run([renamed_file])
+            assert summary3.unchanged == 1
+            mock_review_inv.assert_called_once()
+

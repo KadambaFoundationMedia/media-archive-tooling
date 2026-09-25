@@ -116,6 +116,11 @@ class TravelReferenceStore:
             logger.warning(f"Error loading reference from {self.reference_path}: {e}")
             return None
 
+    def get_canonical_sha256(self) -> Optional[str]:
+        """Return the canonical SHA256 of the loaded reference manifest, if valid."""
+        manifest = self.load_reference()
+        return manifest.canonical_sha256 if manifest else None
+
     def save_reference(self, manifest: TravelScheduleManifest) -> None:
         """Atomically persist manifest to disk."""
         self.reference_path.parent.mkdir(parents=True, exist_ok=True)

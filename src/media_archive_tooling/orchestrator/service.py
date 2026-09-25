@@ -892,7 +892,20 @@ class MainToolingScriptService:
                 cp3 = self.registry.get_stage_checkpoint(tracking_id, StageName.TOOL_3_REVIEW.value)
                 t3_dict = self.registry.get_travel_review(tracking_id)
 
-                if cp3 and cp3.get("status") == "COMPLETED" and cp3.get("input_sha256") == input_sha256 and (t3_dict and t3_dict.get("result") or self.travel_service is None):
+                curr_ref_sha = None
+                if self.travel_service and self.travel_service.reference_store:
+                    try:
+                        curr_ref_sha = self.travel_service.reference_store.get_canonical_sha256()
+                    except Exception:
+                        pass
+
+                ref_matches = True
+                if curr_ref_sha and t3_dict:
+                    cached_sha = t3_dict.get("reference_checksum")
+                    if cached_sha and cached_sha != curr_ref_sha:
+                        ref_matches = False
+
+                if cp3 and cp3.get("status") == "COMPLETED" and cp3.get("input_sha256") == input_sha256 and ref_matches and (t3_dict and t3_dict.get("result") or self.travel_service is None):
                     t3_res = TravelReviewResult.model_validate(t3_dict["result"]) if (t3_dict and t3_dict.get("result")) else None
                     t3_dec = cp3.get("details", {}).get("decision") or (t3_res.decision.value if t3_res and hasattr(t3_res.decision, "value") else "UNAVAILABLE")
                     t3_stage = StageResult(
