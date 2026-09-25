@@ -810,12 +810,19 @@ class MainToolingScriptService:
                     )
                     candidate_preview = None
                     if display_candidate is not None:
-                        row = display_candidate.normalized_row or display_candidate.raw_row
+                        normalized = display_candidate.normalized_row
+                        raw = display_candidate.raw_row
                         candidate_preview = {
                             "row_id": display_candidate.media_row_id,
-                            "title": row.get("title") or row.get("Title"),
-                            "place": row.get("place") or row.get("Place"),
-                            "country": row.get("country") or row.get("Country"),
+                            "title": normalized.get("title") or raw.get("Title") or raw.get("title"),
+                            "place": normalized.get("place") or raw.get("Place, location") or raw.get("Place"),
+                            "country": normalized.get("country") or raw.get("Country"),
+                            "notes": raw.get("Notes") or raw.get("notes"),
+                            "filename": normalized.get("filename") or raw.get("Filename") or raw.get("filename"),
+                            "media_archive_path": (
+                                raw.get("media_archive_path") or raw.get("Media Archive Path")
+                                or raw.get("Archive Path")
+                            ),
                         }
 
                     t2_summary = f"Tool 2 — Media DB: {dec_str} (candidates: {cand_count})"

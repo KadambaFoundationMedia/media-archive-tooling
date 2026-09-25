@@ -11,6 +11,16 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `READY_FOR_REVIEW`
 
+## Planner maintenance handoff — 2026-09-25
+
+The owner requested `Notes`, `Filename`, and `media_archive_path` in the
+Main Script's Tool 2 candidate console summary when populated. Planner branch
+`planner/tool2-candidate-details` keeps each candidate's original Baserow
+record in `raw_row` and its matching projection in `normalized_row`; the
+previous engine duplicated the normalized record in both fields and lost
+Notes/archive-path. The Builder must preserve this distinction when next
+editing Tool 2 and must not treat display-only values as match evidence.
+
 ## Active post-acceptance correction — generic WHAT must not create Baserow candidates (2026-09-22)
 
 **R-016 — Generic content labels are non-discriminating.** The practical
