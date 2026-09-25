@@ -33,13 +33,31 @@ class TerminalReporter:
         d = result.details
         stage = result.stage_name
         if stage == StageName.TOOL_1_INITIAL and d:
-            return (f"Tool 1 — Renamer: {d.get('when') or 'date unknown'} | "
+            line = (f"Tool 1 — Renamer: {d.get('when') or 'date unknown'} | "
                     f"{d.get('what') or 'type unknown'} | {d.get('where') or 'location unknown'}")
+            if d.get("proposed_filename"):
+                line += f"\n    Draft: {d['proposed_filename']}"
+            return line
         if stage == StageName.TOOL_2_REVIEW and d.get("decision"):
             row = f", row #{d['selected_media_row_id']}" if d.get("selected_media_row_id") else ""
             count = d.get("candidate_count")
             candidates = f" ({count} candidate{'s' if count != 1 else ''}{row})" if count is not None else row
-            return f"Tool 2 — Media DB: {d['decision']}{candidates}"
+            line = f"Tool 2 — Media DB: {d['decision']}{candidates}"
+            preview = d.get("candidate_preview") or {}
+            if preview.get("row_id"):
+                def option_text(value: Any) -> str:
+                    if isinstance(value, dict):
+                        value = value.get("value") or value.get("name") or ""
+                    return self._brief(value, 65) if value else ""
+
+                title = option_text(preview.get("title"))
+                place = option_text(preview.get("place"))
+                country = option_text(preview.get("country"))
+                location = ", ".join(item for item in (place, country) if item)
+                kind = "Matched" if d.get("selected_media_row_id") == preview["row_id"] else "Candidate"
+                facts = " | ".join(item for item in (title, location) if item)
+                line += f"\n    {kind} row #{preview['row_id']}: {facts or 'details unavailable'}"
+            return line
         if stage == StageName.TOOL_3_REVIEW and d.get("decision"):
             location = f" — {self._brief(d['location'], 70)}" if d.get("location") else ""
             return f"Tool 3 — Travel Schedule: {d['decision']}{location}"
@@ -57,9 +75,13 @@ class TerminalReporter:
                 return f"{first_line} ({len(fields)} fields)"
             return self._brief(first_line, 180)
         if stage == StageName.TOOL_5_CONTENT_DISCOVERY and d.get("classification"):
-            boundary = f" | cut {self._clock(d['cut_point_seconds'])}" if d.get("cut_point_seconds") is not None else ""
+            type_confidence = d.get("content_confidence") or d.get("confidence", "?")
+            boundary = ""
+            if d.get("cut_point_seconds") is not None:
+                cut_confidence = d.get("boundary_confidence") or d.get("confidence", "?")
+                boundary = f" | proposed cut {self._clock(d['cut_point_seconds'])} ({cut_confidence} boundary)"
             route = " | Tool 6 next" if d.get("process_by_tool_6") else " | review" if d.get("review_required") else ""
-            return f"Tool 5 — Content: {d['classification']} ({d.get('confidence', '?')}){boundary}{route}"
+            return f"Tool 5 — Content: {d['classification']} ({type_confidence} type){boundary}{route}"
         if stage == StageName.TOOL_6_FILE_CUTTER and d:
             if d.get("success"):
                 cut = self._clock(d.get("cut_point_seconds"))
@@ -108,6 +130,8 @@ class TerminalReporter:
                         print(f"    - field {field}: {self._brief(value, 180)}")
                 elif v is not None:
                     print(f"    - {k}: {self._brief(v, 180)}")
+        if result.stage_name == StageName.TOOL_5_CONTENT_DISCOVERY:
+            print()
 
     def report_tool5_progress(self, stage: str, elapsed_seconds: float, status: str) -> None:
         if not self.verbose:
@@ -193,13 +217,3 @@ class TerminalReporter:
         print(f"Log: {summary.log_path}")
         if self.verbose:
             print(f"Run ID: {summary.run_id} | Registry: {summary.registry_path}")
-
-        needs_eval = (
-            summary.review_required > 0
-            or summary.pending_sync > 0
-            or summary.database_unavailable > 0
-            or summary.failed_retryable > 0
-            or summary.failed_blocked > 0
-        )
-        if needs_eval:
-            print(f"Review: ./run-media-archive.sh --review-only --registry-path \"{summary.registry_path}\"")

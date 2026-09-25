@@ -9,6 +9,24 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
 
+## Planner console follow-up — 2026-09-25
+
+The owner requested a small refinement to the compact terminal output. The
+planner added the Tool 1 draft filename, the sole/selected Tool 2 Baserow
+candidate's row ID/title/place/country (explicitly labeled *Candidate* when
+unconfirmed), grammatical Tool 4 blocked/no-change messages, and a blank line
+after Tool 5. The redundant review command with `--registry-path` was removed
+from the run summary; `./run-media-archive.sh --review-only` opens the portal
+against the default registry independently.
+
+Tool 5's content-type confidence is now shown separately from cut-boundary
+confidence. For the 2008-01-04-2.mp3 sample, the evidence identifies
+KIRTAN_AND_CLASS with HIGH type confidence, but the acoustically proposed cut
+remains MEDIUM and requires review. The owner's manual benchmark
+`28:13.048` was not changed or silently replaced by the proposed cut. Builder:
+preserve this distinction in future Tool 5/6 and Main Script work; never make
+an automatic cut solely because the content type is HIGH.
+
 ## Planner console-log maintenance — 2026-09-25
 
 At the owner's request, normal Main Script console output is now compact:
