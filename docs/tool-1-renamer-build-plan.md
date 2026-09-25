@@ -845,3 +845,16 @@ This post-acceptance correction is authoritative where it differs from earlier c
 - generated and fallback filenames may contain only ASCII letters, digits, hyphens, underscores, and the single extension dot; parentheses and other punctuation are forbidden;
 - `KKS_S.B. 1.19.31(with Radha Madhava)_Oslo_29.8.11.WMA` finalizes as `2011-08-29_KKS_SB-1-19-31_Oslo-no.wma` while remaining marked as a combination.
 - archive-language context may establish a country without establishing a city: `DUBEN` supplies Czech Republic / `cz`, while location remains unresolved for later tools or human review.
+
+## 37. Live category-title handoff (2026-09-25)
+
+For an uncertain title such as `CC-Talk`, Tool 1 extracts the filename term
+and asks **Tool 2** to search live Baserow `category_title.title_matching_terms`.
+Tool 2 returns the matching row, term, and canonical category; Tool 1 applies
+that category to its final metadata/proposal. The owner identifies `CC` in
+`2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3` as matching
+`category_title` row 5, category `Caitanya-caritamrta`. This is a regression
+example, not a hard-coded row ID or alias rule. Tool 1 must keep its
+no-Baserow-credentials boundary and preserve the specific WHAT/title text.
+Tool 4 separately validates the resulting category against live Media schema
+and handles the database update. See Tool 4 plan Section 27.

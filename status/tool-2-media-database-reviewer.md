@@ -11,6 +11,13 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `READY_FOR_REVIEW`
 
+Planner coordination (2026-09-25): Tool 2 plan Section 38 adds a typed,
+read-only live `category_title` lookup for Tool 1's uncertain title/category
+resolution. The owner identifies `CC` in `CC-Talk` as matching row 5 and
+category `Caitanya-caritamrta`. Tool 4 finding R-041 owns the cross-tool
+implementation and commit-time revalidation. Preserve Tool 2's read-only
+boundary; never substitute local seed terms for an unavailable live lookup.
+
 ## Planner maintenance handoff — 2026-09-25
 
 The owner requested `Notes`, `Filename`, and `media_archive_path` in the

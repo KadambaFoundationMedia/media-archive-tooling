@@ -11,6 +11,14 @@ Protocol: `docs/implementation-protocol.md`
 
 Status: `ACCEPTED`
 
+Planner coordination (2026-09-25): The owner's `CC-Talk` correction is now
+specified in Tool 1 plan Section 37 and Tool 4 finding R-041. Tool 1 extracts
+the term and asks Tool 2 for a live `category_title` match, then uses the
+returned category in its final metadata. Tool 1 still does not query Baserow
+or hold credentials. The separate country-suffix regression for
+`Simhachalam_de` is being handled as narrow planner maintenance; preserve it
+when touching the parser. Planner PR: #72.
+
 Downstream coordination (2026-09-23): `docs/full-pipeline-workflow-amendment.md`
 fixes the later order as Tool 1 final naming **before** Tool 11 moving and Tool
 4 final path/metadata updates. A committed enrichment of an already matched

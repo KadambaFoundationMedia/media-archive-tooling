@@ -64,17 +64,36 @@ class WhereResolver:
     ) -> Tuple[WhereResult, str]:
         """Resolve WHERE entity from filename and folder context."""
         ancestors = ancestor_folders or []
+        # A trailing country code is direct filename evidence. Constrain place
+        # matching to it, and never let an unconstrained online geocoder turn
+        # e.g. ``Simhachalam_de`` into a place in another country.
+        country_suffix = re.search(r"(?:^|[\s_.-])([a-z]{2})$", filename_text, re.IGNORECASE)
+        explicit_iso2 = None
+        if country_suffix:
+            code = country_suffix.group(1).lower()
+            if self.get_country_iso2(code) == code:
+                explicit_iso2 = code
+                filename_text = filename_text[:country_suffix.start()].strip(" _.-")
+        explicit_country = next(
+            (name.title() for name, code in self.countries.items() if code == explicit_iso2 and len(name) > 2),
+            None,
+        )
         combined_context = " ".join([filename_text, parent_folder] + ancestors)
 
         matched_loc = None
         matched_raw = None
         matched_in_filename = False
+        conflicting_place = None
 
         # 1. Exact alias match in filename (longest alias first)
         for alias, loc in self._alias_list:
             pattern = rf"(?:^|[\s_.-]){re.escape(alias)}(?=[_.\s-]|$)"
             m = re.search(pattern, filename_text, re.IGNORECASE)
             if m:
+                loc_iso2 = (loc.get("country_iso2") or self.get_country_iso2(loc.get("country") or "") or "").lower()
+                if explicit_iso2 and loc_iso2 and loc_iso2 != explicit_iso2:
+                    conflicting_place = f"{loc['canonical_place']}-{loc_iso2}"
+                    continue
                 matched_loc = loc
                 matched_raw = m.group(0).strip(" _.-")
                 matched_in_filename = True
@@ -88,6 +107,10 @@ class WhereResolver:
                 pattern = rf"(?:^|[\s_.-]){re.escape(alias)}(?=[_.\s-]|$)"
                 m = re.search(pattern, combined_context, re.IGNORECASE)
                 if m:
+                    loc_iso2 = (loc.get("country_iso2") or self.get_country_iso2(loc.get("country") or "") or "").lower()
+                    if explicit_iso2 and loc_iso2 and loc_iso2 != explicit_iso2:
+                        conflicting_place = f"{loc['canonical_place']}-{loc_iso2}"
+                        continue
                     matched_loc = loc
                     matched_raw = m.group(0).strip(" _.-")
                     matched_in_filename = False
@@ -95,8 +118,8 @@ class WhereResolver:
 
         if matched_loc:
             canonical_place = matched_loc["canonical_place"]
-            country_name = matched_loc.get("country")
-            iso2 = matched_loc.get("country_iso2") or self.get_country_iso2(country_name or "")
+            country_name = matched_loc.get("country") or explicit_country
+            iso2 = matched_loc.get("country_iso2") or self.get_country_iso2(country_name or "") or explicit_iso2
             state = ResolutionState.EXACT if matched_in_filename else ResolutionState.STRONG
             res = WhereResult(
                 place_location=canonical_place,
@@ -110,6 +133,20 @@ class WhereResolver:
                 )]
             )
             return res, filename_text.strip()
+
+        if explicit_iso2:
+            state = ResolutionState.AMBIGUOUS if conflicting_place else ResolutionState.STRONG
+            details = f"Filename country code '{explicit_iso2}'"
+            if conflicting_place:
+                details += f" conflicts with place '{conflicting_place}'"
+            return WhereResult(
+                place_location=None,
+                country=explicit_country,
+                country_iso2=explicit_iso2,
+                state=state,
+                alternatives=[conflicting_place] if conflicting_place else [],
+                evidence=[Evidence(source="filename_country_code", raw_value=explicit_iso2, details=details)],
+            ), filename_text.strip()
 
         # 2. Check for known country names in filename if no place found (e.g. "Sweden", "Serbia")
         for country_name, iso2 in sorted(self.countries.items(), key=lambda x: len(x[0]), reverse=True):

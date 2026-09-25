@@ -865,3 +865,70 @@ For the practical Tool 1–4 workflow:
 - Language options are retrieved from the live schema; a new English recording uses the live `English` option and existing Language values are preserved on update;
 - Notes begins with `Added from archive` and records the immutable original filename and original full path exactly once;
 - a repeat rename of the same tracked file may update Filename and `media_archive_path` when the live row still contains the immediately previous committed filename/path.
+
+## 27. Live `category_title` resolution for uncertain titles (2026-09-25)
+
+The owner requires the Tool 1 → Tool 2 → Tool 1 → Tool 4 workflow to use
+Baserow's **live `category_title` table** to resolve an uncertain title or
+broad class label to the final Media Category. Tool 1 asks Tool 2 to perform
+the read; Tool 1 receives the result and Tool 4 consumes/revalidates that
+evidence before a Media write. Tool 1 holds no Baserow credentials.
+The Media table's Category select options are the *write-validity constraint*,
+not the source of title-matching terms. A local alias list or seed asset alone
+does not satisfy this requirement.
+
+Concrete regression: `2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3` contains
+`CC-Talk`. Tool 1 finds this term and asks Tool 2 to search the live
+`category_title.title_matching_terms`. The owner identifies row **5**, whose
+`CC` term maps to category `Caitanya-caritamrta`. Tool 1 uses the returned
+category in its final metadata. Tool 4 then uses the same identified
+reference (with fresh validation before commit) and the existing live Media
+Category option `Caitanya-caritamrta`. Dry-run shows the matched reference
+row/term and proposed Category. Row 5 is example provenance, **not** a
+hard-coded special case. Do not replace a more specific WHAT/title merely
+with the broad Category.
+
+Implementation contract:
+
+1. Tool 1 extracts the original title/WHAT term (`CC-Talk` in the example)
+   and requests category resolution from Tool 2. Tool 2 performs the live
+   `category_title` read with pagination, field normalization, completeness,
+   and source timestamp, and returns a typed result: row ID, matched term,
+   exact `category` value, and ambiguity/unavailability status. No direct
+   Baserow access or credentials are added to Tool 1.
+2. For uncertain/non-verse titles, Tool 2 compares filename/structured
+   WHAT/title evidence against `title_matching_terms` as whole terms/phrases
+   after conservative punctuation, case, and Latin transliteration
+   normalization. Prefer a unique, more specific term; do not treat a
+   substring inside an unrelated word as `CC`. Tool 1 applies a uniquely
+   resolved category to its final proposal, while preserving more specific
+   WHAT/title evidence. Propagate row ID, matched term, exact category, and
+   reference freshness to Tool 4 and the review portal.
+3. Tool 4 consumes that live `category_title` evidence and rechecks it via
+   Tool 2's read-only boundary before commit; stale or changed mapping blocks
+   Category writes. Map the confirmed category to exactly one **existing**
+   live Media Category select option. Write the exact option value returned
+   by the Media schema;
+   never create a Category option. Preserve a specific scripture reference or
+   human-confirmed Title; category resolution must not flatten it.
+4. Revalidate the reference and Media schema before a live write. If the
+   reference table is unavailable/unconfigured, no term matches, multiple
+   categories remain plausible, or no unique Media option corresponds to the
+   matched category, route Category to review with a specific reason. Do not
+   silently fall back to local seed data or guess a spelling. Preserve
+   unrelated existing Media fields and all normal Tool 2 create/update gates.
+5. The Main Script's dry-run remains mutation-free. It should display the
+   category-title evidence and exact proposed Media Category (or the precise
+   review blocker). Do not claim `WOULD CREATE` is approved while a required
+   Category remains unresolved; distinguish a blocked preview from a safe
+   proposed create.
+
+Verification required before `READY_FOR_REVIEW`: hermetic tests for the exact
+`CC-Talk`/row-5 scenario, case and punctuation variants, unrelated `cc`
+substrings, ambiguous reference terms, absent/stale reference data, missing
+Media select option, confirmed existing metadata preservation, dry-run with
+zero writes, and a fresh commit-time recheck. Test the complete Tool 1 →
+Tool 2 → final Tool 1 → Tool 4 handoff, not just an isolated alias function.
+Perform one read-only live preview of the named sample and report which
+reference row/option were seen;
+do **not** rename media or create a Baserow row for this verification.

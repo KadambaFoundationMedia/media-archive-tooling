@@ -9,6 +9,14 @@ Walkthrough and verification: `docs/main-tooling-script-walkthrough.md`
 
 Status: `ACCEPTED` — owner approved PR #60 for merge on 2026-09-24
 
+Planner coordination (2026-09-25): Tool 4 finding R-041 adds a live
+`category_title` handoff for uncertain titles: Tool 1 extracts the term,
+Tool 2 reads/matches the live reference, Tool 1 uses its canonical category
+for the final proposal, and Tool 4 revalidates/writes only an existing Media
+Category option. Keep this in the Main Script's Tool 1 → 2 → 3 → final 1 → 4
+flow and show reference row/term and proposed category in dry-run. Do not
+present a blocked new-row preview as safely creatable.
+
 ## Planner Tool 2 candidate display follow-up — 2026-09-25
 
 The owner requested that Tool 2's terminal candidate preview also show
