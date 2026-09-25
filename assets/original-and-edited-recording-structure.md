@@ -22,11 +22,8 @@ A class should have this structure after editing:
 6. Class (the explanation of the purport by the speaker)  
 7. Questions and answers (if present)
 
-Original filename: 2011-08-29\_KKS\_SB-1-19-31-with-radha-madhava\_Oslo-no.wma
-
-Tool 6 output \- kirtan: 2011-08-29\_KKS\_Jaya-radha-madhava\_Oslo-no.wma
-
-Tool 6 output \- class: 2011-08-29\_KKS\_SB-1-19-31\_Oslo-no.wma
+*File example*
+Original filename: sample-files/2011-08-29\_KKS\_SB-1-19-31\_Oslo-no.wma
 
 These timestamps describe **only this recording**; another recording needs
 its own Tool 5 evidence and cut point. Tool 6 cuts at the end of singing and
@@ -40,7 +37,7 @@ for Tool 6 to remove meaningful speech or prayers.
 | :---- | :---- | :---- |
 | 00:00 \- 11:41 | Jaya radha-madhava and maha mantra singing | Split and safe to separate file |
 | 11:41 \- 11:53 | Background ambience | Trim |
-| 11:53 \- 12:16 | Oblantions mantra \- Om namo bhagavate vasudeva ajam | Trim |
+| 11:53 \- 12:16 | Oblations mantra \- Om namo bhagavate vasudeva ajam | Trim |
 | 12:16 \- 12:23 | Background | Trim |
 | 12:23 \- 12:29 | (Reading from) Canto 1, chapter 19, etc | Keep |
 | 12:29 \- 12:54 | Background | Trim |

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from ..adapters.baserow import (
+    DEFAULT_BASEROW_USER_AGENT,
     _baserow_single_text,
     _baserow_text_values,
     _row_value,
@@ -207,6 +208,14 @@ class BaserowSnapshotProvider:
             travel_schedule_rows=[],
         )
 
+    def _headers(self) -> Dict[str, str]:
+        if not self.api_token:
+            raise BaserowUnavailableError("Baserow credentials not configured; live database is unavailable")
+        return {
+            "Authorization": f"Token {self.api_token}",
+            "User-Agent": DEFAULT_BASEROW_USER_AGENT,
+        }
+
     def fetch_media_row_live(self, row_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a single Media row directly from live Baserow for revalidation."""
         if self._injected_snapshot is not None:
@@ -218,7 +227,7 @@ class BaserowSnapshotProvider:
         if not (self.api_token and self.media_table_id):
             raise BaserowUnavailableError("Baserow credentials not configured; live database is unavailable")
 
-        headers = {"Authorization": f"Token {self.api_token}"}
+        headers = self._headers()
         url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/{row_id}/?user_field_names=true"
         try:
             with httpx.Client(timeout=15.0, follow_redirects=True) as client:
@@ -255,7 +264,7 @@ class BaserowSnapshotProvider:
         if not (self.api_token and self.media_table_id):
             raise BaserowUnavailableError("Baserow credentials not configured; live database search is unavailable")
 
-        headers = {"Authorization": f"Token {self.api_token}"}
+        headers = self._headers()
         url = f"{self.api_url}/api/database/rows/table/{self.media_table_id}/?user_field_names=true&size=100"
         if query_text:
             import urllib.parse
@@ -328,7 +337,7 @@ class BaserowSnapshotProvider:
             if base_fn and len(base_fn) >= 4:
                 queries.append(base_fn)
 
-        headers = {"Authorization": f"Token {self.api_token}"}
+        headers = self._headers()
         row_dict: Dict[int, Dict[str, Any]] = {}
         import urllib.parse
 
@@ -354,7 +363,7 @@ class BaserowSnapshotProvider:
 
     def _fetch_table_rows(self, client: httpx.Client, table_id: str) -> List[Dict[str, Any]]:
         """Paginate through all rows in a Baserow table."""
-        headers = {"Authorization": f"Token {self.api_token}"}
+        headers = self._headers()
         rows: List[Dict[str, Any]] = []
         next_url: Optional[str] = f"{self.api_url}/api/database/rows/table/{table_id}/?user_field_names=true&size=200"
 

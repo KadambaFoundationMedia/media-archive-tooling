@@ -144,6 +144,7 @@ class MediaDatabaseReviewService:
         notes: str = "",
         reviewer: str = "human",
         auto_enrich: bool = True,
+        force: bool = False,
     ) -> MediaDatabaseReviewResult:
         """Apply a human confirmation decision from review portal or CLI."""
         stored = self.registry.get_media_db_review(tracking_id)
@@ -257,7 +258,9 @@ class MediaDatabaseReviewService:
             result.baserow_check_complete = True
             changes["selected_media_row_id"] = chosen_id
 
-        elif action == "confirm_new":
+        elif action in ("confirm_new", "confirm_new_force"):
+            is_force = force or (action == "confirm_new_force")
+
             # Revalidate live state before finalizing new media candidate (R-012)
             parser_res = None
             record = self.registry.get_file(tracking_id)
@@ -273,7 +276,8 @@ class MediaDatabaseReviewService:
 
             # Check provider live query support
             if not hasattr(self.provider, "load_snapshot") and not hasattr(self.provider, "search_media_candidates_live"):
-                raise RuntimeError("Cannot confirm new media candidate: provider does not support live search")
+                if not is_force:
+                    raise RuntimeError("Cannot confirm new media candidate: provider does not support live search")
 
             # 1. Full live candidate retrieval and reconciliation via provider snapshot
             fresh_snapshot = None
@@ -281,28 +285,33 @@ class MediaDatabaseReviewService:
                 try:
                     fresh_snapshot = _load_snapshot_for_parser_res(self.provider, parser_res)
                 except BaserowUnavailableError as e:
-                    raise RuntimeError(f"Cannot confirm new media candidate: live database search is unavailable: {e}") from e
+                    if not is_force:
+                        raise RuntimeError(f"Cannot confirm new media candidate: live database search is unavailable: {e}") from e
                 except Exception as e:
-                    raise RuntimeError(f"Cannot confirm new media candidate: live database search failed: {e}") from e
+                    if not is_force:
+                        raise RuntimeError(f"Cannot confirm new media candidate: live database search failed: {e}") from e
 
             if isinstance(fresh_snapshot, BaserowSnapshot):
                 if fresh_snapshot.state in ("UNAVAILABLE", "DATABASE_UNAVAILABLE") or not fresh_snapshot.complete:
-                    raise RuntimeError("Cannot confirm new media candidate: live database search is unavailable")
-
-                fresh_result = self.engine.reconcile(parser_res, fresh_snapshot)
-                if fresh_result.decision != ReviewDecision.NEW_MEDIA_CANDIDATE:
-                    if fresh_result.candidates:
-                        cand_id = fresh_result.candidates[0].media_row_id
-                        raise RuntimeError(
-                            f"Cannot confirm new media candidate: live search discovered matching row {cand_id} ({fresh_result.decision.value})"
-                        )
-                    else:
-                        raise RuntimeError(
-                            f"Cannot confirm new media candidate: fresh review evaluated to {fresh_result.decision.value}"
-                        )
+                    if not is_force:
+                        raise RuntimeError("Cannot confirm new media candidate: live database search is unavailable")
+                else:
+                    fresh_result = self.engine.reconcile(parser_res, fresh_snapshot)
+                    if fresh_result.decision != ReviewDecision.NEW_MEDIA_CANDIDATE:
+                        if fresh_result.candidates:
+                            cand_id = fresh_result.candidates[0].media_row_id
+                            if not is_force:
+                                raise RuntimeError(
+                                    f"Cannot confirm new media candidate: live search discovered matching row {cand_id} ({fresh_result.decision.value})"
+                                )
+                        else:
+                            if not is_force:
+                                raise RuntimeError(
+                                    f"Cannot confirm new media candidate: fresh review evaluated to {fresh_result.decision.value}"
+                                )
 
             # 2. Fallback check for test doubles mocking search_media_candidates_live directly
-            elif hasattr(self.provider, "search_media_candidates_live"):
+            elif hasattr(self.provider, "search_media_candidates_live") and not is_force:
                 local_date = result.selected_field_evidence.get("local_date") or (parser_res.when.selected_value if parser_res.when else None)
                 local_what = result.selected_field_evidence.get("local_what") or (parser_res.what.selected_value if parser_res.what else None)
                 try:
@@ -329,19 +338,23 @@ class MediaDatabaseReviewService:
             now_str = datetime.now(timezone.utc).isoformat()
             result.decision = ReviewDecision.NEW_MEDIA_CANDIDATE
             result.selected_media_row_id = None
-            result.decision_state = f"Human confirmed new media candidate (confirmed by {reviewer})"
+            if is_force:
+                result.decision_state = f"Human forced new media candidate (confirmed by {reviewer}, overrides live check)"
+            else:
+                result.decision_state = f"Human confirmed new media candidate (confirmed by {reviewer})"
             result.review_required = False
             result.review_required_now = False
             result.review_reasons = []
-            result.database_state = "LIVE_CURRENT"
+            result.database_state = "LIVE_CURRENT" if not is_force else result.database_state
             result.baserow_read_at = now_str
             result.database_snapshot_at = now_str
-            result.live_read_complete = True
+            result.live_read_complete = not is_force
+            evidence_tag = f"human_forced_new_media:{tracking_id}" if is_force else f"human_confirmed_new_media:{tracking_id}"
             result.renamer_enrichment = RenamerEnrichment(
                 confirmed=False,
-                evidence=[f"human_confirmed_new_media:{tracking_id}", f"reviewer:{reviewer}", f"live_revalidated:{now_str}"],
+                evidence=[evidence_tag, f"reviewer:{reviewer}", f"live_revalidated:{now_str}"],
                 baserow_read_at=now_str,
-                live_read_complete=True,
+                live_read_complete=not is_force,
             )
             result.proposed_tool4_action = Tool4Action.CREATE_NEW
             result.baserow_check_complete = True

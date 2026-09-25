@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import re
 import httpx
 
+from ..adapters.baserow import DEFAULT_BASEROW_USER_AGENT
 from ..common.ascii_latin import to_ascii_latin
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,7 @@ class BaserowWriteAdapter:
         return {
             "Authorization": f"Token {self.api_token}",
             "Content-Type": "application/json",
+            "User-Agent": DEFAULT_BASEROW_USER_AGENT,
         }
 
     def fetch_table_fields(self) -> List[Dict[str, Any]]:

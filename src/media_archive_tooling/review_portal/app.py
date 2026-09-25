@@ -273,8 +273,32 @@ def stream_audio(tracking_id: str):
     )
 
 
+def _is_browser_request(request: Optional[Request]) -> bool:
+    """Detect whether request originates from a browser navigating HTML pages."""
+    if not request:
+        return False
+    accept = request.headers.get("accept", "")
+    sec_dest = request.headers.get("sec-fetch-dest", "")
+    if sec_dest == "document":
+        return True
+    if accept.startswith("text/html"):
+        return True
+    return False
+
+
+def _detail_redirect(tracking_id: str, message: str = "", error: str = "") -> RedirectResponse:
+    import urllib.parse
+    params = {}
+    if message:
+        params["message"] = message
+    if error:
+        params["error"] = error
+    qs = f"?{urllib.parse.urlencode(params)}" if params else ""
+    return RedirectResponse(url=f"/file/{tracking_id}{qs}", status_code=303)
+
+
 @app.get("/file/{tracking_id}", response_class=HTMLResponse)
-def file_detail(request: Request, tracking_id: str):
+def file_detail(request: Request, tracking_id: str, message: Optional[str] = None, error: Optional[str] = None):
     service = get_service()
     registry = service.registry
     if registry.get_metadata("purge_blocked"):
@@ -305,6 +329,8 @@ def file_detail(request: Request, tracking_id: str):
             "file_split": file_split,
             "human_cut_decision": human_cut_decision,
             "has_audio": has_audio,
+            "message": message,
+            "error": error,
         },
     )
 
@@ -393,6 +419,7 @@ def execute_cut_endpoint(
 
 @app.post("/file/{tracking_id}/content-review-action")
 def content_review_action(
+    request: Request,
     tracking_id: str,
     classification: Optional[str] = Form(None),
     mantra_type: Optional[str] = Form(None),
@@ -411,14 +438,16 @@ def content_review_action(
             reviewer="review_portal",
             notes=notes or "",
         )
+        return _detail_redirect(tracking_id, message="Content discovery decision saved.")
     except Exception as e:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=f"Failed to save content decision: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
-    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
 
 
 @app.post("/file/{tracking_id}/media-db-action")
 def media_db_action(
+    request: Request,
     tracking_id: str,
     action: str = Form(...),
     media_row_id: Optional[int] = Form(None),
@@ -433,10 +462,19 @@ def media_db_action(
             notes=notes,
             reviewer="review_portal",
         )
+        if action == "confirm_existing":
+            msg = f"Confirmed match to Baserow row #{media_row_id}."
+        elif action in ("confirm_new", "confirm_new_force"):
+            msg = "Confirmed as new media item."
+        elif action == "defer":
+            msg = "Media DB decision deferred."
+        else:
+            msg = f"Action '{action}' applied successfully."
+        return _detail_redirect(tracking_id, message=msg)
     except Exception as e:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-
-    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
 
 
 @app.post("/file/{tracking_id}/media-db-sync")
@@ -447,15 +485,27 @@ def media_db_sync(
     updater = get_media_db_updater_service()
     commit = (action in ("commit", "retry"))
     try:
-        updater.synchronize(tracking_id, commit=commit)
+        res = updater.synchronize(tracking_id, commit=commit)
+        from ..media_db_updater.models import SyncStatus
+        if res.status == SyncStatus.DATABASE_UNAVAILABLE:
+            notes = "; ".join(res.diagnostic_notes) if res.diagnostic_notes else "Database unavailable"
+            return _detail_redirect(tracking_id, error=f"Database sync blocked: {notes}")
+        elif res.status in (SyncStatus.FAILED_BLOCKED, SyncStatus.FAILED_RETRYABLE):
+            err = res.error_message or ("; ".join(res.diagnostic_notes) if res.diagnostic_notes else f"Sync failed with status {res.status.value}")
+            return _detail_redirect(tracking_id, error=f"Sync blocked: {err}")
+        elif res.status == SyncStatus.SYNCED:
+            return _detail_redirect(tracking_id, message=f"Baserow database sync committed successfully to row #{res.media_row_id}.")
+        elif res.status == SyncStatus.NOOP:
+            return _detail_redirect(tracking_id, message="Baserow database already in sync (NOOP).")
+        else:
+            return _detail_redirect(tracking_id, message="Database sync preview generated.")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+        return _detail_redirect(tracking_id, error=str(e))
 
 
 @app.post("/file/{tracking_id}/media-db-field-approval")
 def media_db_field_approval(
+    request: Request,
     tracking_id: str,
     field_name: str = Form(...),
     action: Optional[str] = Form(None),
@@ -469,10 +519,14 @@ def media_db_field_approval(
     from ..media_db_updater.models import FieldApprovalAction
     updater = get_media_db_updater_service()
     if not action or not str(action).strip():
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error="Missing required field approval action")
         raise HTTPException(status_code=400, detail="Missing required field approval action")
     try:
         approval_action = FieldApprovalAction.from_value(action)
     except ValueError:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=f"Invalid field approval action: {action}")
         raise HTTPException(status_code=400, detail=f"Invalid field approval action: {action}")
 
     # Determine precondition value and flag
@@ -510,14 +564,16 @@ def media_db_field_approval(
             notes=notes,
             commit=commit,
         )
+        return _detail_redirect(tracking_id, message=f"Field approval for '{field_name}' applied.")
     except Exception as e:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=f"Field approval failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
-    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
 
 
 @app.post("/file/{tracking_id}/media-db-association")
 def media_db_association(
+    request: Request,
     tracking_id: str,
     selected_media_row_id: int = Form(...),
     reviewed_candidate_row_id: int = Form(...),
@@ -536,10 +592,11 @@ def media_db_association(
             notes=notes,
             commit=commit,
         )
+        return _detail_redirect(tracking_id, message="Association approval applied.")
     except Exception as e:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=f"Association approval failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
-    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
 
 
 def _batch_redirect(filter_mode: str, message: str = "", error: str = "") -> RedirectResponse:
@@ -617,6 +674,7 @@ def batch_update(
 
 @app.post("/file/{tracking_id}/update")
 def update_file(
+    request: Request,
     tracking_id: str,
     action: str = Form(...),
     when_val: str = Form(""),
@@ -635,6 +693,19 @@ def update_file(
             custom_proposed_filename=proposed_filename,
             reviewer="review_portal",
         )
+        msg_map = {
+            "save": "Corrections saved successfully.",
+            "edit": "Corrections saved successfully.",
+            "approve": "Proposal approved successfully.",
+            "defer": "File review deferred.",
+        }
+        msg = msg_map.get(action, f"Action '{action}' applied successfully.")
+        return _detail_redirect(tracking_id, message=msg)
     except ValueError as e:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-    return RedirectResponse(url=f"/file/{tracking_id}", status_code=303)
+    except Exception as e:
+        if _is_browser_request(request):
+            return _detail_redirect(tracking_id, error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))

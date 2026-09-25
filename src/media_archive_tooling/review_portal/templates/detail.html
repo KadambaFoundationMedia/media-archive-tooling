@@ -164,8 +164,41 @@
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 20px;
-            margin-bottom: 20px;
+            margin-bottom: 24px;
             box-shadow: 0 1px 3px var(--shadow);
+        }
+        .step-card {
+            border-left: 4px solid var(--primary);
+        }
+        .step-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            margin-right: 10px;
+            flex-shrink: 0;
+        }
+        .step-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .step-header h2 {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            font-size: 18px;
         }
         h2 { font-size: 18px; margin-top: 0; }
         h3 { font-size: 15px; margin-top: 16px; margin-bottom: 8px; }
@@ -219,12 +252,13 @@
 
         .badge {
             display: inline-block;
-            padding: 2px 8px;
+            padding: 3px 9px;
             border-radius: 9999px;
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 700;
             color: white;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         .badge-exact { background: var(--exact); }
         .badge-strong { background: var(--strong); }
@@ -232,6 +266,32 @@
         .badge-ambiguous { background: var(--ambiguous); }
         .badge-unresolved { background: var(--unresolved); }
 
+        .alert-success {
+            padding: 14px 18px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            background: rgba(34, 197, 94, 0.12);
+            border: 1.5px solid #22c55e;
+            color: var(--exact);
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .alert-danger {
+            padding: 14px 18px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            background: rgba(239, 68, 68, 0.12);
+            border: 1.5px solid #ef4444;
+            color: #dc2626;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
         .alert-warn {
             padding: 12px 16px;
             border-radius: 6px;
@@ -271,6 +331,31 @@
         .diff-conflict-row {
             background: var(--diff-conflict-bg) !important;
             border: 1px solid var(--diff-conflict-border) !important;
+        }
+
+        .locked-banner {
+            padding: 16px 20px;
+            border-radius: 8px;
+            background: var(--diff-conflict-bg);
+            border: 1.5px dashed var(--diff-conflict-border);
+            margin-bottom: 16px;
+        }
+        .locked-banner h3 {
+            margin: 0 0 8px 0;
+            color: var(--alert-conflict-text);
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .locked-banner ul {
+            margin: 0;
+            padding-left: 20px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .locked-banner li {
+            margin-bottom: 4px;
         }
 
         code {
@@ -336,10 +421,33 @@
             <div class="subtitle">Original: {{ file.original_filename }}</div>
         </div>
         <div class="header-actions">
+            <span class="badge" style="
+                {% if file.status in ['approved', 'committed'] %}background: var(--exact);
+                {% elif file.status == 'blocked' %}background: var(--ambiguous);
+                {% elif file.status == 'pending' %}background: var(--provisional);
+                {% else %}background: var(--unresolved);
+                {% endif %}
+                font-size: 12px; padding: 6px 12px;
+            ">{{ file.status|upper }}</span>
             <button type="button" id="theme-toggle" class="btn theme-btn">Dark mode</button>
             <span class="online">● Online (Local Registry)</span>
         </div>
     </div>
+
+    <!-- User Feedback / Flash Messages -->
+    {% if message %}
+    <div class="alert-success" id="flash-message">
+        <span style="font-size: 18px;">✓</span>
+        <span>{{ message }}</span>
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="alert-danger" id="flash-error">
+        <span style="font-size: 18px;">⚠</span>
+        <span>{{ error }}</span>
+    </div>
+    {% endif %}
 
     {% if file.review_reasons %}
     <div class="alert-warn">
@@ -354,7 +462,7 @@
 
     {% if file.parser_result.diagnostic_notes or file.parser_result.downstream_routing %}
     <div class="alert-info">
-        <strong>Diagnostic Notes & Pipeline Routing:</strong>
+        <strong>Diagnostic Notes &amp; Pipeline Routing:</strong>
         <ul style="margin: 6px 0 0 0; padding-left: 20px;">
             {% for note in file.parser_result.diagnostic_notes %}
             <li>{{ note }}</li>
@@ -366,9 +474,14 @@
     </div>
     {% endif %}
 
-    <!-- Audio Player Card -->
+    <!-- Audio Player Card (Always accessible at top) -->
     <div class="card" id="audio-player-card">
-        <h2>Audio Preview</h2>
+        <h2 style="display: flex; align-items: center; justify-content: space-between;">
+            <span>Audio Preview Player</span>
+            {% if has_audio %}
+            <span style="font-size: 12px; font-weight: normal; color: var(--muted-color);">Interactive Preview Ready</span>
+            {% endif %}
+        </h2>
         {% if has_audio %}
         <div style="margin-bottom: 12px;">
             <audio id="audio-preview" controls preload="metadata" style="width: 100%; border-radius: 6px;">
@@ -396,140 +509,28 @@
         {% endif %}
     </div>
 
-    <!-- Tool 5 Content Discovery Card -->
-    {% if content_review %}
-    <div class="card" id="content-discovery-card">
-        <h2>Tool 5 — Content Discovery &amp; Transcription</h2>
-        <div style="margin-bottom: 16px;">
-            <div>
-                Classification: <strong>{{ content_review.classification }}</strong>
-                &middot; Confidence: <strong>{{ content_review.confidence }}</strong>
-                &middot; Mantra: <strong>{{ content_review.mantra_type }}</strong>
-            </div>
-            <div style="margin-top: 4px;">
-                Cutter Routing:
-                {% if content_review.process_by_tool_6 %}
-                <span class="badge" style="background: var(--exact); color: white;">process_by_tool_6</span>
-                {% else %}
-                <span class="badge" style="background: var(--unresolved); color: white;">none</span>
-                {% endif %}
-                &middot; Review Required:
-                {% if content_review.review_required %}
-                <span class="badge" style="background: var(--ambiguous); color: white;">YES</span> ({{ content_review.review_reason or 'Needs Review' }})
-                {% else %}
-                <span class="badge" style="background: var(--exact); color: white;">NO</span>
-                {% endif %}
-            </div>
-            {% if content_review.cutter_proposal and content_review.cutter_proposal.suggested_cut_points %}
-            <div style="margin-top: 6px;">
-                <strong>Suggested Cut Points:</strong> <code>{{ content_review.cutter_proposal.suggested_cut_points }}</code>
-            </div>
-            {% endif %}
-            <div style="margin-top: 6px; font-size: 12px; color: var(--muted-color);">
-                Transcript: <code>{{ content_review.transcript_path }}</code>
-                {% if content_review.derived_audio_path %}
-                &middot; Derived Audio: <code>{{ content_review.derived_audio_path }}</code>
-                {% endif %}
-            </div>
-            {% if content_review.human_decision %}
-            <div style="margin-top: 10px; padding: 8px 12px; background: var(--header-bg); border-radius: 6px; font-size: 13px;">
-                <strong>Audited Human Review:</strong> Reviewer: <code>{{ content_review.human_decision.reviewer }}</code> at {{ content_review.human_decision.timestamp }}
-                {% if content_review.human_decision.notes %}
-                &middot; Notes: <em>{{ content_review.human_decision.notes }}</em>
-                {% endif %}
-            </div>
-            {% endif %}
-        </div>
-
-        <form method="POST" action="/file/{{ file.tracking_id }}/content-review-action" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
-            <h3 style="font-size: 14px; margin-bottom: 12px;">Override / Confirm Content Classification</h3>
-            <div class="grid">
-                <div class="field-group">
-                    <label>Classification:</label>
-                    <select name="classification" style="padding: 6px 10px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-text);">
-                        {% for ctype in ["CLASS", "KIRTAN_AND_CLASS", "KIRTAN", "INITIATION", "EVENT_OR_FESTIVAL_ADDRESS", "HOME_PROGRAM", "UNKNOWN_REVIEW"] %}
-                        <option value="{{ ctype }}" {% if content_review.classification == ctype %}selected{% endif %}>{{ ctype }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="field-group">
-                    <label>Mantra Type:</label>
-                    <select name="mantra_type" style="padding: 6px 10px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-text);">
-                        {% for mtype in ["Jaya-radha-madhava", "Jaya-Jaya-Sri-Caitanya", "Nrishmadeva", "Kirtan", "UNKNOWN", "NONE"] %}
-                        <option value="{{ mtype }}" {% if content_review.mantra_type == mtype %}selected{% endif %}>{{ mtype }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-            </div>
-            <div class="field-group" style="margin-top: 10px;">
-                <label>Coarse Boundary / Cut Points (optional):</label>
-                <input type="text" name="coarse_boundary" value="{% if content_review.cutter_proposal %}{{ content_review.cutter_proposal.suggested_cut_points }}{% endif %}" placeholder="e.g. kirtan 00:00-11:41; class begins 12:23">
-            </div>
-            <div class="field-group" style="margin-top: 10px;">
-                <label>Reviewer Notes:</label>
-                <input type="text" name="notes" placeholder="Reason for classification / boundary confirmation">
-            </div>
-            <div style="margin-top: 14px;">
-                <button type="submit" class="btn btn-primary">Save Content Decision</button>
-            </div>
-        </form>
-    </div>
-    {% endif %}
-
-    <!-- Tool 6 File Cutter Card -->
-    {% if content_review and (content_review.classification == "KIRTAN_AND_CLASS" or file_split or human_cut_decision) %}
-    <div class="card" id="file-cutter-card">
-        <h2>Tool 6 — File Cutter</h2>
-        {% if file_split %}
-        <div style="background: #e6f4ea; border: 1px solid #34a853; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
-            <div style="font-weight: 600; color: #137333; margin-bottom: 6px;">✓ File Successfully Split into 2 Parts</div>
-            <div style="font-size: 13px;">
-                <strong>Singing Output:</strong> <code>{{ file_split.singing_path }}</code> ({{ file_split.singing_duration_seconds }}s, ID: <code>{{ file_split.singing_tracking_id }}</code>)<br>
-                <strong>Class Output:</strong> <code>{{ file_split.class_path }}</code> ({{ file_split.class_duration_seconds }}s, ID: <code>{{ file_split.class_tracking_id }}</code>)<br>
-                <strong>Cut Point:</strong> {{ file_split.cut_point_seconds }}s &middot; 
-                <strong>Leading Silence Trimmed:</strong> Singing: {{ file_split.singing_leading_silence_seconds }}s, Class: {{ file_split.class_leading_silence_seconds }}s &middot;
-                <strong>Pending Tool 11 Move:</strong> YES
-            </div>
-        </div>
-        {% else %}
-        <p style="font-size: 13px; color: var(--muted-color); margin-bottom: 12px;">
-            Interactive waveform and boundary review for splitting into singing and class portions.
-        </p>
-
-        <!-- Waveform Visualization -->
-        <div id="waveform-container" style="position: relative; width: 100%; height: 120px; background: #1a1a24; border-radius: 6px; overflow: hidden; margin-bottom: 8px;">
-            <canvas id="waveform-canvas" width="800" height="120" style="width: 100%; height: 100%; display: block;"></canvas>
-            <div id="waveform-marker" style="position: absolute; top: 0; bottom: 0; width: 2px; background: #ea4335; pointer-events: none; left: 0%;">
-                <div style="position: absolute; top: 4px; left: 4px; background: #ea4335; color: white; font-size: 10px; font-weight: bold; padding: 2px 4px; border-radius: 3px; white-space: nowrap;" id="marker-label">Cut Point</div>
-            </div>
-        </div>
-
-        <!-- Slider and Time Labels -->
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
-            <span id="cut-time-display" style="font-family: monospace; font-size: 14px; font-weight: bold; min-width: 60px;">00:00</span>
-            <input type="range" id="cut-slider" min="0" max="100" step="0.1" value="0" style="flex: 1;" oninput="onCutSliderChange(this.value)">
-            <span id="total-time-display" style="font-family: monospace; font-size: 14px; color: var(--muted-color);">00:00</span>
-        </div>
-
-        <!-- Cue / Playback Controls -->
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
-            <button type="button" class="btn" onclick="seekAudio(getCutPointSeconds())">Seek to Cut Point</button>
-            <button type="button" class="btn" onclick="playAroundCut(-5)">Play 5s Before Cut</button>
-            <button type="button" class="btn" onclick="playAroundCut(0)">Play 5s After Cut</button>
-        </div>
-
-        <div style="display: flex; gap: 10px;">
-            <button type="button" class="btn btn-primary" id="btn-execute-cut" onclick="executeCut(false)">Execute Cut</button>
-            <button type="button" class="btn" id="btn-dry-run-cut" onclick="executeCut(true)">Dry Run Simulation</button>
-        </div>
-        <div id="cut-result-status" style="margin-top: 10px; font-size: 13px;"></div>
-        {% endif %}
-    </div>
-    {% endif %}
-
+    <!-- ===================================================================== -->
+    <!-- STEP 1: TOOL 1 — RENAMER & CANONICAL IDENTITY                         -->
+    <!-- ===================================================================== -->
     <form method="POST" action="/file/{{ file.tracking_id }}/update">
-        <div class="card">
-            <h2>Metadata Fields & Evidence</h2>
+        <div class="card step-card" id="renamer-card">
+            <div class="step-header">
+                <h2>
+                    <span class="step-num">1</span>
+                    Tool 1 — Renamer &amp; Canonical Identity
+                </h2>
+                <div>
+                    Status: 
+                    <span class="badge" style="
+                        {% if file.status in ['approved', 'committed'] %}background: var(--exact);
+                        {% elif file.status == 'blocked' %}background: var(--ambiguous);
+                        {% elif file.status == 'pending' %}background: var(--provisional);
+                        {% else %}background: var(--unresolved);
+                        {% endif %}
+                    ">{{ file.status|upper }}</span>
+                </div>
+            </div>
+
             <div class="grid">
                 <div class="field-group">
                     <label>WHEN (Date):</label>
@@ -564,12 +565,12 @@
                 </div>
             </div>
 
-            <div class="field-group" style="margin-top: 12px;">
+            <div class="field-group" style="margin-top: 8px;">
                 <label>Proposed Canonical Filename:</label>
                 <input type="text" name="proposed_filename" value="{{ file.proposed_filename }}" style="font-family: monospace; font-weight: bold;">
             </div>
 
-            <div style="display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap;">
+            <div style="display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap;">
                 <button type="submit" name="action" value="save" class="btn btn-primary">Save Corrections</button>
                 <button type="submit" name="action" value="approve" class="btn btn-success">Approve Proposal</button>
                 <button type="submit" name="action" value="defer" class="btn">Defer for Later Tool</button>
@@ -577,16 +578,185 @@
         </div>
     </form>
 
+    <!-- ===================================================================== -->
+    <!-- STEP 2: TOOL 5 & 6 — CONTENT DISCOVERY & FILE CUTTER                  -->
+    <!-- ===================================================================== -->
+    <div class="card step-card" id="content-and-cutter-card" style="border-left-color: #8b5cf6;">
+        <div class="step-header">
+            <h2>
+                <span class="step-num" style="background: #8b5cf6;">2</span>
+                Tool 5 &amp; 6 — Content Discovery &amp; File Cutter
+            </h2>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                {% if content_review %}
+                <span class="badge" style="background: #8b5cf6;">{{ content_review.classification }}</span>
+                {% if content_review.process_by_tool_6 %}
+                <span class="badge" style="background: var(--exact);">CUT_REQUIRED</span>
+                {% else %}
+                <span class="badge" style="background: var(--unresolved);">NO_CUT</span>
+                {% endif %}
+                {% else %}
+                <span class="badge" style="background: var(--unresolved);">NOT_EVALUATED</span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if content_review %}
+        <!-- Tool 5 Section -->
+        <div id="content-discovery-card" style="margin-bottom: 20px;">
+            <h3 style="margin-top: 0; font-size: 15px;">Tool 5 — Content Discovery &amp; Transcription</h3>
+            <div style="font-size: 14px; margin-bottom: 12px;">
+                Classification: <strong>{{ content_review.classification }}</strong>
+                &middot; Confidence: <strong>{{ content_review.confidence }}</strong>
+                &middot; Mantra: <strong>{{ content_review.mantra_type }}</strong>
+                &middot; Review Required:
+                {% if content_review.review_required %}
+                <span class="badge" style="background: var(--ambiguous);">YES</span> ({{ content_review.review_reason or 'Needs Review' }})
+                {% else %}
+                <span class="badge" style="background: var(--exact);">NO</span>
+                {% endif %}
+            </div>
+
+            {% if content_review.cutter_proposal and content_review.cutter_proposal.suggested_cut_points %}
+            <div style="font-size: 13px; margin-bottom: 8px;">
+                <strong>Suggested Cut Points:</strong> <code>{{ content_review.cutter_proposal.suggested_cut_points }}</code>
+            </div>
+            {% endif %}
+
+            <div style="font-size: 12px; color: var(--muted-color); margin-bottom: 12px;">
+                Transcript: <code>{{ content_review.transcript_path }}</code>
+                {% if content_review.derived_audio_path %}
+                &middot; Derived Audio: <code>{{ content_review.derived_audio_path }}</code>
+                {% endif %}
+            </div>
+
+            {% if content_review.human_decision %}
+            <div style="margin-bottom: 12px; padding: 8px 12px; background: var(--header-bg); border-radius: 6px; font-size: 13px;">
+                <strong>Audited Human Classification:</strong> Reviewer: <code>{{ content_review.human_decision.reviewer }}</code> at {{ content_review.human_decision.timestamp }}
+                {% if content_review.human_decision.notes %}
+                &middot; Notes: <em>{{ content_review.human_decision.notes }}</em>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <form method="POST" action="/file/{{ file.tracking_id }}/content-review-action" style="padding-top: 12px; border-top: 1px solid var(--border-color);">
+                <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px;">Override / Confirm Classification</div>
+                <div class="grid">
+                    <div class="field-group">
+                        <label>Classification:</label>
+                        <select name="classification">
+                            {% for ctype in ["CLASS", "KIRTAN_AND_CLASS", "KIRTAN", "INITIATION", "EVENT_OR_FESTIVAL_ADDRESS", "HOME_PROGRAM", "UNKNOWN_REVIEW"] %}
+                            <option value="{{ ctype }}" {% if content_review.classification == ctype %}selected{% endif %}>{{ ctype }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="field-group">
+                        <label>Mantra Type:</label>
+                        <select name="mantra_type">
+                            {% for mtype in ["Jaya-radha-madhava", "Jaya-Jaya-Sri-Caitanya", "Nrishmadeva", "Kirtan", "UNKNOWN", "NONE"] %}
+                            <option value="{{ mtype }}" {% if content_review.mantra_type == mtype %}selected{% endif %}>{{ mtype }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="field-group">
+                    <label>Reviewer Notes:</label>
+                    <input type="text" name="notes" placeholder="Reason for classification / boundary confirmation">
+                </div>
+                <button type="submit" class="btn btn-primary" style="font-size: 13px;">Save Content Decision</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- Tool 6 File Cutter Section -->
+        <div id="file-cutter-card" style="padding-top: 16px; border-top: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; font-size: 15px;">Tool 6 — Audio Waveform &amp; File Splitting</h3>
+
+            {% if file_split %}
+            <div style="background: rgba(34, 197, 94, 0.12); border: 1.5px solid #22c55e; border-radius: 6px; padding: 14px; margin-bottom: 16px;">
+                <div style="font-weight: 600; color: var(--exact); margin-bottom: 6px;">✓ File Successfully Split into 2 Parts</div>
+                <div style="font-size: 13px; line-height: 1.6;">
+                    <strong>Singing Output:</strong> <code>{{ file_split.singing_path }}</code> ({{ file_split.singing_duration_seconds }}s, ID: <code>{{ file_split.singing_tracking_id }}</code>)<br>
+                    <strong>Class Output:</strong> <code>{{ file_split.class_path }}</code> ({{ file_split.class_duration_seconds }}s, ID: <code>{{ file_split.class_tracking_id }}</code>)<br>
+                    <strong>Cut Point:</strong> {{ file_split.cut_point_seconds }}s &middot; 
+                    <strong>Leading Silence Trimmed:</strong> Singing: {{ file_split.singing_leading_silence_seconds }}s, Class: {{ file_split.class_leading_silence_seconds }}s
+                </div>
+            </div>
+            {% endif %}
+
+            {% if (content_review and content_review.classification == "KIRTAN_AND_CLASS") or file_split or human_cut_decision %}
+            <p style="font-size: 13px; color: var(--muted-color); margin-bottom: 12px;">
+                Interactive waveform and boundary inspection. The cut splits the recording into Kirtan/Singing (Part 1) and Class (Part 2).
+            </p>
+
+            <!-- Waveform Visualization -->
+            <div id="waveform-container" style="position: relative; width: 100%; height: 130px; background: #0f172a; border-radius: 8px; overflow: hidden; margin-bottom: 10px; border: 1px solid #334155;">
+                <div id="waveform-loading" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 13px;">
+                    Loading audio waveform peaks...
+                </div>
+                <canvas id="waveform-canvas" width="800" height="130" style="width: 100%; height: 100%; display: block;"></canvas>
+                <div id="waveform-marker" style="position: absolute; top: 0; bottom: 0; width: 2px; background: #ef4444; pointer-events: none; left: 0%; z-index: 10;">
+                    <div style="position: absolute; top: 4px; left: 4px; background: #ef4444; color: white; font-size: 11px; font-weight: bold; padding: 2px 6px; border-radius: 3px; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,0.4);" id="marker-label">Cut Point</div>
+                </div>
+            </div>
+
+            <!-- Slider and Time Labels -->
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                <span id="cut-time-display" style="font-family: monospace; font-size: 14px; font-weight: bold; min-width: 60px;">00:00</span>
+                <input type="range" id="cut-slider" min="0" max="100" step="0.1" value="0" style="flex: 1;" oninput="onCutSliderChange(this.value)">
+                <span id="total-time-display" style="font-family: monospace; font-size: 14px; color: var(--muted-color);">00:00</span>
+            </div>
+
+            <!-- Cue / Playback Controls -->
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+                <button type="button" class="btn" onclick="seekAudio(getCutPointSeconds())">Seek to Cut Point</button>
+                <button type="button" class="btn" onclick="playAroundCut(-5)">Play 5s Before Cut</button>
+                <button type="button" class="btn" onclick="playAroundCut(0)">Play 5s After Cut</button>
+            </div>
+
+            {% if not file_split %}
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button type="button" class="btn btn-primary" id="btn-execute-cut" onclick="executeCut(false)">Execute Cut</button>
+                <button type="button" class="btn" id="btn-dry-run-cut" onclick="executeCut(true)">Dry Run Simulation</button>
+            </div>
+            <div id="cut-result-status" style="margin-top: 10px; font-size: 13px;"></div>
+            {% endif %}
+
+            {% else %}
+            <div class="muted-text" style="font-size: 13px;">
+                Single recording segment (no cut required). To split into Kirtan and Class, set Classification to <code>KIRTAN_AND_CLASS</code> above.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- STEP 3: TOOL 2 — BASEROW MEDIA DATABASE RECONCILIATION                -->
+    <!-- ===================================================================== -->
     {% if media_db_review %}
-    <div class="card">
-        <h2>Tool 2 — Baserow Media Database Reconciliation</h2>
-        <div style="margin-bottom: 16px;">
+    <div class="card step-card" id="media-db-card" style="border-left-color: #0284c7;">
+        <div class="step-header">
+            <h2>
+                <span class="step-num" style="background: #0284c7;">3</span>
+                Tool 2 — Baserow Media Database Reconciliation
+            </h2>
+            <span class="badge" style="
+                {% if media_db_review.decision == 'EXISTING_MEDIA_MATCH' %}background: var(--exact);
+                {% elif media_db_review.decision == 'NEW_MEDIA_CANDIDATE' %}background: var(--strong);
+                {% elif media_db_review.decision == 'MULTIPLE_CANDIDATES' %}background: var(--provisional);
+                {% elif media_db_review.decision == 'CONFLICT_WITH_EXISTING' %}background: var(--ambiguous);
+                {% else %}background: var(--unresolved);
+                {% endif %}
+            ">{{ media_db_review.decision }}</span>
+        </div>
+
+        <div style="margin-bottom: 16px; font-size: 14px;">
             <div>Decision: <strong>{{ media_db_review.decision }}</strong> &middot; Database: <strong>{{ media_db_review.database_state }}</strong> (Snapshot: {{ media_db_review.snapshot_timestamp }})</div>
             <div>Proposed Tool 4 Action: <code>{{ media_db_review.result.proposed_tool4_action }}</code></div>
             {% if media_db_review.selected_media_row_id %}
             <div style="margin-top: 4px; color: var(--success-green); font-weight: 600;">Selected Baserow Media Row: #{{ media_db_review.selected_media_row_id }}</div>
             {% endif %}
-            {% if media_db_review.result.renamer_enrichment.confirmed %}
+            {% if media_db_review.result.renamer_enrichment and media_db_review.result.renamer_enrichment.confirmed %}
             <div style="margin-top: 4px; color: var(--info-blue); font-weight: 600;">Confirmed Title: {{ media_db_review.result.renamer_enrichment.title_full }}</div>
             {% endif %}
         </div>
@@ -601,13 +771,18 @@
                     <th>Title / What</th>
                     <th>Location</th>
                     <th>Field Comparisons</th>
-                    <th>Score & Reasons</th>
+                    <th>Score &amp; Reasons</th>
                 </tr>
             </thead>
             <tbody>
                 {% for cand in media_db_review.result.candidates %}
-                <tr>
-                    <td><strong>#{{ cand.media_row_id }}</strong></td>
+                <tr {% if media_db_review.selected_media_row_id == cand.media_row_id %}style="background: rgba(34, 197, 94, 0.08);"{% endif %}>
+                    <td>
+                        <strong>#{{ cand.media_row_id }}</strong>
+                        {% if media_db_review.selected_media_row_id == cand.media_row_id %}
+                        <div style="color: var(--success-green); font-size: 11px; font-weight: bold;">[SELECTED]</div>
+                        {% endif %}
+                    </td>
                     <td>{{ cand.normalized_row.date or "—" }}</td>
                     <td>{{ cand.normalized_row.title or cand.normalized_row.what or "—" }}</td>
                     <td>{{ cand.normalized_row.place or "—" }}</td>
@@ -639,6 +814,7 @@
                 <button type="submit" name="action" value="confirm_existing" class="btn btn-success">Confirm Existing Row</button>
                 {% endif %}
                 <button type="submit" name="action" value="confirm_new" class="btn btn-primary">Confirm New Media Item</button>
+                <button type="submit" name="action" value="confirm_new_force" class="btn" style="color: var(--muted-color); font-size: 12px;" title="Override live database search check">Force Confirm New (Override)</button>
                 {% if media_db_review.decision == 'EXISTING_MEDIA_MATCH' or (media_db_review.result.renamer_enrichment and media_db_review.result.renamer_enrichment.confirmed) %}
                 <button type="button" class="btn" disabled title="Cannot defer an already confirmed media association">Defer Decision</button>
                 {% else %}
@@ -649,10 +825,25 @@
     </div>
     {% endif %}
 
+    <!-- ===================================================================== -->
+    <!-- STEP 4: TOOL 3 — TRAVEL SCHEDULE REVIEW                               -->
+    <!-- ===================================================================== -->
     {% if travel_review %}
-    <div class="card">
-        <h2>Tool 3 — Travel Schedule Review</h2>
-        <div style="margin-bottom: 16px;">
+    <div class="card step-card" id="travel-schedule-card" style="border-left-color: #f59e0b;">
+        <div class="step-header">
+            <h2>
+                <span class="step-num" style="background: #f59e0b;">4</span>
+                Tool 3 — Travel Schedule Review
+            </h2>
+            <span class="badge" style="
+                {% if 'CONFIRMED' in travel_review.decision %}background: var(--exact);
+                {% elif 'CONFLICT' in travel_review.decision %}background: var(--ambiguous);
+                {% else %}background: var(--unresolved);
+                {% endif %}
+            ">{{ travel_review.decision }}</span>
+        </div>
+
+        <div style="margin-bottom: 16px; font-size: 14px;">
             <div>
                 Decision: <strong>{{ travel_review.decision }}</strong> &middot; 
                 Reference SHA: <code>{{ travel_review.reference_checksum[:12] }}...</code> ({{ travel_review.reference_row_count }} rows)
@@ -736,10 +927,20 @@
     </div>
     {% endif %}
 
-    <!-- Tool 4: Media Database Synchronization Card -->
-    <div class="card" id="media-db-sync-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h2 style="margin: 0;">Tool 4: Media Database Synchronization</h2>
+    <!-- ===================================================================== -->
+    <!-- STEP 5: TOOL 4 — BASEROW MEDIA DATABASE SYNCHRONIZATION (GATED)       -->
+    <!-- ===================================================================== -->
+    {% set is_tool1_ready = file.status in ['approved', 'committed'] and not file.needs_review %}
+    {% set is_tool2_ready = media_db_review and (not media_db_review.review_required or media_db_review.decision in ['EXISTING_MEDIA_MATCH', 'NEW_MEDIA_CANDIDATE', 'CONFIRMED_NEW']) %}
+    {% set is_cutter_ready = not (content_review and content_review.classification == 'KIRTAN_AND_CLASS' and not file_split and not human_cut_decision) %}
+    {% set is_sync_unlocked = is_tool1_ready and is_tool2_ready and is_cutter_ready %}
+
+    <div class="card step-card" id="media-db-sync-card" style="border-left-color: {% if is_sync_unlocked %}#10b981{% else %}#94a3b8{% endif %};">
+        <div class="step-header">
+            <h2>
+                <span class="step-num" style="background: {% if is_sync_unlocked %}#10b981{% else %}#94a3b8{% endif %};">5</span>
+                Tool 4: Media Database Synchronization
+            </h2>
             {% if media_db_sync %}
                 {% set s_status = media_db_sync.sync_status %}
                 <span class="badge" style="
@@ -756,6 +957,37 @@
                 <span class="badge" style="background: var(--unresolved);">NOT_SYNCED</span>
             {% endif %}
         </div>
+
+        {% if not is_sync_unlocked %}
+        <!-- Progressive Disclosure: Locked Banner -->
+        <div class="locked-banner">
+            <h3>🔒 Step 5 Locked: Prerequisite Decisions Required</h3>
+            <p style="margin: 0 0 10px 0; font-size: 13px; color: var(--muted-color);">
+                To protect the integrity of the live Baserow database, synchronization can only proceed after previous tool steps are resolved:
+            </p>
+            <ul>
+                {% if not is_tool1_ready %}
+                <li>
+                    <strong>Step 1 (Tool 1):</strong> Canonical identity proposal is not yet approved (Current status: <code>{{ file.status }}</code>). Click <em>Approve Proposal</em> in Step 1.
+                </li>
+                {% endif %}
+                {% if not is_cutter_ready %}
+                <li>
+                    <strong>Step 2 (Tool 6):</strong> File is classified as <code>KIRTAN_AND_CLASS</code> and must be split into separate parts. Execute the file cut in Step 2.
+                </li>
+                {% endif %}
+                {% if not is_tool2_ready %}
+                <li>
+                    <strong>Step 3 (Tool 2):</strong> Baserow Media row association is unconfirmed (Current decision: <code>{{ media_db_review.decision if media_db_review else 'UNRESOLVED' }}</code>). Confirm matching row or confirm as new media item in Step 3.
+                </li>
+                {% endif %}
+            </ul>
+        </div>
+        {% else %}
+        <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--exact); font-weight: 600;">
+            ✓ All prerequisites resolved. File is ready for live Baserow synchronization.
+        </div>
+        {% endif %}
 
         {% if media_db_sync %}
         <div style="font-size: 14px; margin-bottom: 12px; color: var(--muted-color);">
@@ -841,25 +1073,38 @@
 
         {% endif %}
 
-        <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
+        <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center;">
             <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
                 <input type="hidden" name="action" value="preview">
                 <button type="submit" class="btn">Preview Sync (Dry-run)</button>
             </form>
+
             <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
                 <input type="hidden" name="action" value="commit">
+                {% if is_sync_unlocked %}
                 <button type="submit" class="btn btn-primary">Synchronize Now</button>
+                {% else %}
+                <button type="button" class="btn btn-primary" disabled title="Locked: Complete Step 1, Step 2, and Step 3 prerequisites first">Synchronize Now (Locked)</button>
+                {% endif %}
             </form>
+
             {% if media_db_sync and media_db_sync.sync_status in ['PENDING_SYNC', 'FAILED_RETRYABLE', 'DATABASE_UNAVAILABLE'] %}
             <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
                 <input type="hidden" name="action" value="retry">
+                {% if is_sync_unlocked %}
                 <button type="submit" class="btn btn-success">Retry Pending Sync</button>
+                {% else %}
+                <button type="button" class="btn btn-success" disabled title="Locked: Complete prerequisites first">Retry Pending Sync (Locked)</button>
+                {% endif %}
             </form>
             {% endif %}
         </div>
     </div>
 
-    <div class="card">
+    <!-- ===================================================================== -->
+    <!-- EVIDENCE PROVENANCE                                                   -->
+    <!-- ===================================================================== -->
+    <div class="card" style="margin-top: 32px;">
         <h2>Evidence Provenance</h2>
         <ul>
             {% for ev in file.parser_result.when.evidence %}
@@ -916,6 +1161,7 @@
 
         let currentCutSeconds = 0;
         let totalDurationSeconds = 0;
+        let cachedPeaks = null;
 
         function formatTime(sec) {
             if (isNaN(sec) || sec < 0) return "00:00";
@@ -933,7 +1179,10 @@
                 const pct = Math.max(0, Math.min(100, (currentCutSeconds / totalDurationSeconds) * 100));
                 marker.style.left = `${pct}%`;
                 const label = document.getElementById('marker-label');
-                if (label) label.textContent = `${formatTime(currentCutSeconds)} (${currentCutSeconds.toFixed(1)}s)`;
+                if (label) label.textContent = `Cut: ${formatTime(currentCutSeconds)} (${currentCutSeconds.toFixed(1)}s)`;
+            }
+            if (cachedPeaks) {
+                drawWaveform(cachedPeaks);
             }
         }
 
@@ -957,29 +1206,72 @@
         function drawWaveform(peaks) {
             const canvas = document.getElementById('waveform-canvas');
             if (!canvas) return;
+            const container = document.getElementById('waveform-container');
+            if (container) {
+                canvas.width = container.clientWidth || 800;
+            }
             const ctx = canvas.getContext('2d');
             const width = canvas.width;
             const height = canvas.height;
             ctx.clearRect(0, 0, width, height);
 
-            ctx.fillStyle = '#4285f4';
+            const cutPct = totalDurationSeconds > 0 ? (currentCutSeconds / totalDurationSeconds) : 0.25;
+            const cutX = cutPct * width;
+
+            // Shaded zone backgrounds
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.08)'; // Singing/Kirtan zone
+            ctx.fillRect(0, 0, cutX, height);
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.08)'; // Class zone
+            ctx.fillRect(cutX, 0, width - cutX, height);
+
+            // Draw zone labels on canvas
+            ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.6)';
+            ctx.fillText('Part 1: Singing / Kirtan', 10, 16);
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.6)';
+            if (cutX + 10 < width - 100) {
+                ctx.fillText('Part 2: Class / Lecture', cutX + 10, 16);
+            }
+
             const barWidth = width / peaks.length;
             for (let i = 0; i < peaks.length; i++) {
                 const p = peaks[i];
-                const barHeight = Math.max(2, p * (height - 10));
+                const barHeight = Math.max(3, p * (height - 30));
                 const x = i * barWidth;
                 const y = (height - barHeight) / 2;
+
+                if (x < cutX) {
+                    ctx.fillStyle = '#3b82f6'; // Singing: Blue
+                } else {
+                    ctx.fillStyle = '#10b981'; // Class: Green
+                }
                 ctx.fillRect(x, y, Math.max(1, barWidth - 1), barHeight);
             }
         }
 
         async function loadWaveform() {
+            const canvas = document.getElementById('waveform-canvas');
+            if (!canvas) return; // File cutter card not on page
+
             const trackingId = "{{ file.tracking_id }}";
+            const loadingDiv = document.getElementById('waveform-loading');
+
             try {
                 const res = await fetch(`/api/file/${trackingId}/waveform`);
-                if (!res.ok) return;
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    if (loadingDiv) {
+                        loadingDiv.style.color = '#ef4444';
+                        loadingDiv.textContent = `Waveform unavailable: ${errData.detail || res.statusText}`;
+                    }
+                    return;
+                }
                 const data = await res.json();
+                if (loadingDiv) loadingDiv.style.display = 'none';
+
                 totalDurationSeconds = data.duration_seconds || 0;
+                cachedPeaks = data.peaks || [];
+
                 const totalDisplay = document.getElementById('total-time-display');
                 if (totalDisplay) totalDisplay.textContent = formatTime(totalDurationSeconds);
 
@@ -990,8 +1282,9 @@
                     slider.value = initCut;
                     updateCutDisplay(initCut);
                 }
-                if (data.peaks) {
-                    drawWaveform(data.peaks);
+
+                if (cachedPeaks.length > 0) {
+                    drawWaveform(cachedPeaks);
                 }
 
                 const container = document.getElementById('waveform-container');
@@ -1008,7 +1301,10 @@
                     };
                 }
             } catch (e) {
-                console.warn("Waveform load failed:", e);
+                if (loadingDiv) {
+                    loadingDiv.style.color = '#ef4444';
+                    loadingDiv.textContent = `Waveform loading error: ${e.message}`;
+                }
             }
         }
 
@@ -1030,28 +1326,34 @@
                 const result = await res.json();
                 if (result.success) {
                     if (dryRun) {
-                        statusDiv.innerHTML = `<div style="background: rgba(66,133,244,0.1); border: 1px solid #4285f4; border-radius: 4px; padding: 8px; color: #1a73e8;">
-                            <strong>Dry Run Succeeded:</strong> Cut at ${result.cut_point_seconds.toFixed(2)}s.<br>
+                        statusDiv.innerHTML = `<div style="background: rgba(66,133,244,0.1); border: 1px solid #4285f4; border-radius: 4px; padding: 10px; color: #1a73e8; margin-top: 8px;">
+                            <strong>✓ Dry Run Succeeded:</strong> Cut at ${result.cut_point_seconds.toFixed(2)}s.<br>
                             Projected Singing: <code>${result.singing_output_path}</code> (${result.singing_duration_seconds}s)<br>
                             Projected Class: <code>${result.class_output_path}</code> (${result.class_duration_seconds}s)
                         </div>`;
                     } else {
-                        statusDiv.innerHTML = `<div style="background: #e6f4ea; border: 1px solid #34a853; border-radius: 4px; padding: 8px; color: #137333;">
-                            <strong>Cut Succeeded!</strong> Reloading file view...
+                        statusDiv.innerHTML = `<div style="background: #e6f4ea; border: 1px solid #34a853; border-radius: 4px; padding: 10px; color: #137333; margin-top: 8px;">
+                            <strong>✓ Cut Succeeded!</strong> Reloading file view...
                         </div>`;
                         setTimeout(() => window.location.reload(), 1500);
                     }
                 } else {
-                    statusDiv.innerHTML = `<div style="background: rgba(234,67,53,0.1); border: 1px solid #ea4335; border-radius: 4px; padding: 8px; color: #d93025;">
+                    statusDiv.innerHTML = `<div style="background: rgba(234,67,53,0.1); border: 1px solid #ea4335; border-radius: 4px; padding: 10px; color: #d93025; margin-top: 8px;">
                         <strong>Cut Blocked / Review Required:</strong> ${result.review_reason || result.error_message}
                     </div>`;
                 }
             } catch (e) {
                 if (statusDiv) {
-                    statusDiv.innerHTML = `<div style="color: #d93025;">Execution error: ${e.message}</div>`;
+                    statusDiv.innerHTML = `<div style="color: #d93025; margin-top: 8px;">Execution error: ${e.message}</div>`;
                 }
             }
         }
+
+        window.addEventListener('resize', () => {
+            if (cachedPeaks) {
+                drawWaveform(cachedPeaks);
+            }
+        });
 
         document.addEventListener('DOMContentLoaded', () => {
             loadWaveform();

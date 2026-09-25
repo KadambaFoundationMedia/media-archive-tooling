@@ -9,6 +9,11 @@ from ..common.ascii_latin import to_ascii_latin
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_BASEROW_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MediaArchiveTooling/1.0"
+)
+
 ASSETS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "assets"
 DEFAULT_CATEGORIES_PATH = ASSETS_DIR / "default_categories.json"
 DEFAULT_LOCATIONS_PATH = ASSETS_DIR / "default_locations.json"
@@ -149,7 +154,10 @@ class BaserowReferenceProvider:
         return None
 
     def _fetch_from_baserow_api(self) -> Tuple[Optional[List[Dict[str, Any]]], List[Dict[str, Any]]]:
-        headers = {"Authorization": f"Token {self.api_token}"}
+        headers = {
+            "Authorization": f"Token {self.api_token}",
+            "User-Agent": DEFAULT_BASEROW_USER_AGENT,
+        }
         fetched_categories = None
         fetched_locations: List[Dict[str, Any]] = []
 
@@ -276,7 +284,8 @@ class BaserowReferenceProvider:
         # Perform guarded write to dedicated location table
         headers = {
             "Authorization": f"Token {self.api_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": DEFAULT_BASEROW_USER_AGENT,
         }
         url = f"{self.api_url}/api/database/rows/table/{self.location_table_id}/?user_field_names=true"
         payload: Dict[str, Any] = {"place_location": place_name}

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
@@ -475,3 +476,94 @@ def test_portal_commit_finalize_proposal_calls_tool_4(tmp_path):
     rec = reg.get_file("trk_portal_fin")
     assert rec["status"] == "committed"
     assert rec["proposal_mode"] == "finalize"
+
+
+def test_portal_flash_message_and_error_rendering(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_flash.db")
+    source = tmp_path / "flash_media.mp3"
+    source.write_bytes(b"flash media audio")
+    proposal = make_portal_proposal(source, "flash001", RenameMode.INITIAL, needs_review=True)
+    reg.save_proposal(proposal)
+    configure_review_context(registry=reg, media_db_updater_service=MagicMock(), review_root=tmp_path)
+
+    client = TestClient(app)
+    # Test message query parameter renders .alert-success
+    res = client.get("/file/flash001?message=Corrections+saved+successfully.")
+    assert res.status_code == 200
+    assert 'id="flash-message"' in res.text
+    assert "Corrections saved successfully." in res.text
+
+    # Test error query parameter renders .alert-danger
+    res_err = client.get("/file/flash001?error=Cannot+confirm+new+media+item")
+    assert res_err.status_code == 200
+    assert 'id="flash-error"' in res_err.text
+    assert "Cannot confirm new media item" in res_err.text
+
+
+def test_portal_detail_step_ordering_and_gating(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_order.db")
+    source = tmp_path / "order_media.mp3"
+    source.write_bytes(b"order media audio")
+    proposal = make_portal_proposal(source, "order001", RenameMode.INITIAL, needs_review=True)
+    reg.save_proposal(proposal)
+    reg.save_content_review({
+        "tracking_id": "order001",
+        "input_sha256": "order_sha",
+        "transcript_sha256": "order_t_sha",
+        "classification": "KIRTAN_AND_CLASS",
+        "confidence": "HIGH",
+        "mantra_type": "HARE_KRISHNA",
+        "cutter_proposal": {
+            "singing_end_seconds": 100.0,
+            "source_duration_seconds": 500.0,
+            "confidence": "HIGH",
+            "method": "exact_timestamp",
+            "suggested_cut_points": [100.0],
+        },
+        "process_by_tool_6": True,
+        "review_required": False,
+    })
+    reg.save_media_db_review(
+        tracking_id="order001",
+        decision="CONFLICT_WITH_EXISTING",
+        database_state="LIVE",
+        snapshot_timestamp="2026-09-25T12:00:00Z",
+        result_json=json.dumps({
+            "proposed_tool4_action": "needs_review",
+            "candidates": [],
+        }),
+        selected_media_row_id=None,
+        review_required=True,
+    )
+    reg.save_travel_review(
+        tracking_id="order001",
+        decision="LOCATION_CONFIRMED",
+        reference_checksum="abcdef1234567890",
+        reference_row_count=10,
+        result_json=json.dumps({
+            "candidates": [],
+        }),
+    )
+    configure_review_context(registry=reg, media_db_updater_service=MagicMock(), review_root=tmp_path)
+
+    client = TestClient(app)
+    res = client.get("/file/order001")
+    assert res.status_code == 200
+
+    # 1. Verify cards appear in order: Step 1 -> Step 2 -> Step 3 -> Step 4 -> Step 5
+    pos_step1 = res.text.find('id="renamer-card"')
+    pos_step2 = res.text.find('id="content-and-cutter-card"')
+    pos_step3 = res.text.find('id="media-db-card"')
+    pos_step4 = res.text.find('id="travel-schedule-card"')
+    pos_step5 = res.text.find('id="media-db-sync-card"')
+
+    assert pos_step1 != -1 and pos_step2 != -1 and pos_step3 != -1 and pos_step4 != -1 and pos_step5 != -1
+    assert pos_step1 < pos_step2 < pos_step3 < pos_step4 < pos_step5
+
+    # 2. Verify Tool 4 is gated/locked because Step 1 is pending, Step 2 is not split, Step 3 is unconfirmed
+    assert "Step 5 Locked: Prerequisite Decisions Required" in res.text
+    assert "Synchronize Now (Locked)" in res.text
+    assert "Step 1 (Tool 1):" in res.text
+    assert "Step 2 (Tool 6):" in res.text
+    assert "Step 3 (Tool 2):" in res.text
+
