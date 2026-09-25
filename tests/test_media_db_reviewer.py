@@ -3059,3 +3059,70 @@ def test_64_r016_generic_what_class_does_not_create_baserow_candidates_nor_multi
     assert spec_res.renamer_enrichment.confirmed is True
     assert len(spec_res.candidates) == 1
     assert spec_res.candidates[0].field_comparisons["what"].state == FieldComparisonState.AGREES
+
+
+# ---------------------------------------------------------------------------
+# Test 65: Place-only match with conflicting date is not a duplicate candidate
+# ---------------------------------------------------------------------------
+def test_65_place_only_match_with_conflicting_date_must_not_become_candidate():
+    """Verify that rows sharing only place but having a conflicting date/year and no
+
+    direct identity or specific WHAT match are not retained as duplicate candidates.
+    Specifically tests that a 2012 Simhachalam lecture does not conflict with a 2022
+    Simhachalam lecture.
+    """
+    engine = MediaDatabaseReconciliationEngine()
+    parser_res = make_parser_result(
+        tracking_id="simha2012",
+        orig_filename="2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3",
+        date_val="2012-01-02",
+        what_val="CC-Talk",
+        what_category="Caitanya-caritamrta",
+        place="Simhachalam",
+        country="de",
+    )
+
+    snapshot = BaserowSnapshot(
+        snapshot_at="2026-09-25T12:00:00Z",
+        state="LIVE_CURRENT",
+        complete=True,
+        media_rows=[
+            {
+                "id": 9999,
+                "Date": "2022-05-03",
+                "Place": "Simhachalam",
+                "Country": "Germany",
+                "What": "SB 33.26.3",
+                "Title": "HH Kadamba Kanana Maharaj - SB 33.26.3 - 03.05.2022",
+                "Category": "Srimad Bhagavatam",
+            },
+            {
+                "id": 3068,
+                "Date": "2012-01-02",
+                "Place": "Simhachalam",
+                "Country": "Germany",
+                "What": "",
+                "Title": "Nrsimhaksetra, Germany",
+                "Category": "",
+            },
+        ],
+    )
+
+    res = engine.reconcile(parser_res, snapshot)
+
+    # 1. Row 9999 (2022) must NOT be a candidate
+    candidate_ids = [c.media_row_id for c in res.candidates]
+    assert 9999 not in candidate_ids, "2022 row must not be a duplicate candidate for 2012 file"
+
+    # 2. Row 3068 (same date 2012-01-02 + place) IS a candidate
+    assert 3068 in candidate_ids
+
+    # 3. Must not report year conflict with 2022
+    for conflict in res.conflicts:
+        assert "conflicts with database year '2022'" not in conflict
+        assert "SB 33.26.3" not in conflict
+
+    # 4. Result must not be CONFLICT_WITH_EXISTING
+    assert res.decision != ReviewDecision.CONFLICT_WITH_EXISTING
+    assert res.decision == ReviewDecision.PROBABLE_EXISTING_MEDIA
+

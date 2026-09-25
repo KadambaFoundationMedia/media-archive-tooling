@@ -675,6 +675,18 @@ class MediaDatabaseReconciliationEngine:
                 if country_only_date_noise:
                     continue
 
+                # A location hit with a contradictory date and no direct-identity
+                # or specific-WHAT evidence is a different recording at the same
+                # venue, not a candidate duplicate. Keep direct-identity or WHAT
+                # matches as conflicts for review, but discard place-only date conflicts.
+                place_only_date_conflict = (
+                    d_st == FieldComparisonState.CONFLICT
+                    and not identity_evidence
+                    and not what_match
+                )
+                if place_only_date_conflict:
+                    continue
+
                 f_comps["place"] = FieldComparison(
                     field_name="place", state=p_st, local_value=local_place, database_value=row["place"], details=p_det
                 )
