@@ -22,9 +22,12 @@ combinations have promising boundaries, but these release blockers remain:
    sample, manual class start is 150.189 s and the acoustic speech onset is
    150.911 s, yet Tool 6's dry-run begins the class at the later verse-intro
    marker, 183.183 s. Approximately 33 seconds of audible class introduction
-   would be discarded. The class cut must begin at the first verified speech
-   onset; retain a later scripture marker as metadata, not a destructive trim
-   boundary. Add a regression that asserts the preserved class opening.
+   would be discarded. The owner clarified that Tool 6 uses **one cut at the
+   end of singing** (manual mark 149.396 s): the class output begins there,
+   preserving the intervening audio and all opening speech. A later speech or
+   scripture marker is metadata, never a second destructive boundary. Tool 8
+   may edit the class opening later. Remove Tool 6's second-boundary skip and
+   add a regression that asserts both outputs meet at the singing-end point.
 2. **T5-R-007 — Do not two-part-cut Vyasa-puja.** The sample at
    `cutting-samples/Vyasa-puja 2015/ZOOM0004.MP3` was classified as
    `KIRTAN_AND_CLASS` with automatic Tool 6 routing despite its known
@@ -45,7 +48,8 @@ Check whether either proposed boundary removes audible content; route uncertain
 cases to review. Preserve the existing no-live-write benchmark procedure.
 After correcting the three blockers, rerun the five-file benchmark, Tool 6
 dry-runs, focused/full tests and CI, and report each class start as *first
-retained speech* separately from the later verse-introduction marker.
+retained audio at the singing-end cut* separately from speech-onset and later
+verse-introduction markers.
 
 ## Tool 5-to-7 transcription boundary — pending implementation (2026-09-24)
 

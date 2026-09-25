@@ -326,6 +326,14 @@ Tool 5's exact singing-end timestamp can authorize an **automatic** Tool 6 cut
 only with `HIGH` confidence and a matching source fingerprint. Tool 6 cuts at
 that timestamp and may conservatively trim actual leading silence from the
 class output; Tool 5 does not need to supply a second class-start timestamp.
+The first class output sample must be at the same singing-end timestamp: a
+later acoustic speech onset, `Om namo bhagavate`, `we are reading from`, or
+verse introduction is evidence about the recording, **not** permission to
+skip the intervening audio. In the Sweden SB 3.6.6 benchmark in
+`sample-files/cutting-samples/timings.md`, singing ends at 2:29.396 and class
+speech begins at 2:30.189; a verse-introduction detection near 3:03 must
+never move the Tool 6 class output start to 3:03. Preserve prayers, opening
+announcements, and uncertain transition audio for later Tool 8 processing.
 If the exact end is uncertain, Tool 5 must not guess from the coarse bracket:
 retain the file and route it to the portal for waveform/playback review and a
 human-adjusted cut point. Tool 5 itself never cuts or deletes media.
