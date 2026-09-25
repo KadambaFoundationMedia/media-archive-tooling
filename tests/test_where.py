@@ -1,7 +1,9 @@
 import pytest
 from media_archive_tooling.renamer.parser.where import WhereResolver
+from media_archive_tooling.renamer.parser.engine import RenamerParser
 from media_archive_tooling.renamer.models import ResolutionState
 from media_archive_tooling.common.ascii_latin import to_ascii_latin
+from pathlib import Path
 
 
 def test_ascii_latin_transliteration():
@@ -61,3 +63,47 @@ def test_bounded_fuzzy_where():
     assert res.place_location == "Pruhonice"
     assert res.country_iso2 == "cz"
     assert res.state == ResolutionState.PROVISIONAL
+
+
+def test_filename_country_suffix_constrains_location_before_online_lookup():
+    class WrongCountryLookup:
+        def __init__(self):
+            self.calls = 0
+
+        def lookup(self, query):
+            self.calls += 1
+            return {"canonical_place": "杉並区", "country": "Japan", "country_iso2": "jp"}
+
+    lookup = WrongCountryLookup()
+    resolver = WhereResolver(location_lookup_provider=lookup)
+
+    result, remaining = resolver.resolve("Simhachalam_de")
+    assert result.place_location == "Simhachalam"
+    assert result.country == "Germany"
+    assert result.country_iso2 == "de"
+    assert result.state == ResolutionState.EXACT
+    assert remaining == ""
+    assert lookup.calls == 0
+
+    unknown, remaining_unknown = resolver.resolve("UnlistedVillage_de")
+    assert unknown.place_location is None
+    assert unknown.country_iso2 == "de"
+    assert unknown.state == ResolutionState.STRONG
+    assert remaining_unknown == "UnlistedVillage"
+    assert lookup.calls == 0
+
+    conflicting, _ = resolver.resolve("Oslo_de")
+    assert conflicting.place_location is None
+    assert conflicting.country_iso2 == "de"
+    assert conflicting.state == ResolutionState.AMBIGUOUS
+    assert "Oslo-no" in conflicting.alternatives
+    assert lookup.calls == 0
+
+
+def test_cc_talk_sample_country_does_not_follow_unconstrained_geocoder():
+    media = Path("sample-files/cutting-samples/2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3")
+    result = RenamerParser().parse_file(media)
+    assert result.what.evidence[0].source == "category_title_terms"
+    assert result.where.place_location == "Simhachalam"
+    assert result.where.country_iso2 == "de"
+    assert result.where.state == ResolutionState.EXACT

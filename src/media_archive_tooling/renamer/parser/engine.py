@@ -184,7 +184,13 @@ class RenamerParser:
             downstream_routing.append("tool_7_class_classification")
 
         if where_res.state == ResolutionState.AMBIGUOUS:
-            review_reasons.append(f"WHERE resolution is ambiguous near-tie for '{where_res.place_location}' (alternatives: {where_res.alternatives})")
+            if any(ev.source == "filename_country_code" for ev in where_res.evidence):
+                review_reasons.append(
+                    f"WHERE country/place conflict: filename country '{where_res.country_iso2}' "
+                    f"disagrees with {where_res.alternatives}"
+                )
+            else:
+                review_reasons.append(f"WHERE resolution is ambiguous near-tie for '{where_res.place_location}' (alternatives: {where_res.alternatives})")
         elif where_res.state == ResolutionState.PROVISIONAL:
             diagnostic_notes.append(f"WHERE resolution is provisional ({where_res.place_location}-{where_res.country_iso2 or ''})")
             downstream_routing.append("tool_2_3_media_enrichment")

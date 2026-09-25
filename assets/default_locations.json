@@ -102,6 +102,12 @@
     "aliases": ["london"]
   },
   {
+    "canonical_place": "Simhachalam",
+    "country": "Germany",
+    "country_iso2": "de",
+    "aliases": ["simhachalam"]
+  },
+  {
     "canonical_place": "Krsna-Dvur",
     "country": "Czech Republic",
     "country_iso2": "cz",

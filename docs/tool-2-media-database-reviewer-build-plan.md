@@ -800,3 +800,16 @@ The builder may choose ordinary implementation details that do not change behavi
 - equivalent maintained dependencies.
 
 The builder must raise a `Q-###` in the status file instead of guessing if the live Baserow schema or behavior makes an archive/data-semantics requirement impossible or contradictory.
+
+## 38. Category-title lookup requested by Tool 1 (2026-09-25)
+
+Tool 1 may ask Tool 2 for a live, read-only `category_title` lookup while
+finalizing an uncertain title. Return a typed result with matched row ID,
+matched `title_matching_terms` term, exact `category` value, read timestamp,
+and completeness/ambiguity status. Use whole terms/phrases, prefer specific
+matches, and do not infer a unique category from a tie or incomplete read.
+For `2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3`, `CC` must find the owner's
+`category_title` row 5 and category `Caitanya-caritamrta`. Tool 1 gets this
+evidence through Tool 2, without direct Baserow access. Tool 4 consumes and
+revalidates it before writing the existing Media Category select option. See
+Tool 4 plan Section 27; keep Tool 2 strictly read-only.

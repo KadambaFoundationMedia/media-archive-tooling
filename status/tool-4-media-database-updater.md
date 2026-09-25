@@ -10,7 +10,38 @@ Project implementation protocol: `docs/implementation-protocol.md`
 
 ## Current state
 
-Status: `READY_FOR_REVIEW`
+Status: `CHANGES_REQUESTED`
+
+## R-041 — Live `category_title` lookup and Tool 1/2/4 handoff (2026-09-25)
+
+Status: OPEN. Owner-directed correction; see Tool 4 build plan Section 27,
+Tool 1 Section 37, and Tool 2 Section 38. The builder must treat this as a
+persistent `/goal` and continue until the full cross-tool behavior and tests
+are complete, not stop after an isolated alias patch.
+
+Observed dry-run for
+`sample-files/cutting-samples/2012-01-02_KKS_CC-Talk_Simhachalam_de.mp3`:
+Tool 1 recognized a broad CC category but Tool 4 reported
+`Category option 'Chaitanya Charitamrita' not found in live schema`.
+The owner identifies `CC` in live `category_title.title_matching_terms` row 5
+as mapping to `Caitanya-caritamrta`. A read-only live Media schema check
+confirmed that `Caitanya-caritamrta` is an existing Category select option.
+Tool 1 must find `CC-Talk`, ask Tool 2 for this live reference match, and use
+its canonical category in final metadata. Tool 4 must consume and revalidate
+that reference via Tool 2 before proposing/writing the exact existing Media
+option. No direct Tool 1 Baserow call, no new Category option, and no local
+alias-only substitution.
+
+Configuration finding: this checkout does not currently configure
+`BASEROW_CATEGORY_TABLE_ID`; the cached Tool 2 snapshot has zero
+`category_title_rows`. The configured database token's table-list metadata
+request returned HTTP 401. The Builder should establish the supported
+authenticated read path/configuration and report the exact blocker if it
+cannot, without guessing a table ID or marking the requirement complete.
+Row 5 is a **row ID**, not the table ID. Required outcome: full pipeline
+dry-run evidence and hermetic/CI regressions per Section 27; no live sample
+rename or Baserow write during verification. Return `READY_FOR_REVIEW` only
+after implementation, tests, pushed branch, and passing required CI.
 
 ## Tool 7 `description` coordination — future integration (2026-09-24)
 
