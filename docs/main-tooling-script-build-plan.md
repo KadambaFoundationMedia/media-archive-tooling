@@ -371,13 +371,16 @@ Processing file: /absolute/path/file.mp3
 Tool 1 — extracted metadata and proposed/final filename
 Tool 2 — Media database review decision and row/candidates
 Tool 3 — travel schedule decision/evidence
-Tool 4 — create/update/no-op/review and exact written/proposed fields
+Tool 4 — create/update/no-op/review, row number, key fields, and field count
 Result — completed, dry-run, review required, pending sync, or failed
 ```
 
-The tool may update progress on multiple lines. Output must remain understandable without reading the detailed log.
+For Tool 5, normal progress should show one analysis notice and occasional
+heartbeats rather than every short excerpt conversion/transcription event.
+Output must remain understandable without reading the detailed log. Full
+field diffs, intermediate progress events, and diagnostics belong in the log.
 
-`--verbose` additionally shows provenance, candidate summaries, preserved fields, timing, and diagnostic details. It must never print credentials or secret headers.
+`--verbose` additionally shows provenance, candidate summaries, preserved fields, timing, and diagnostic details **on the console only**. It must never print credentials or secret headers. It does not change what is recorded in the log file.
 
 At the end, print a run summary containing:
 
@@ -390,7 +393,7 @@ At the end, print a run summary containing:
 - failed files;
 - skipped unsupported files;
 - log-file path;
-- registry path;
+- registry path in verbose output (and always in the log);
 - review portal command/URL when evaluation items exist.
 
 ---
@@ -402,7 +405,7 @@ Use one persistent append-only log file, not a separate log directory/file for e
 Default path:
 
 ```text
-.renamer/media-archive-tooling.log
+.renamer/logs/media-archive-tooling.log
 ```
 
 `--log-file` may override the path.

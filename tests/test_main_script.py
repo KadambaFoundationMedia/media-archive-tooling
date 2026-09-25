@@ -52,6 +52,7 @@ from media_archive_tooling.orchestrator.models import (
     FileExecutionStatus,
     RunSummary,
     StageName,
+    StageResult,
     WorkflowType,
 )
 from media_archive_tooling.orchestrator.reporter import TerminalReporter
@@ -438,7 +439,7 @@ def test_08_phase_a_all_runs_tools_1_to_4_and_reports_pending_tools_honestly(env
     summary = svc.run([f])
     assert summary.exit_code == 0
     captured = capsys.readouterr().out
-    assert "Processing workflow (Tools 6–11) is pending and not yet installed" in captured
+    assert "Tools 7–11 pending" in captured
     assert len(summary.file_results) == 1
     stage_names = [s.stage_name for s in summary.file_results[0].stage_results]
     assert StageName.TOOL_1_INITIAL in stage_names
@@ -1503,6 +1504,94 @@ def test_52_tool5_progress_is_concise_and_visible(capsys):
         "  Tool 5 — Transcribing on Metal: 30s elapsed",
         "  Tool 5 — Reusing saved transcript",
     ]
+
+
+def test_default_tool5_progress_collapses_excerpt_chatter(capsys, monkeypatch):
+    reporter = TerminalReporter(verbose=False)
+    ticks = iter([0.0, 1.0, 2.0, 31.0, 32.0])
+    monkeypatch.setattr("media_archive_tooling.orchestrator.reporter.time.monotonic", lambda: next(ticks))
+
+    reporter.report_file_start(Path("/archive/class.mp3"), 1)
+    reporter.report_tool5_progress("decode_slice", 0.0, "start")
+    reporter.report_tool5_progress("decode_slice", 0.1, "done")
+    reporter.report_tool5_progress("transcribe_metal", 0.0, "start")
+    reporter.report_tool5_progress("transcribe_metal", 30.0, "heartbeat")
+    reporter.report_tool5_progress("transcribe_metal", 31.0, "done")
+
+    output = capsys.readouterr().out
+    assert output.count("Tool 5 — Analysing audio…") == 1
+    assert output.count("Tool 5 — Still analysing (0:31 elapsed)") == 1
+    assert "decode_slice" not in output
+    assert "finished after" not in output
+
+
+def test_tool4_console_is_short_but_verbose_shows_redacted_field_details(capsys):
+    stage = StageResult(
+        stage_name=StageName.TOOL_4_SYNC,
+        summary="Tool 4 — Media DB: CREATED row #42 [Title='SB 1.2.19', Notes='private text']\n    Verified live row #42: Title='SB 1.2.19'",
+        details={
+            "media_row_id": 42,
+            "fields": {"Title": "SB 1.2.19", "Date": "2022-09-19", "Notes": "Added from archive. Bearer abc123"},
+            "live_row": {"id": 42, "Notes": "private text"},
+        },
+    )
+
+    TerminalReporter(verbose=False).report_stage_result(stage)
+    short_output = capsys.readouterr().out
+    assert "CREATED row #42" in short_output
+    assert "Title=SB 1.2.19" in short_output
+    assert "Verified live row #42" in short_output
+    assert "Notes" not in short_output
+    assert "private text" not in short_output
+
+    TerminalReporter(verbose=True).report_stage_result(stage)
+    verbose_output = capsys.readouterr().out
+    assert "field Notes" in verbose_output
+    assert "[REDACTED]" in verbose_output
+    assert "abc123" not in verbose_output
+    assert "private text" not in verbose_output
+
+
+def test_tool5_progress_events_are_logged_even_without_verbose(env_setup, capsys):
+    media = env_setup["media_dir"] / "class.mp3"
+    media.write_bytes(b"sample audio")
+    tracking_id = "tool5_progress_log"
+    env_setup["registry"].register_file(
+        tracking_id=tracking_id,
+        current_path=media,
+        original_path=media,
+        status="PENDING",
+        source_hash="sample_hash",
+    )
+    result = MagicMock()
+    result.classification.value = "CLASS"
+    result.confidence.value = "HIGH"
+    result.mantra_type.value = "NONE"
+    result.cutter_proposal = None
+    result.process_by_tool_6 = False
+    result.transcript_path = "transcript.json"
+    result.review_required = False
+    result.review_reason = None
+
+    def discover_content(**kwargs):
+        kwargs["progress_callback"]("decode_slice", 0.0, "start")
+        kwargs["progress_callback"]("decode_slice", 0.2, "done")
+        return result
+
+    service = env_setup["service"]
+    service.tool5_service = MagicMock()
+    service.tool5_service.discover_content.side_effect = discover_content
+    service._run_tool_5(media, tracking_id)
+
+    output = capsys.readouterr().out
+    assert output.count("Tool 5 — Analysing audio…") == 1
+    assert "decode_slice" not in output
+    progress_entries = [
+        json.loads(line) for line in env_setup["log_file"].read_text().splitlines()
+        if json.loads(line)["event"] == "TOOL_5_PROGRESS"
+    ]
+    assert [entry["details"]["status"] for entry in progress_entries] == ["start", "done"]
+    assert all(entry["details"]["stage"] == "decode_slice" for entry in progress_entries)
 
 
 def test_53_bounded_evaluation_copy(tmp_path):

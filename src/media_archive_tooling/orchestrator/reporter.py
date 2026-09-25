@@ -1,9 +1,9 @@
 """Terminal progress reporter, verbose inspection, and run summary presentation."""
 from pathlib import Path
-import sys
+import time
 from typing import Any, Dict, List, Optional
 
-from .models import FileExecutionStatus, FileRunResult, RunSummary, StageResult, WorkflowType
+from .models import FileExecutionStatus, FileRunResult, RunSummary, StageName, StageResult, WorkflowType
 from .logger import redact_secrets
 
 
@@ -13,52 +13,122 @@ class TerminalReporter:
     def __init__(self, verbose: bool = False, dry_run: bool = False):
         self.verbose = verbose
         self.dry_run = dry_run
+        self._tool5_started_at: Optional[float] = None
+        self._tool5_last_heartbeat_at: Optional[float] = None
+
+    @staticmethod
+    def _brief(value: Any, limit: int = 120) -> str:
+        clean = " ".join(str(redact_secrets(value)).split())
+        return clean if len(clean) <= limit else clean[: limit - 1] + "…"
+
+    @staticmethod
+    def _clock(seconds: Any) -> str:
+        try:
+            total = max(0, int(float(seconds)))
+        except (TypeError, ValueError):
+            return "?"
+        return f"{total // 60}:{total % 60:02d}"
+
+    def _stage_line(self, result: StageResult) -> str:
+        d = result.details
+        stage = result.stage_name
+        if stage == StageName.TOOL_1_INITIAL and d:
+            return (f"Tool 1 — Renamer: {d.get('when') or 'date unknown'} | "
+                    f"{d.get('what') or 'type unknown'} | {d.get('where') or 'location unknown'}")
+        if stage == StageName.TOOL_2_REVIEW and d.get("decision"):
+            row = f", row #{d['selected_media_row_id']}" if d.get("selected_media_row_id") else ""
+            count = d.get("candidate_count")
+            candidates = f" ({count} candidate{'s' if count != 1 else ''}{row})" if count is not None else row
+            return f"Tool 2 — Media DB: {d['decision']}{candidates}"
+        if stage == StageName.TOOL_3_REVIEW and d.get("decision"):
+            location = f" — {self._brief(d['location'], 70)}" if d.get("location") else ""
+            return f"Tool 3 — Travel Schedule: {d['decision']}{location}"
+        if stage == StageName.TOOL_1_FINALIZE and d.get("proposed_filename"):
+            state = "review" if d.get("needs_review") else "ready"
+            return f"Tool 1 — Final Name: {d['proposed_filename']} ({state})"
+        if stage == StageName.TOOL_4_SYNC:
+            first_line = result.summary.splitlines()[0].split(" [", 1)[0]
+            fields = d.get("fields") or {}
+            if fields:
+                key_fields = [f"{key}={self._brief(fields[key], 48)}" for key in ("Title", "Category", "Date") if key in fields]
+                suffix = "; ".join(key_fields)
+                if suffix:
+                    return f"{first_line} — {suffix} ({len(fields)} fields)"
+                return f"{first_line} ({len(fields)} fields)"
+            return self._brief(first_line, 180)
+        if stage == StageName.TOOL_5_CONTENT_DISCOVERY and d.get("classification"):
+            boundary = f" | cut {self._clock(d['cut_point_seconds'])}" if d.get("cut_point_seconds") is not None else ""
+            route = " | Tool 6 next" if d.get("process_by_tool_6") else " | review" if d.get("review_required") else ""
+            return f"Tool 5 — Content: {d['classification']} ({d.get('confidence', '?')}){boundary}{route}"
+        if stage == StageName.TOOL_6_FILE_CUTTER and d:
+            if d.get("success"):
+                cut = self._clock(d.get("cut_point_seconds"))
+                singing = Path(d.get("singing_output_path") or "").name
+                class_file = Path(d.get("class_output_path") or "").name
+                return f"Tool 6 — Cutter: split at {cut} → {singing} + {class_file}"
+            if d.get("review_required"):
+                return "Tool 6 — Cutter: review required"
+        return self._brief(result.summary.splitlines()[0], 180)
 
     def report_startup(self, workflow: WorkflowType, target_count: Optional[int] = None) -> None:
-        if self.dry_run:
-            print("=== [DRY-RUN MODE] Media Archive Tooling Runner ===")
-            print("Dry-run preview active: no filesystem or Baserow mutations will be made.")
-        else:
-            print("=== [LIVE MODE] Media Archive Tooling Runner ===")
-            print("Operating directly on files; authorized renames and Baserow mutations will occur without prompt.")
-
-        if workflow == WorkflowType.ALL:
-            print("Workflow: all (Tools 1–6 active; Tools 7–11 pending)")
-        elif workflow == WorkflowType.RENAMER:
-            print("Workflow: renamer (Phase A: Tools 1–4 active)")
-        elif workflow == WorkflowType.PROCESSING:
-            print("Workflow: processing (Tools 5–6 active for Phase 1-tracked files; Tools 7–11 pending)")
-
+        mode = "DRY-RUN (no media or Baserow writes)" if self.dry_run else "LIVE (changes apply without prompt)"
+        print(f"Media Archive — {mode} | workflow: {workflow.value}")
         if target_count is not None:
-            print(f"Discovered {target_count} media file(s) for processing.\n")
-        else:
-            print("Incremental streaming target discovery active.\n")
+            print(f"Files: {target_count}")
+        if workflow != WorkflowType.RENAMER:
+            print("Tools 7–11 pending")
+        print()
 
     def report_file_start(self, file_path: Path, index: int, total: Optional[int] = None) -> None:
-        if total is not None:
-            print(f"[{index}/{total}] Processing file: {file_path}")
+        self._tool5_started_at = None
+        self._tool5_last_heartbeat_at = None
+        number = f"{index}/{total}" if total is not None else str(index)
+        if self.verbose:
+            label = str(file_path)
         else:
-            print(f"[{index}] Processing file: {file_path}")
-
+            try:
+                label = str(file_path.relative_to(Path.cwd()))
+            except ValueError:
+                label = str(file_path)
+        print(f"[{number}] {label}")
 
     def report_stage_result(self, result: StageResult) -> None:
-        print(f"  {result.summary}")
+        print(f"  {redact_secrets(self._stage_line(result))}")
+        if result.stage_name == StageName.TOOL_4_SYNC and "Verified live row #" in result.summary:
+            row_id = result.details.get("media_row_id")
+            if row_id:
+                print(f"    Verified live row #{row_id}")
         if self.verbose and result.details:
             clean_details = redact_secrets(result.details)
             for k, v in clean_details.items():
-                if result.summary.startswith("Tool 4 —") and k in {"fields", "live_row"}:
-                    # Tool 4 already prints these values in its summary. Avoid
-                    # repeating large Notes fields and nested Baserow rows.
-                    continue
-                if v:
-                    print(f"    - {k}: {v}")
+                if k == "live_row":
+                    print("    - live_row: full readback in log file")
+                elif k == "fields" and isinstance(v, dict):
+                    for field, value in v.items():
+                        print(f"    - field {field}: {self._brief(value, 180)}")
+                elif v is not None:
+                    print(f"    - {k}: {self._brief(v, 180)}")
 
     def report_tool5_progress(self, stage: str, elapsed_seconds: float, status: str) -> None:
+        if not self.verbose:
+            if stage == "cache":
+                print("  Tool 5 — Reusing cached analysis", flush=True)
+                return
+            now = time.monotonic()
+            if self._tool5_started_at is None:
+                self._tool5_started_at = now
+                self._tool5_last_heartbeat_at = now
+                print("  Tool 5 — Analysing audio…", flush=True)
+            elif self._tool5_last_heartbeat_at is not None and now - self._tool5_last_heartbeat_at >= 30:
+                self._tool5_last_heartbeat_at = now
+                print(f"  Tool 5 — Still analysing ({self._clock(now - self._tool5_started_at)} elapsed)", flush=True)
+            return
         if stage == "cache":
             print("  Tool 5 — Reusing saved transcript", flush=True)
             return
         labels = {
             "decode": "Converting audio",
+            "decode_slice": "Decoding excerpt",
             "transcribe_metal": "Transcribing on Metal",
             "transcribe_cpu": "Transcribing on CPU",
         }
@@ -80,8 +150,12 @@ class TerminalReporter:
         elif file_result.status == FileExecutionStatus.UNCHANGED:
             print(f"  Result: {status_label} (already has canonical name and sync state)")
         elif file_result.status == FileExecutionStatus.REVIEW_REQUIRED:
-            reasons_str = "; ".join(file_result.review_reasons) if file_result.review_reasons else "Needs review"
-            print(f"  Result: {status_label} — {reasons_str}")
+            print(f"  Result: {status_label} ({len(file_result.review_reasons)} reason(s); see review portal)")
+            for reason in file_result.review_reasons[:2 if not self.verbose else None]:
+                short_reason = str(reason).split(" (", 1)[0] if not self.verbose else reason
+                print(f"    - {self._brief(short_reason, 120 if not self.verbose else 240)}")
+            if not self.verbose and len(file_result.review_reasons) > 2:
+                print(f"    - {len(file_result.review_reasons) - 2} more in log/portal")
         elif file_result.status == FileExecutionStatus.PENDING_SYNC:
             print(f"  Result: {status_label} (file renamed; Baserow sync pending/retryable)")
         elif file_result.status == FileExecutionStatus.DATABASE_UNAVAILABLE:
@@ -109,29 +183,16 @@ class TerminalReporter:
             print()
 
     def report_summary(self, summary: RunSummary) -> None:
-        print("===================== Run Summary =====================")
-        print(f"Run ID:                      {summary.run_id}")
-        print(f"Workflow:                    {summary.workflow.value}")
-        print(f"Mode:                        {'DRY-RUN' if summary.is_dry_run else 'LIVE'}")
-        print(f"Total Discovered Media:      {summary.total_discovered}")
-        print(f"Completed (Committed):       {summary.completed}")
-        print(f"Dry-Run Previews:            {summary.dry_run_previews}")
-        print(f"Unchanged / No-Op:           {summary.unchanged}")
-        print(f"Items Requiring Evaluation:  {summary.review_required}")
-        print(f"Pending Baserow Sync:        {summary.pending_sync}")
-        if summary.database_unavailable > 0:
-            print(f"Database Unavailable:        {summary.database_unavailable}")
-        if summary.failed_retryable > 0:
-            print(f"Failed Retryable Sync:       {summary.failed_retryable}")
-        if summary.failed_blocked > 0:
-            print(f"Failed Blocked Sync:         {summary.failed_blocked}")
-        print(f"Failed Files:                {summary.failed}")
-        print(f"Skipped Unsupported Files:   {summary.skipped_unsupported}")
-        print(f"Log File:                    {summary.log_path}")
-        print(f"Registry Database:           {summary.registry_path}")
-
-        if summary.workflow in (WorkflowType.ALL, WorkflowType.PROCESSING):
-            print("Note:                        Processing workflow (Tools 6–11) is pending and not yet installed.")
+        print(f"Summary: {summary.total_discovered} file(s) | {summary.completed} completed | "
+              f"{summary.dry_run_previews} previews | {summary.review_required} review | {summary.failed} failed")
+        if summary.pending_sync or summary.database_unavailable or summary.failed_retryable or summary.failed_blocked:
+            print(f"Sync: {summary.pending_sync} pending | {summary.database_unavailable} DB unavailable | "
+                  f"{summary.failed_retryable} retryable | {summary.failed_blocked} blocked")
+        if summary.unchanged or summary.skipped_unsupported:
+            print(f"Other: {summary.unchanged} unchanged | {summary.skipped_unsupported} unsupported")
+        print(f"Log: {summary.log_path}")
+        if self.verbose:
+            print(f"Run ID: {summary.run_id} | Registry: {summary.registry_path}")
 
         needs_eval = (
             summary.review_required > 0
@@ -141,7 +202,4 @@ class TerminalReporter:
             or summary.failed_blocked > 0
         )
         if needs_eval:
-            print("\nEvaluation required:")
-            print("  Items have been routed to the local review portal queue.")
-            print(f"  To review, run: media-archive review --registry-path \"{summary.registry_path}\"")
-        print("=======================================================")
+            print(f"Review: ./run-media-archive.sh --review-only --registry-path \"{summary.registry_path}\"")

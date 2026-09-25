@@ -138,7 +138,7 @@ command, and it does not accept file targets.
 | Option | Meaning |
 | --- | --- |
 | `--dry-run` | Preview final filenames and Tool 4 changes without renaming files or mutating Baserow. |
-| `--verbose` | Show additional structured details for every tool stage. |
+| `--verbose` | Show extra diagnostics on the console only; the log file is equally detailed in either mode. |
 | `--workflow all` | Default: runs the currently integrated Tools 1–6 when applicable. |
 | `--workflow renamer` | Runs the renaming/database workflow: Tools 1–4. |
 | `--workflow processing` | Runs Tools 5–6 when applicable for a file already registered by Phase 1. |
@@ -161,14 +161,18 @@ For each file, terminal output separates the stages and summarizes:
 - Tool 3 travel-schedule result;
 - whether Tool 1 can safely commit the rename;
 - Tool 4 `CREATE`, `UPDATE`, `NOOP`, conflict, or blocked result;
-- fields that would be or were written;
+- key planned/written fields (Title, Category, Date) and the field count;
 - the created or selected Baserow row number;
-- verified live values after a successful write;
-- Tool 5 content type and detected mantra when run;
+- confirmation of the live row after a successful write;
+- Tool 5 content type, confidence, and cut point when run;
 - Tool 6 cut result and both output names when a safe split applies.
 
-Detailed structured events from all tools are appended to one log file. With
-the default configuration it is `.renamer/logs/media-archive-tooling.log`.
+Default Tool 5 progress is one analysis notice plus a heartbeat about every
+30 seconds during long work, instead of one line per short audio excerpt.
+Use `--verbose` to see per-excerpt timings and additional field details in the
+console. Detailed structured events from all tools are appended to one log file
+in either mode. By default, that file is
+`.renamer/logs/media-archive-tooling.log`.
 Registry state is stored in SQLite so interrupted or retryable Tool 4 work
 remains recoverable.
 

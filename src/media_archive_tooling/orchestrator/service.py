@@ -440,14 +440,13 @@ class MainToolingScriptService:
         try:
             def report_progress(stage: str, elapsed_seconds: float, status: str) -> None:
                 self.reporter.report_tool5_progress(stage, elapsed_seconds, status)
-                if status in {"heartbeat", "done", "failed"}:
-                    self.logger.info(
-                        "TOOL_5_PROGRESS",
-                        tool="tool_5",
-                        file_path=path,
-                        tracking_id=tracking_id,
-                        details={"stage": stage, "status": status, "elapsed_seconds": round(elapsed_seconds, 1)},
-                    )
+                self.logger.info(
+                    "TOOL_5_PROGRESS",
+                    tool="tool_5",
+                    file_path=path,
+                    tracking_id=tracking_id,
+                    details={"stage": stage, "status": status, "elapsed_seconds": round(elapsed_seconds, 1)},
+                )
 
             content_res = self.tool5_service.discover_content(
                 target=path,
@@ -471,6 +470,7 @@ class MainToolingScriptService:
                     "confidence": content_res.confidence.value,
                     "mantra_type": content_res.mantra_type.value,
                     "process_by_tool_6": content_res.process_by_tool_6,
+                    "cut_point_seconds": content_res.cutter_proposal.singing_end_seconds if content_res.cutter_proposal else None,
                     "transcript_path": content_res.transcript_path,
                     "review_required": content_res.review_required,
                     "review_reason": content_res.review_reason,
