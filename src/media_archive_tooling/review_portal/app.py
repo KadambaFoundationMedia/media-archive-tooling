@@ -486,10 +486,10 @@ def media_db_action(
             reviewer="review_portal",
         )
         file_rec = service.registry.get_file(tracking_id)
-        if action in ("confirm_existing", "confirm_new", "confirm_new_force"):
+        if file_rec and file_rec.get("status") in ("approved", "committed"):
             service.registry.update_file_status(
                 tracking_id=tracking_id,
-                status="approved",
+                status=file_rec.get("status"),
                 needs_review=False,
                 review_reasons=[],
             )
@@ -788,15 +788,34 @@ def update_file(
             custom_proposed_filename=proposed_filename,
             reviewer="review_portal",
         )
-        if action == "approve" and media_row_id:
+        if action == "approve" and media_row_id is not None:
             try:
                 media_svc = get_media_db_service()
-                media_svc.apply_human_decision(
-                    tracking_id=tracking_id,
-                    action="confirm_existing",
-                    media_row_id=media_row_id,
-                    reviewer="review_portal",
-                )
+                if int(media_row_id) == 0:
+                    media_svc.apply_human_decision(
+                        tracking_id=tracking_id,
+                        action="confirm_new",
+                        reviewer="review_portal",
+                    )
+                else:
+                    media_svc.apply_human_decision(
+                        tracking_id=tracking_id,
+                        action="confirm_existing",
+                        media_row_id=int(media_row_id),
+                        reviewer="review_portal",
+                    )
+                    try:
+                        updater = get_media_db_updater_service()
+                        updater.apply_association_approval(
+                            tracking_id=tracking_id,
+                            selected_media_row_id=int(media_row_id),
+                            reviewed_candidate_row_id=int(media_row_id),
+                            reviewer="review_portal",
+                            commit=False,
+                        )
+                    except Exception as e_up:
+                        logger.warning("Could not pre-record association approval: %s", e_up)
+
                 service.registry.update_file_status(
                     tracking_id=tracking_id,
                     status="approved",

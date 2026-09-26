@@ -597,13 +597,8 @@
                     <input type="text" name="proposed_filename" value="{{ file.proposed_filename }}" style="font-family: monospace; font-weight: bold;">
                 </div>
 
-                {% if media_db_review and media_db_review.selected_media_row_id %}
-                <input type="hidden" name="media_row_id" value="{{ media_db_review.selected_media_row_id }}">
-                {% elif media_db_review and media_db_review.result.candidates %}
-                <input type="hidden" name="media_row_id" value="{{ media_db_review.result.candidates[0].media_row_id }}">
-                {% endif %}
-            </form>
-        </div>
+                </div>
+            </div>
 
         <!-- Section B: Tool 2 — Baserow Media Database Reconciliation -->
         <div id="media-db-card" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
@@ -640,6 +635,7 @@
             <table>
                 <thead>
                     <tr>
+                        <th style="width: 70px; text-align: center;">Match</th>
                         <th>Row ID</th>
                         <th>Date</th>
                         <th>Title / What</th>
@@ -651,10 +647,13 @@
                 <tbody>
                     {% for cand in media_db_review.result.candidates %}
                     <tr {% if media_db_review.selected_media_row_id == cand.media_row_id %}style="background: rgba(34, 197, 94, 0.08);"{% endif %}>
+                        <td style="text-align: center;">
+                            <input type="radio" form="step1-update-form" name="media_row_id" value="{{ cand.media_row_id }}" id="cand_radio_{{ cand.media_row_id }}" {% if (media_db_review.selected_media_row_id == cand.media_row_id) or (not media_db_review.selected_media_row_id and loop.first) %}checked{% endif %}>
+                        </td>
                         <td>
-                            <strong>#{{ cand.media_row_id }}</strong>
+                            <label for="cand_radio_{{ cand.media_row_id }}" style="cursor: pointer; margin: 0; font-weight: bold;">#{{ cand.media_row_id }}</label>
                             {% if media_db_review.selected_media_row_id == cand.media_row_id %}
-                            <div style="color: var(--success-green); font-size: 11px; font-weight: bold;">[SELECTED]</div>
+                            <div style="color: var(--success-green); font-size: 11px; font-weight: bold;">[MATCHED]</div>
                             {% endif %}
                         </td>
                         <td>{{ cand.normalized_row.date or "—" }}</td>
@@ -679,24 +678,16 @@
             </table>
             {% endif %}
 
-            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-action" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color);">
-                <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                    <button type="submit" name="action" value="recheck_live" class="btn" style="background: #0284c7; color: white;" title="Query live Baserow database now">Re-check Live Database</button>
-                    {% if media_db_review.result.candidates %}
-                    <label style="margin: 0; font-weight: normal; display: inline-flex; align-items: center; gap: 6px;">Confirm Candidate ID:
-                        <input type="number" name="media_row_id" value="{{ media_db_review.selected_media_row_id or (media_db_review.result.candidates[0].media_row_id if media_db_review.result.candidates else '') }}" style="width: 100px; padding: 6px; display: inline-block;">
-                    </label>
-                    <button type="submit" name="action" value="confirm_existing" class="btn btn-success">Confirm Existing Row</button>
-                    {% endif %}
-                    <button type="submit" name="action" value="confirm_new" class="btn btn-primary">Confirm New Media Item</button>
-                    <button type="submit" name="action" value="confirm_new_force" class="btn" style="border: 1px dashed var(--border-color); font-size: 12px;" title="Confirm as new even if database search is offline">Confirm New (Offline / Force)</button>
-                    {% if media_db_review.decision == 'EXISTING_MEDIA_MATCH' or (media_db_review.result.renamer_enrichment and media_db_review.result.renamer_enrichment.confirmed) %}
-                    <button type="button" class="btn" disabled title="Cannot defer an already confirmed media association">Defer Decision</button>
-                    {% else %}
-                    <button type="submit" name="action" value="defer" class="btn">Defer Decision</button>
-                    {% endif %}
-                </div>
-            </form>
+            <div style="margin-top: 14px; padding: 10px 14px; background: rgba(0,0,0,0.02); border: 1px dashed var(--border-color); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: normal; margin: 0;">
+                    <input type="radio" form="step1-update-form" name="media_row_id" value="0" id="cand_radio_new" {% if media_db_review and media_db_review.decision == 'NEW_MEDIA_CANDIDATE' %}checked{% endif %}>
+                    <span><strong>No matching row in Baserow</strong> &mdash; confirm as new media item in Tool 4</span>
+                </label>
+                <form method="POST" action="/file/{{ file.tracking_id }}/media-db-action" style="margin: 0; display: inline;">
+                    <input type="hidden" name="action" value="recheck_live">
+                    <button type="submit" class="btn" style="background: #0284c7; color: white; padding: 4px 12px; font-size: 12px;" title="Query live Baserow database now">Re-check Live Database</button>
+                </form>
+            </div>
             {% else %}
             <div class="muted-text" style="font-size: 13px;">No media database review available.</div>
             {% endif %}
@@ -796,10 +787,11 @@
 
         <!-- Single Unified Approval Form for Tools 1, 2, 3 -->
         <div style="display: flex; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--border-color); flex-wrap: wrap; align-items: center;">
+            <button type="submit" form="step1-update-form" name="action" value="approve" class="btn btn-success" style="font-weight: 600; font-size: 14px; padding: 10px 22px;">✓ Approve Step 1 (Canonical Identity, Baserow Row &amp; Schedule)</button>
             <button type="submit" form="step1-update-form" name="action" value="save" class="btn btn-primary">Save Corrections</button>
-            <button type="submit" form="step1-update-form" name="action" value="approve" class="btn btn-success" style="font-weight: 600;">Approve Canonical Metadata &amp; Schedule</button>
             <button type="submit" form="step1-update-form" name="action" value="defer" class="btn">Defer Decision</button>
         </div>
+        </form>
     </div>
 
     <!-- ===================================================================== -->
@@ -813,7 +805,7 @@
         <div class="step-header">
             <h2>
                 <span class="step-num" style="background: #0284c7;">2</span>
-                Step 2: Tool 4 — Baserow Media Database Master Synchronization
+                Step 2: Tool 4: Media Database Synchronization
             </h2>
             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                 {% if media_db_sync %}
@@ -841,14 +833,9 @@
                 To protect the integrity of the live Baserow database, synchronization can only proceed after previous tool steps are resolved:
             </p>
             <ul>
-                {% if not is_step1_ready %}
+                {% if not is_step1_ready or not is_tool2_ready %}
                 <li>
-                    <strong>Step 1 (Tool 1 &amp; 3):</strong> Canonical identity &amp; schedule proposal is not yet approved (Current status: <code>{{ file.status }}</code>). Click <em>Approve Canonical Metadata &amp; Schedule</em> in Step 1.
-                </li>
-                {% endif %}
-                {% if not is_tool2_ready %}
-                <li>
-                    <strong>Step 1 (Tool 2):</strong> Baserow Media row association is unconfirmed (Current decision: <code>{{ media_db_review.decision if media_db_review else 'UNRESOLVED' }}</code>{% if media_db_review and media_db_review.database_state in ['DATABASE_UNAVAILABLE', 'UNAVAILABLE'] %} &middot; Database was unreachable{% endif %}). Confirm matching row or click <em>Confirm New Media Item</em> in Tool 2 above.
+                    <strong>Step 1:</strong> Canonical identity, Baserow row matching, and schedule verification are not yet approved. Select a matching row (or new media) and click <em>Approve Step 1</em> above.
                 </li>
                 {% endif %}
             </ul>

@@ -237,9 +237,13 @@ class MediaDatabaseUpdaterService:
                 eff_audio_file_path = split_source.get("class_path")
 
         eff_what_category = what_data.get("category")
-        if prior_req and prior_req.get("what_category"):
+        if t2_rec and isinstance(t2_rec.get("result"), dict):
+            t2_enr = t2_rec["result"].get("renamer_enrichment") or {}
+            if t2_enr.get("confirmed") and t2_enr.get("category"):
+                eff_what_category = t2_enr.get("category")
+        if not eff_what_category and prior_req and prior_req.get("what_category"):
             eff_what_category = prior_req.get("what_category")
-        elif is_singing_split:
+        elif not eff_what_category and is_singing_split:
             eff_what_category = "Kirtan"
 
         eff_what_val = what_data.get("selected_value") or file_rec.get("what_val")
@@ -257,6 +261,38 @@ class MediaDatabaseUpdaterService:
                 if prior_req and prior_req.get("tool2_decision"):
                     eff_t2_decision = prior_req.get("tool2_decision")
                     eff_selected_row_id = eff_selected_row_id or prior_req.get("selected_media_row_id")
+
+            if not association_approval and eff_selected_row_id:
+                # Only auto-attach if a human explicitly confirmed this association
+                review_actions = self.registry.get_review_actions(tracking_id)
+                has_human_confirmation = any(
+                    a.get("action") in ("media_db_confirm_existing", "media_db_confirm_new")
+                    for a in (review_actions or [])
+                )
+                if has_human_confirmation:
+                    precond_fn = ""
+                    if t2_rec and isinstance(t2_rec.get("result"), dict):
+                        for cand in t2_rec["result"].get("candidates", []):
+                            if cand.get("media_row_id") == eff_selected_row_id:
+                                raw_r = cand.get("raw_row") or {}
+                                precond_fn = raw_r.get("filename") or raw_r.get("Filename") or ""
+                                break
+                    if hasattr(self.write_adapter, "fetch_row_raw"):
+                        try:
+                            r_raw = self.write_adapter.fetch_row_raw(eff_selected_row_id)
+                            if isinstance(r_raw, dict):
+                                precond_fn = r_raw.get("Filename") or r_raw.get("filename") or ""
+                        except Exception:
+                            pass
+                    association_approval = AssociationApproval(
+                        selected_media_row_id=eff_selected_row_id,
+                        action=FieldApprovalAction.CHOOSE_ASSOCIATION,
+                        has_reviewed_precondition=True,
+                        reviewed_candidate_row_id=eff_selected_row_id,
+                        reviewed_precondition_filename=str(precond_fn or ""),
+                        reviewer="review_portal",
+                        reviewed_at=datetime.now(timezone.utc).isoformat(),
+                    )
 
         # Resolve source record if tracking_id is a split child
         source_rec = None

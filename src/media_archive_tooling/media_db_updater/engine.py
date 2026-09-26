@@ -461,8 +461,13 @@ class MediaDatabaseUpdateEngine:
             return None, conflict
 
         # 1. Check for category_title_reference evidence in request provenance
+        # If Tool 2 media review confirmed an existing row, do not override with unconfirmed category_title regex
+        has_tool2_confirmed = any(
+            (ev.get("source") if isinstance(ev, dict) else getattr(ev, "source", None)) == "tool_2_media_database_review"
+            for ev in (request.what_provenance or [])
+        )
         cat_ev = None
-        if request.what_provenance:
+        if request.what_provenance and not has_tool2_confirmed:
             for ev in request.what_provenance:
                 src = ev.get("source") if isinstance(ev, dict) else getattr(ev, "source", None)
                 if src in ("category_title_reference", "baserow_category_title"):
@@ -612,7 +617,7 @@ class MediaDatabaseUpdateEngine:
                             f"Reviewed candidate row ID {assoc_approval.reviewed_candidate_row_id} does not match live row ID {live_row.get('id')}"
                         ],
                     ), request)
-                if not assoc_approval.reviewed_precondition_filename:
+                if assoc_approval.reviewed_precondition_filename is None:
                     return self._enrich_result(MediaDbSyncResult(
                         tracking_id=request.tracking_id,
                         status=SyncStatus.REVIEW_REQUIRED,
@@ -1275,6 +1280,13 @@ class MediaDatabaseUpdateEngine:
                     # title may fill an empty title but cannot replace one
                     # without a field-specific human approval.
                     diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
+                elif (
+                    _normalize_title_text(curr_title) in _normalize_title_text(title_val)
+                    or _normalize_title_text(title_val) in _normalize_title_text(curr_title)
+                    or request.get_association_approval() is not None
+                ):
+                    # Existing Baserow metadata is leading; preserve existing title unless explicitly approved for change
+                    diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=curr_title, action=FieldAction.PRESERVED))
                 else:
                     conflicts.append(f"Title conflict: DB has '{curr_title}', incoming resolved '{title_val}'")
                     diffs.append(FieldDiff(field_name="Title", old_value=curr_title, new_value=title_val, action=FieldAction.CONFLICT))
@@ -1323,6 +1335,9 @@ class MediaDatabaseUpdateEngine:
                 if not curr_cat:
                     diffs.append(FieldDiff(field_name="Category", old_value=None, new_value=matched_cat, action=FieldAction.SET))
                 elif _normalize_category_key(curr_cat) == _normalize_category_key(matched_cat):
+                    diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
+                elif request.get_association_approval() is not None:
+                    # Existing Baserow metadata is leading; preserve existing category when associating
                     diffs.append(FieldDiff(field_name="Category", old_value=curr_cat, new_value=curr_cat, action=FieldAction.PRESERVED))
                 else:
                     conflicts.append(f"Category conflict: DB has '{curr_cat}', incoming is '{matched_cat}'")
@@ -1998,7 +2013,7 @@ class MediaDatabaseUpdateEngine:
                         f"Reviewed candidate row ID {assoc_approval.reviewed_candidate_row_id} does not match live row ID {fresh_row.get('id')}"
                     ],
                 ), request)
-            if not assoc_approval.reviewed_precondition_filename:
+            if assoc_approval.reviewed_precondition_filename is None:
                 return self._enrich_result(MediaDbSyncResult(
                     tracking_id=request.tracking_id,
                     status=SyncStatus.REVIEW_REQUIRED,

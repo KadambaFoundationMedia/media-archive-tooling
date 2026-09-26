@@ -70,6 +70,125 @@ class MediaDatabaseReviewService:
         parser_res = ParserResult.model_validate(record["parser_result"])
         snapshot = _load_snapshot_for_parser_res(self.provider, parser_res)
 
+        # Check if this file already has a confirmed association in the registry
+        stored = self.registry.get_media_db_review(tracking_id)
+        confirmed_row_id = None
+        has_confirmed_row = False
+        is_confirmed_new = False
+        if stored:
+            s_dec = stored.get("decision")
+            s_row = stored.get("selected_media_row_id")
+            s_res = stored.get("result") or {}
+            if isinstance(s_res, str):
+                try:
+                    s_res = json.loads(s_res)
+                except Exception:
+                    s_res = {}
+            renamer_enr = s_res.get("renamer_enrichment") or {}
+            if s_row is not None or s_dec == ReviewDecision.EXISTING_MEDIA_MATCH.value or renamer_enr.get("confirmed"):
+                has_confirmed_row = True
+                confirmed_row_id = s_row or renamer_enr.get("media_row_id")
+            elif s_dec in (ReviewDecision.NEW_MEDIA_CANDIDATE.value, "CONFIRMED_NEW"):
+                is_confirmed_new = True
+
+        if not has_confirmed_row:
+            actions = self.registry.get_review_actions(tracking_id)
+            for act in reversed(actions):
+                a_name = act.get("action")
+                changes = act.get("changes") or {}
+                if isinstance(changes, str):
+                    try:
+                        changes = json.loads(changes)
+                    except Exception:
+                        changes = {}
+                if a_name == "media_db_confirm_existing" and changes.get("selected_media_row_id"):
+                    has_confirmed_row = True
+                    confirmed_row_id = changes["selected_media_row_id"]
+                    break
+                elif a_name in ("media_db_confirm_new", "media_db_confirm_new_force"):
+                    is_confirmed_new = True
+                    break
+
+        if has_confirmed_row and confirmed_row_id:
+            try:
+                live_row = None
+                if hasattr(self.provider, "fetch_media_row_live"):
+                    try:
+                        res_row = self.provider.fetch_media_row_live(confirmed_row_id)
+                        if isinstance(res_row, dict):
+                            live_row = res_row
+                    except Exception as e:
+                        logger.warning(f"Live fetch for confirmed row {confirmed_row_id} failed: {e}")
+                if not live_row and hasattr(self.provider, "load_snapshot"):
+                    snapshot = self.provider.load_snapshot()
+                    for r in getattr(snapshot, "media_rows", []):
+                        if isinstance(r, dict) and r.get("id") == confirmed_row_id:
+                            from .baserow_provider import normalize_media_row
+                            live_row = normalize_media_row(r)
+                            break
+                if live_row:
+                    now_str = datetime.now(timezone.utc).isoformat()
+                    local_date = parser_res.when.selected_value if parser_res.when else None
+                    local_what = parser_res.what.selected_value if parser_res.what else None
+                    local_place = parser_res.where.place_location if parser_res.where else None
+                    local_country = parser_res.where.country_iso2 if parser_res.where else None
+                    d_st, d_det = _compare_dates(local_date, live_row.get("date"))
+                    p_st, p_det = _compare_places(local_place, local_country, live_row.get("place"), live_row.get("country"))
+                    
+                    has_fatal_conflict = (d_st == FieldComparisonState.CONFLICT or p_st == FieldComparisonState.CONFLICT)
+                    if not has_fatal_conflict:
+                        title_full = live_row.get("title") or ""
+                        what_val = compose_what_val(local_what, title_full)
+                        where_val = None
+                        if live_row.get("place"):
+                            where_val = f"{live_row['place']}-{live_row.get('country') or ''}".strip("-")
+                        elif local_place:
+                            where_val = f"{local_place}-{local_country or ''}".strip("-")
+
+                        result = MediaDatabaseReviewResult(
+                            tracking_id=tracking_id,
+                            decision=ReviewDecision.EXISTING_MEDIA_MATCH,
+                            selected_media_row_id=confirmed_row_id,
+                            decision_state=f"Human confirmed association with Media row {confirmed_row_id} (revalidated live)",
+                            review_required=False,
+                            review_required_now=False,
+                            review_reasons=[],
+                            database_state="LIVE_CURRENT",
+                            baserow_read_at=now_str,
+                            database_snapshot_at=now_str,
+                            snapshot_complete=True,
+                            live_read_complete=True,
+                            baserow_check_complete=True,
+                            proposed_tool4_action=Tool4Action.ENRICH_EXISTING,
+                            candidates=s_res.get("candidates", []),
+                            selected_field_evidence=s_res.get("selected_field_evidence", {}),
+                            renamer_enrichment=RenamerEnrichment(
+                                confirmed=True,
+                                media_row_id=confirmed_row_id,
+                                when_val=live_row.get("date") or local_date,
+                                what_val=what_val,
+                                title_full=title_full,
+                                where_val=where_val,
+                                category=live_row.get("category"),
+                                source_identifiers=live_row.get("source_ids") or [],
+                                evidence=[f"human_confirmed_media_row:{confirmed_row_id}", f"live_revalidated:{now_str}"],
+                                baserow_read_at=now_str,
+                                live_read_complete=True,
+                            ),
+                        )
+                        self.registry.save_media_db_review(
+                            tracking_id=tracking_id,
+                            decision=result.decision.value,
+                            database_state=result.database_state,
+                            snapshot_timestamp=result.database_snapshot_at,
+                            result_json=result.model_dump_json(),
+                            selected_media_row_id=result.selected_media_row_id,
+                            review_required=result.review_required,
+                        )
+                        return result
+            except Exception as e:
+                logger.warning(f"Error revalidating confirmed row {confirmed_row_id}: {e}")
+
         result = self.engine.reconcile(parser_res, snapshot)
 
         # Persist to local registry
