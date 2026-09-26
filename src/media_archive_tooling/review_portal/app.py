@@ -1,9 +1,12 @@
 import json
+import logging
 import math
 import re
 from pathlib import Path
 from typing import Any, List, Optional
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
@@ -69,7 +72,10 @@ def get_file_cutter_service() -> Any:
     global _file_cutter_service
     if _file_cutter_service is None:
         from ..file_cutter.service import FileCutterService
-        _file_cutter_service = FileCutterService(registry=get_service().registry)
+        _file_cutter_service = FileCutterService(
+            registry=get_service().registry,
+            media_db_service=get_media_db_updater_service(),
+        )
     return _file_cutter_service
 
 
@@ -315,6 +321,8 @@ def file_detail(request: Request, tracking_id: str, message: Optional[str] = Non
     content_review = service.registry.get_content_review(tracking_id)
     file_split = service.registry.get_file_split_by_source(tracking_id)
     human_cut_decision = service.registry.get_human_cut_decision(tracking_id)
+    singing_sync = service.registry.get_media_db_sync(file_split["singing_tracking_id"]) if file_split and file_split.get("singing_tracking_id") else None
+    class_sync = service.registry.get_media_db_sync(file_split["class_tracking_id"]) if file_split and file_split.get("class_tracking_id") else None
     audio_path = _resolve_audio_path(service.registry, tracking_id)
     has_audio = audio_path is not None and audio_path.exists()
     return templates.TemplateResponse(
@@ -328,6 +336,8 @@ def file_detail(request: Request, tracking_id: str, message: Optional[str] = Non
             "content_review": content_review,
             "file_split": file_split,
             "human_cut_decision": human_cut_decision,
+            "singing_sync": singing_sync,
+            "class_sync": class_sync,
             "has_audio": has_audio,
             "message": message,
             "error": error,
@@ -476,7 +486,14 @@ def media_db_action(
             reviewer="review_portal",
         )
         file_rec = service.registry.get_file(tracking_id)
-        if file_rec and file_rec.get("review_reasons"):
+        if action in ("confirm_existing", "confirm_new", "confirm_new_force"):
+            service.registry.update_file_status(
+                tracking_id=tracking_id,
+                status="approved",
+                needs_review=False,
+                review_reasons=[],
+            )
+        elif file_rec and file_rec.get("review_reasons"):
             cleaned_reasons = [r for r in file_rec["review_reasons"] if "DATABASE_UNAVAILABLE" not in r]
             if len(cleaned_reasons) != len(file_rec["review_reasons"]):
                 service.registry.update_file_status(
@@ -519,14 +536,65 @@ def media_db_sync(
         elif res.status == SyncStatus.REVIEW_REQUIRED:
             notes = "; ".join(res.diagnostic_notes) if res.diagnostic_notes else "Review required before synchronizing with Baserow"
             return _detail_redirect(tracking_id, error=f"Sync requires review: {notes}")
+        elif not commit:
+            return _detail_redirect(tracking_id, message=f"Sync preview generated ({res.operation.value}). Review field diffs below.")
         elif res.status == SyncStatus.SYNCED or getattr(res, "operation", None) == SyncOperation.NOOP:
             if getattr(res, "operation", None) == SyncOperation.NOOP:
                 return _detail_redirect(tracking_id, message="Baserow database already in sync (NOOP).")
             return _detail_redirect(tracking_id, message=f"Baserow database sync committed successfully to row #{res.media_row_id}.")
         else:
-            return _detail_redirect(tracking_id, message="Database sync preview generated.")
+            return _detail_redirect(tracking_id, message=f"Database sync completed with status {res.status.value}.")
     except Exception as e:
         return _detail_redirect(tracking_id, error=str(e))
+
+
+@app.post("/file/{tracking_id}/media-db-sync-post-cut")
+def media_db_sync_post_cut(
+    tracking_id: str,
+):
+    service = get_service()
+    updater = get_media_db_updater_service()
+    split = service.registry.get_file_split_by_source(tracking_id)
+    if not split:
+        return _detail_redirect(tracking_id, error="Cannot post-cut sync: file has not been split.")
+
+    class_tid = split.get("class_tracking_id")
+    singing_tid = split.get("singing_tracking_id")
+
+    from ..media_db_updater.models import SyncStatus, SyncOperation
+    messages = []
+    errors = []
+
+    # 1. Synchronize class part (updates existing Baserow row)
+    if class_tid:
+        try:
+            res_class = updater.synchronize(class_tid, commit=True)
+            if res_class.status in (SyncStatus.FAILED_BLOCKED, SyncStatus.FAILED_RETRYABLE, SyncStatus.DATABASE_UNAVAILABLE, SyncStatus.REVIEW_REQUIRED):
+                notes = "; ".join(res_class.diagnostic_notes) if res_class.diagnostic_notes else (res_class.error_message or f"status {res_class.status.value}")
+                errors.append(f"Class update: {notes}")
+            else:
+                messages.append(f"Class row #{res_class.media_row_id or 'updated'} synchronized")
+        except Exception as e:
+            errors.append(f"Class sync: {e}")
+
+    # 2. Synchronize singing part (creates new Kirtan row in Baserow)
+    if singing_tid:
+        try:
+            res_singing = updater.synchronize(singing_tid, commit=True)
+            if res_singing.status in (SyncStatus.FAILED_BLOCKED, SyncStatus.FAILED_RETRYABLE, SyncStatus.DATABASE_UNAVAILABLE, SyncStatus.REVIEW_REQUIRED):
+                notes = "; ".join(res_singing.diagnostic_notes) if res_singing.diagnostic_notes else (res_singing.error_message or f"status {res_singing.status.value}")
+                errors.append(f"Kirtan creation: {notes}")
+            else:
+                messages.append(f"New Kirtan row #{res_singing.media_row_id or 'created'} added")
+        except Exception as e:
+            errors.append(f"Kirtan sync: {e}")
+
+    if errors:
+        err_str = "; ".join(errors)
+        msg_str = ("; " + "; ".join(messages)) if messages else ""
+        return _detail_redirect(tracking_id, error=f"Post-cut sync errors: {err_str}{msg_str}")
+
+    return _detail_redirect(tracking_id, message=f"Successfully synchronized cut files to Baserow: {'; '.join(messages)}.")
 
 
 @app.post("/file/{tracking_id}/media-db-field-approval")
@@ -707,6 +775,7 @@ def update_file(
     what_val: str = Form(""),
     where_val: str = Form(""),
     proposed_filename: str = Form(""),
+    media_row_id: Optional[int] = Form(None),
 ):
     service = get_service()
     try:
@@ -719,10 +788,28 @@ def update_file(
             custom_proposed_filename=proposed_filename,
             reviewer="review_portal",
         )
+        if action == "approve" and media_row_id:
+            try:
+                media_svc = get_media_db_service()
+                media_svc.apply_human_decision(
+                    tracking_id=tracking_id,
+                    action="confirm_existing",
+                    media_row_id=media_row_id,
+                    reviewer="review_portal",
+                )
+                service.registry.update_file_status(
+                    tracking_id=tracking_id,
+                    status="approved",
+                    needs_review=False,
+                    review_reasons=[],
+                )
+            except Exception as e:
+                logger.warning("Could not auto-confirm media row %s during step 1 approval: %s", media_row_id, e)
+
         msg_map = {
             "save": "Corrections saved successfully.",
             "edit": "Corrections saved successfully.",
-            "approve": "Proposal approved successfully.",
+            "approve": "Step 1 approved successfully.",
             "defer": "File review deferred.",
         }
         msg = msg_map.get(action, f"Action '{action}' applied successfully.")

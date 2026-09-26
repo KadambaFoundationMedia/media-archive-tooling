@@ -517,188 +517,22 @@
     </div>
 
     <!-- ===================================================================== -->
-    <!-- STEP 1: TOOL 1 & 3 — CANONICAL IDENTITY & TRAVEL SCHEDULE              -->
+    <!-- STEP 1: TOOLS 1, 2, 3 — CANONICAL IDENTITY, BASEROW MATCH & SCHEDULE   -->
     <!-- ===================================================================== -->
-    <form method="POST" action="/file/{{ file.tracking_id }}/update">
-        <div class="card step-card" id="renamer-card">
-            <div class="step-header">
-                <h2>
-                    <span class="step-num">1</span>
-                    Tool 1 &amp; 3 — Canonical Identity &amp; Travel Schedule
-                </h2>
-                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                    <span class="badge" style="
-                        {% if file.status in ['approved', 'committed'] %}background: var(--exact);
-                        {% elif file.status == 'blocked' %}background: var(--ambiguous);
-                        {% elif file.status == 'pending' %}background: var(--provisional);
-                        {% else %}background: var(--unresolved);
-                        {% endif %}
-                    ">{{ file.status|upper }}</span>
-                    {% if travel_review %}
-                    <span class="badge" style="
-                        {% if 'CONFIRMED' in travel_review.decision %}background: var(--exact);
-                        {% elif 'CONFLICT' in travel_review.decision %}background: var(--ambiguous);
-                        {% else %}background: var(--unresolved);
-                        {% endif %}
-                    ">{{ travel_review.decision }}</span>
-                    {% endif %}
-                </div>
-            </div>
-
-            <div class="grid">
-                <div class="field-group">
-                    <label>WHEN (Date):</label>
-                    <input type="text" name="when_val" value="{{ file.when_val }}">
-                    <div style="font-size: 12px; color: var(--muted-color); margin-top: 4px;">
-                        State: <strong>{{ file.parser_result.when.state }}</strong> &middot; Precision: {{ file.parser_result.when.precision }}
-                        {% if file.parser_result.when.alternatives %}
-                        <br>Alternatives: {{ file.parser_result.when.alternatives|join(', ') }}
-                        {% endif %}
-                    </div>
-                </div>
-
-                <div class="field-group">
-                    <label>WHO:</label>
-                    <input type="text" name="who_val" value="{{ file.who_val }}" readonly>
-                </div>
-
-                <div class="field-group">
-                    <label>WHAT (Topic / Scripture):</label>
-                    <input type="text" name="what_val" value="{{ file.what_val or '' }}">
-                    <div style="font-size: 12px; color: var(--muted-color); margin-top: 4px;">
-                        State: <strong>{{ file.parser_result.what.state }}</strong> &middot; Category: {{ file.parser_result.what.category or "None" }}
-                    </div>
-                </div>
-
-                <div class="field-group">
-                    <label>WHERE (Place - Country):</label>
-                    <input type="text" name="where_val" value="{{ file.where_val or '' }}">
-                    <div style="font-size: 12px; color: var(--muted-color); margin-top: 4px;">
-                        State: <strong>{{ file.parser_result.where.state }}</strong> &middot; Country ISO: {{ file.parser_result.where.country_iso2 or "None" }}
-                    </div>
-                </div>
-            </div>
-
-            <div class="field-group" style="margin-top: 8px;">
-                <label>Proposed Canonical Filename:</label>
-                <input type="text" name="proposed_filename" value="{{ file.proposed_filename }}" style="font-family: monospace; font-weight: bold;">
-            </div>
-
-            <!-- Embedded Tool 3: Travel Schedule Cross-Verification -->
-            <div id="travel-schedule-card" style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-color);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <h3 style="margin: 0; font-size: 15px;">Tool 3 — Travel Schedule Review</h3>
-                    {% if travel_review %}
-                    <span style="font-size: 12px; color: var(--muted-color);">
-                        Schedule Reference: <code>{{ travel_review.reference_checksum[:12] }}...</code> ({{ travel_review.reference_row_count }} rows)
-                    </span>
-                    {% endif %}
-                </div>
-
-                {% if travel_review %}
-                <div style="margin-bottom: 12px; font-size: 14px;">
-                    <div>Decision: <strong>{{ travel_review.decision }}</strong></div>
-                    {% if travel_review.result.provisional_enrichment %}
-                    <div style="margin-top: 4px; color: var(--info-blue); font-weight: 600;">
-                        Provisional Suggestion:
-                        {% if travel_review.result.provisional_enrichment.when_val %}
-                        WHEN: {{ travel_review.result.provisional_enrichment.when_val }} ({{ travel_review.result.provisional_enrichment.when_state }})
-                        {% endif %}
-                        {% if travel_review.result.provisional_enrichment.where_val %}
-                        WHERE: {{ travel_review.result.provisional_enrichment.where_val }} ({{ travel_review.result.provisional_enrichment.where_state }})
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                    {% if travel_review.result.conflicts %}
-                    <div style="margin-top: 4px; color: var(--danger-red); font-weight: 600;">
-                        Conflicts: {{ travel_review.result.conflicts|join('; ') }}
-                    </div>
-                    {% endif %}
-                    {% if travel_review.result.diagnostic_notes %}
-                    <div style="margin-top: 4px; font-size: 13px; color: var(--muted-color);">
-                        Notes: {{ travel_review.result.diagnostic_notes|join('; ') }}
-                    </div>
-                    {% endif %}
-                </div>
-
-                {% if travel_review.result.candidates %}
-                <h4 style="margin: 12px 0 8px 0; font-size: 13px; color: var(--muted-color);">Matching Travel-Schedule Rows ({{ travel_review.result.candidates|length }})</h4>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Row IDs</th>
-                            <th>Date Range</th>
-                            <th>Place / Location</th>
-                            <th>Country</th>
-                            <th>Schedule Text / Notes</th>
-                            <th>Match Reasons / Comparisons</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for cand in travel_review.result.candidates %}
-                        <tr>
-                            <td>{{ cand.schedule_row_ids|join(', ') }}</td>
-                            <td>{{ cand.start_date }}{% if cand.end_date and cand.end_date != cand.start_date %} to {{ cand.end_date }}{% endif %}</td>
-                            <td>{{ cand.place }}</td>
-                            <td>{{ cand.country }} ({{ cand.country_iso2 or '—' }})</td>
-                            <td>{{ cand.schedule_text or '—' }}</td>
-                            <td>
-                                {% if cand.date_comparison or cand.place_comparison or cand.country_comparison %}
-                                <div style="font-size: 11px; color: var(--muted-color); margin-bottom: 4px;">
-                                    <strong>Comparisons:</strong>
-                                    Date: <code>{{ cand.date_comparison or '—' }}</code> &middot;
-                                    Place: <code>{{ cand.place_comparison or '—' }}</code> &middot;
-                                    Country: <code>{{ cand.country_comparison or '—' }}</code>
-                                </div>
-                                {% endif %}
-                                {% if cand.match_reasons %}
-                                <ul style="margin: 0; padding-left: 16px;">
-                                    {% for r in cand.match_reasons %}
-                                    <li>{{ r }}</li>
-                                    {% endfor %}
-                                </ul>
-                                {% endif %}
-                                {% if cand.possible_when %}
-                                <div>Possible WHEN: <code>{{ cand.possible_when }}</code></div>
-                                {% endif %}
-                                {% if cand.possible_where %}
-                                <div>Possible WHERE: <code>{{ cand.possible_where }}</code></div>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-                {% endif %}
-
-                {% else %}
-                <div class="muted-text" style="font-size: 13px;">No travel schedule verification data available for this file.</div>
-                {% endif %}
-            </div>
-
-            <!-- Single Unified Approval Form for Tools 1 & 3 -->
-            <div style="display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap;">
-                <button type="submit" name="action" value="save" class="btn btn-primary">Save Corrections</button>
-                <button type="submit" name="action" value="approve" class="btn btn-success">Approve Canonical Metadata &amp; Schedule</button>
-                <button type="submit" name="action" value="defer" class="btn">Defer Decision</button>
-            </div>
-        </div>
-    </form>
-
-    <!-- ===================================================================== -->
-    <!-- STEP 2: TOOL 2 & 4 — BASEROW RECONCILIATION & INITIAL SYNC             -->
-    <!-- ===================================================================== -->
-    {% set is_tool1_ready = file.status in ['approved', 'committed'] and not file.needs_review %}
-    {% set is_tool2_ready = media_db_review and (not media_db_review.review_required or media_db_review.decision in ['EXISTING_MEDIA_MATCH', 'NEW_MEDIA_CANDIDATE', 'CONFIRMED_NEW']) and media_db_review.database_state not in ['DATABASE_UNAVAILABLE', 'UNAVAILABLE'] %}
-    {% set is_sync_unlocked = is_tool1_ready and is_tool2_ready %}
-
-    <div class="card step-card" id="media-db-card" style="border-left-color: #0284c7;">
+    <div class="card step-card" id="renamer-card">
         <div class="step-header">
             <h2>
-                <span class="step-num" style="background: #0284c7;">2</span>
-                Tool 2 &amp; 4 — Baserow Media Database Reconciliation &amp; Initial Sync
+                <span class="step-num">1</span>
+                Step 1: Tools 1, 2, 3 — Canonical Identity, Baserow Matching &amp; Travel Schedule
             </h2>
             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <span class="badge" style="
+                    {% if file.status in ['approved', 'committed'] %}background: var(--exact);
+                    {% elif file.status == 'blocked' %}background: var(--ambiguous);
+                    {% elif file.status == 'pending' %}background: var(--provisional);
+                    {% else %}background: var(--unresolved);
+                    {% endif %}
+                ">{{ file.status|upper }}</span>
                 {% if media_db_review %}
                 <span class="badge" style="
                     {% if media_db_review.decision == 'EXISTING_MEDIA_MATCH' %}background: var(--exact);
@@ -709,30 +543,82 @@
                     {% endif %}
                 ">{{ media_db_review.decision }}</span>
                 {% endif %}
-                {% if media_db_sync %}
-                    {% set s_status = media_db_sync.sync_status %}
-                    <span class="badge" style="
-                        {% if s_status == 'SYNCED' %}background: var(--exact);
-                        {% elif s_status == 'SYNCING' %}background: var(--strong);
-                        {% elif s_status == 'PREVIEW' %}background: var(--info-blue);
-                        {% elif s_status == 'PENDING_SYNC' %}background: var(--provisional); color: #713f12;
-                        {% elif s_status == 'REVIEW_REQUIRED' %}background: #f97316;
-                        {% elif s_status == 'DATABASE_UNAVAILABLE' %}background: var(--unresolved);
-                        {% else %}background: var(--ambiguous);
-                        {% endif %}
-                    ">{{ s_status }}</span>
-                {% else %}
-                    <span class="badge" style="background: var(--unresolved);">NOT_SYNCED</span>
+                {% if travel_review %}
+                <span class="badge" style="
+                    {% if 'CONFIRMED' in travel_review.decision %}background: var(--exact);
+                    {% elif 'CONFLICT' in travel_review.decision %}background: var(--ambiguous);
+                    {% else %}background: var(--unresolved);
+                    {% endif %}
+                ">{{ travel_review.decision }}</span>
                 {% endif %}
             </div>
         </div>
 
-        <!-- Section A: Tool 2 Reconciliation -->
+        <!-- Section A: Tool 1 — Canonical Identity Form -->
         <div>
-            <h3 style="margin-top: 0; font-size: 15px;">Tool 2 — Baserow Media Database Reconciliation</h3>
+            <h3 style="margin-top: 0; font-size: 15px;">Tool 1 — Canonical Identity</h3>
+            <form method="POST" action="/file/{{ file.tracking_id }}/update" id="step1-update-form">
+                <div class="grid">
+                    <div class="field-group">
+                        <label>WHEN (Date):</label>
+                        <input type="text" name="when_val" value="{{ file.when_val }}">
+                        <div style="font-size: 12px; color: var(--muted-color); margin-top: 4px;">
+                            State: <strong>{{ file.parser_result.when.state }}</strong> &middot; Precision: {{ file.parser_result.when.precision }}
+                            {% if file.parser_result.when.alternatives %}
+                            <br>Alternatives: {{ file.parser_result.when.alternatives|join(', ') }}
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <label>WHO:</label>
+                        <input type="text" name="who_val" value="{{ file.who_val }}" readonly>
+                    </div>
+
+                    <div class="field-group">
+                        <label>WHAT (Topic / Scripture):</label>
+                        <input type="text" name="what_val" value="{{ file.what_val or '' }}">
+                        <div style="font-size: 12px; color: var(--muted-color); margin-top: 4px;">
+                            State: <strong>{{ file.parser_result.what.state }}</strong> &middot; Category: {{ file.parser_result.what.category or "None" }}
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <label>WHERE (Place - Country):</label>
+                        <input type="text" name="where_val" value="{{ file.where_val or '' }}">
+                        <div style="font-size: 12px; color: var(--muted-color); margin-top: 4px;">
+                            State: <strong>{{ file.parser_result.where.state }}</strong> &middot; Country ISO: {{ file.parser_result.where.country_iso2 or "None" }}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="field-group" style="margin-top: 8px;">
+                    <label>Proposed Canonical Filename:</label>
+                    <input type="text" name="proposed_filename" value="{{ file.proposed_filename }}" style="font-family: monospace; font-weight: bold;">
+                </div>
+
+                {% if media_db_review and media_db_review.selected_media_row_id %}
+                <input type="hidden" name="media_row_id" value="{{ media_db_review.selected_media_row_id }}">
+                {% elif media_db_review and media_db_review.result.candidates %}
+                <input type="hidden" name="media_row_id" value="{{ media_db_review.result.candidates[0].media_row_id }}">
+                {% endif %}
+            </form>
+        </div>
+
+        <!-- Section B: Tool 2 — Baserow Media Database Reconciliation -->
+        <div id="media-db-card" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin: 0; font-size: 15px;">Tool 2 — Baserow Media Database Reconciliation</h3>
+                {% if media_db_review %}
+                <span style="font-size: 12px; color: var(--muted-color);">
+                    Database: <strong>{{ media_db_review.database_state }}</strong> &middot; Snapshot: {{ media_db_review.snapshot_timestamp }}
+                </span>
+                {% endif %}
+            </div>
+
             {% if media_db_review %}
             <div style="margin-bottom: 16px; font-size: 14px;">
-                <div>Decision: <strong>{{ media_db_review.decision }}</strong> &middot; Database: <strong>{{ media_db_review.database_state }}</strong> (Snapshot: {{ media_db_review.snapshot_timestamp }})</div>
+                <div>Decision: <strong>{{ media_db_review.decision }}</strong> &middot; Proposed Action: <code>{{ media_db_review.result.proposed_tool4_action }}</code></div>
                 {% if media_db_review.database_state in ['DATABASE_UNAVAILABLE', 'UNAVAILABLE'] %}
                 <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px;" class="alert-error">
                     <span>Database was unreachable during previous scan. Query live Baserow now:</span>
@@ -741,7 +627,6 @@
                     </form>
                 </div>
                 {% endif %}
-                <div>Proposed Tool 4 Action: <code>{{ media_db_review.result.proposed_tool4_action }}</code></div>
                 {% if media_db_review.selected_media_row_id %}
                 <div style="margin-top: 4px; color: var(--success-green); font-weight: 600;">Selected Baserow Media Row: #{{ media_db_review.selected_media_row_id }}</div>
                 {% endif %}
@@ -817,145 +702,272 @@
             {% endif %}
         </div>
 
-        <!-- Section B: Tool 4 Baserow Synchronization -->
-        <div id="media-db-sync-card" style="margin-top: 24px; padding-top: 20px; border-top: 2px solid var(--border-color);">
-            <h3 style="margin-top: 0; font-size: 15px;">Tool 4: Media Database Synchronization</h3>
+        <!-- Section C: Tool 3 — Travel Schedule Review -->
+        <div id="travel-schedule-card" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin: 0; font-size: 15px;">Tool 3 — Travel Schedule Review</h3>
+                {% if travel_review %}
+                <span style="font-size: 12px; color: var(--muted-color);">
+                    Schedule Reference: <code>{{ travel_review.reference_checksum[:12] }}...</code> ({{ travel_review.reference_row_count }} rows)
+                </span>
+                {% endif %}
+            </div>
 
-            {% if not is_sync_unlocked %}
-            <div class="locked-banner">
-                <h3>🔒 Step 2 Synchronization Locked: Prerequisite Decisions Required</h3>
-                <p style="margin: 0 0 10px 0; font-size: 13px; color: var(--muted-color);">
-                    To protect the integrity of the live Baserow database, synchronization can only proceed after previous tool steps are resolved:
-                </p>
-                <ul>
-                    {% if not is_tool1_ready %}
-                    <li>
-                        <strong>Step 1 (Tool 1 &amp; 3):</strong> Canonical identity &amp; schedule proposal is not yet approved (Current status: <code>{{ file.status }}</code>). Click <em>Approve Canonical Metadata &amp; Schedule</em> in Step 1.
-                    </li>
+            {% if travel_review %}
+            <div style="margin-bottom: 12px; font-size: 14px;">
+                <div>Decision: <strong>{{ travel_review.decision }}</strong></div>
+                {% if travel_review.result.provisional_enrichment %}
+                <div style="margin-top: 4px; color: var(--info-blue); font-weight: 600;">
+                    Provisional Suggestion:
+                    {% if travel_review.result.provisional_enrichment.when_val %}
+                    WHEN: {{ travel_review.result.provisional_enrichment.when_val }} ({{ travel_review.result.provisional_enrichment.when_state }})
                     {% endif %}
-                    {% if not is_tool2_ready %}
-                    <li>
-                        <strong>Step 2 (Tool 2):</strong> Baserow Media row association is unconfirmed (Current decision: <code>{{ media_db_review.decision if media_db_review else 'UNRESOLVED' }}</code>{% if media_db_review and media_db_review.database_state in ['DATABASE_UNAVAILABLE', 'UNAVAILABLE'] %} &middot; Database was unreachable{% endif %}). Confirm matching row or click <em>Confirm New Media Item</em> above.
-                    </li>
+                    {% if travel_review.result.provisional_enrichment.where_val %}
+                    WHERE: {{ travel_review.result.provisional_enrichment.where_val }} ({{ travel_review.result.provisional_enrichment.where_state }})
                     {% endif %}
-                </ul>
-            </div>
-            {% else %}
-            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--exact); font-weight: 600;">
-                ✓ Prerequisites resolved. Source media metadata is ready for live Baserow synchronization.
-            </div>
-            {% endif %}
-
-            {% if media_db_sync %}
-            <div style="font-size: 14px; margin-bottom: 12px; color: var(--muted-color);">
-                <strong>Operation:</strong> <code>{{ media_db_sync.operation_type or '—' }}</code> &middot;
-                <strong>Target Media Row:</strong> <code>{{ media_db_sync.media_row_id or '—' }}</code> &middot;
-                <strong>Attempts:</strong> {{ media_db_sync.attempt_count }} &middot;
-                <strong>Last Attempt:</strong> {{ media_db_sync.last_attempt_at or '—' }}
+                </div>
+                {% endif %}
+                {% if travel_review.result.conflicts %}
+                <div style="margin-top: 4px; color: var(--danger-red); font-weight: 600;">
+                    Conflicts: {{ travel_review.result.conflicts|join('; ') }}
+                </div>
+                {% endif %}
+                {% if travel_review.result.diagnostic_notes %}
+                <div style="margin-top: 4px; font-size: 13px; color: var(--muted-color);">
+                    Notes: {{ travel_review.result.diagnostic_notes|join('; ') }}
+                </div>
+                {% endif %}
             </div>
 
-            {% if media_db_sync.error_message %}
-            <div class="alert-error">
-                <strong>Sync Error:</strong> {{ media_db_sync.error_message }}
-            </div>
-            {% endif %}
-
-            {% if media_db_sync.result and media_db_sync.result.conflicts %}
-            <div class="alert-conflict">
-                <strong>Conflicts Detected:</strong>
-                <ul style="margin: 4px 0 0 0; padding-left: 20px;">
-                    {% for c in media_db_sync.result.conflicts %}
-                    <li>{{ c }}</li>
-                    {% endfor %}
-                </ul>
-            </div>
-            {% endif %}
-
-            {% if media_db_sync.result and media_db_sync.result.field_diffs %}
-            <h4>Field Diffs (Proposed / Executed)</h4>
+            {% if travel_review.result.candidates %}
+            <h4 style="margin: 12px 0 8px 0; font-size: 13px; color: var(--muted-color);">Matching Travel-Schedule Rows ({{ travel_review.result.candidates|length }})</h4>
             <table>
                 <thead>
                     <tr>
-                        <th>Field</th>
-                        <th>Action</th>
-                        <th>Old Value (DB)</th>
-                        <th>New Value (Archive)</th>
-                        <th>Details</th>
+                        <th>Row IDs</th>
+                        <th>Date Range</th>
+                        <th>Place / Location</th>
+                        <th>Country</th>
+                        <th>Schedule Text / Notes</th>
+                        <th>Match Reasons / Comparisons</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for diff in media_db_sync.result.field_diffs %}
+                    {% for cand in travel_review.result.candidates %}
                     <tr>
-                        <td style="font-weight: 600;">{{ diff.field_name }}</td>
+                        <td>{{ cand.schedule_row_ids|join(', ') }}</td>
+                        <td>{{ cand.start_date }}{% if cand.end_date and cand.end_date != cand.start_date %} to {{ cand.end_date }}{% endif %}</td>
+                        <td>{{ cand.place }}</td>
+                        <td>{{ cand.country }} ({{ cand.country_iso2 or '—' }})</td>
+                        <td>{{ cand.schedule_text or '—' }}</td>
                         <td>
-                            <span class="badge" style="
-                                {% if diff.action == 'SET' %}background: var(--exact);
-                                {% elif diff.action == 'PRESERVED' %}background: var(--unresolved);
-                                {% elif diff.action == 'CONFLICT' %}background: var(--ambiguous);
-                                {% else %}background: var(--unresolved);
-                                {% endif %}
-                            ">{{ diff.action }}</span>
-                        </td>
-                        <td style="color: var(--muted-color);">{{ diff.old_value if diff.old_value is not none else '—' }}</td>
-                        <td style="font-weight: 500;">{{ diff.new_value if diff.new_value is not none else '—' }}</td>
-                        <td style="font-size: 12px; color: var(--muted-color);">{{ diff.details or '—' }}</td>
-                    </tr>
-                    {% if diff.action == 'CONFLICT' %}
-                    <tr>
-                        <td colspan="5" class="diff-conflict-row" style="padding: 8px;">
-                            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-field-approval" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                <input type="hidden" name="field_name" value="{{ diff.field_name }}">
-                                <input type="hidden" name="has_reviewed_precondition" value="true">
-                                <input type="hidden" name="reviewed_precondition_json" value="{{ diff.old_value|tojson if diff.old_value is not none else 'null' }}">
-                                <input type="hidden" name="reviewed_precondition_value" value="{{ diff.old_value or '' }}">
-                                <span style="font-weight: 500; font-size: 12px;">Resolve Conflict for {{ diff.field_name }}:</span>
-                                <button type="submit" name="action" value="keep_database" class="btn" style="padding: 2px 8px; font-size: 11px;">Keep Database</button>
-                                <button type="submit" name="action" value="apply_correction" class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;">Apply Archive Value</button>
-                                <input type="hidden" name="approved_value" value="{{ diff.new_value or '' }}">
-                                <button type="submit" name="action" value="defer" class="btn" style="padding: 2px 8px; font-size: 11px;">Defer</button>
-                            </form>
+                            {% if cand.date_comparison or cand.place_comparison or cand.country_comparison %}
+                            <div style="font-size: 11px; color: var(--muted-color); margin-bottom: 4px;">
+                                <strong>Comparisons:</strong>
+                                Date: <code>{{ cand.date_comparison or '—' }}</code> &middot;
+                                Place: <code>{{ cand.place_comparison or '—' }}</code> &middot;
+                                Country: <code>{{ cand.country_comparison or '—' }}</code>
+                            </div>
+                            {% endif %}
+                            {% if cand.match_reasons %}
+                            <ul style="margin: 0; padding-left: 16px;">
+                                {% for r in cand.match_reasons %}
+                                <li>{{ r }}</li>
+                                {% endfor %}
+                            </ul>
+                            {% endif %}
+                            {% if cand.possible_when %}
+                            <div>Possible WHEN: <code>{{ cand.possible_when }}</code></div>
+                            {% endif %}
+                            {% if cand.possible_where %}
+                            <div>Possible WHERE: <code>{{ cand.possible_where }}</code></div>
+                            {% endif %}
                         </td>
                     </tr>
-                    {% endif %}
                     {% endfor %}
                 </tbody>
             </table>
             {% endif %}
 
-            {% if media_db_sync.result and media_db_sync.result.fields_preserved %}
-            <div style="font-size: 12px; color: var(--muted-color); margin-bottom: 12px;">
-                <strong>Preserved Online / Collaborator Fields:</strong> {{ media_db_sync.result.fields_preserved|join(', ') }}
-            </div>
+            {% else %}
+            <div class="muted-text" style="font-size: 13px;">No travel schedule verification data available for this file.</div>
             {% endif %}
+        </div>
 
-            {% endif %}
+        <!-- Single Unified Approval Form for Tools 1, 2, 3 -->
+        <div style="display: flex; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--border-color); flex-wrap: wrap; align-items: center;">
+            <button type="submit" form="step1-update-form" name="action" value="save" class="btn btn-primary">Save Corrections</button>
+            <button type="submit" form="step1-update-form" name="action" value="approve" class="btn btn-success" style="font-weight: 600;">Approve Canonical Metadata &amp; Schedule</button>
+            <button type="submit" form="step1-update-form" name="action" value="defer" class="btn">Defer Decision</button>
+        </div>
+    </div>
 
-            <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center;">
-                <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
-                    <input type="hidden" name="action" value="preview">
-                    <button type="submit" class="btn">Preview Sync (Dry-run)</button>
-                </form>
+    <!-- ===================================================================== -->
+    <!-- STEP 2: TOOL 4 — BASEROW MEDIA DATABASE MASTER SYNCHRONIZATION         -->
+    <!-- ===================================================================== -->
+    {% set is_step1_ready = file.status in ['approved', 'committed'] and not file.needs_review %}
+    {% set is_tool2_ready = media_db_review and (not media_db_review.review_required or media_db_review.decision in ['EXISTING_MEDIA_MATCH', 'NEW_MEDIA_CANDIDATE', 'CONFIRMED_NEW']) and media_db_review.database_state not in ['DATABASE_UNAVAILABLE', 'UNAVAILABLE'] %}
+    {% set is_sync_unlocked = is_step1_ready and is_tool2_ready %}
 
-                <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
-                    <input type="hidden" name="action" value="commit">
-                    {% if is_sync_unlocked %}
-                    <button type="submit" class="btn btn-primary">Synchronize Now</button>
-                    {% else %}
-                    <button type="button" class="btn btn-primary" disabled title="Locked: Complete Step 1 and Tool 2 prerequisites first">Synchronize Now (Locked)</button>
-                    {% endif %}
-                </form>
-
-                {% if media_db_sync and media_db_sync.sync_status in ['PENDING_SYNC', 'FAILED_RETRYABLE', 'DATABASE_UNAVAILABLE'] %}
-                <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
-                    <input type="hidden" name="action" value="retry">
-                    {% if is_sync_unlocked %}
-                    <button type="submit" class="btn btn-success">Retry Pending Sync</button>
-                    {% else %}
-                    <button type="button" class="btn btn-success" disabled title="Locked: Complete prerequisites first">Retry Pending Sync (Locked)</button>
-                    {% endif %}
-                </form>
+    <div class="card step-card" id="media-db-sync-card" style="border-left-color: #0284c7;">
+        <div class="step-header">
+            <h2>
+                <span class="step-num" style="background: #0284c7;">2</span>
+                Step 2: Tool 4 — Baserow Media Database Master Synchronization
+            </h2>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                {% if media_db_sync %}
+                    {% set s_status = media_db_sync.sync_status %}
+                    <span class="badge" style="
+                        {% if s_status == 'SYNCED' %}background: var(--exact);
+                        {% elif s_status == 'SYNCING' %}background: var(--strong);
+                        {% elif s_status == 'PREVIEW' %}background: var(--info-blue);
+                        {% elif s_status == 'PENDING_SYNC' %}background: var(--provisional); color: #713f12;
+                        {% elif s_status == 'REVIEW_REQUIRED' %}background: #f97316;
+                        {% elif s_status == 'DATABASE_UNAVAILABLE' %}background: var(--unresolved);
+                        {% else %}background: var(--ambiguous);
+                        {% endif %}
+                    ">{{ s_status }}</span>
+                {% else %}
+                    <span class="badge" style="background: var(--unresolved);">NOT_SYNCED</span>
                 {% endif %}
             </div>
+        </div>
+
+        {% if not is_sync_unlocked %}
+        <div class="locked-banner">
+            <h3>🔒 Step 2 Synchronization Locked: Prerequisite Decisions Required</h3>
+            <p style="margin: 0 0 10px 0; font-size: 13px; color: var(--muted-color);">
+                To protect the integrity of the live Baserow database, synchronization can only proceed after previous tool steps are resolved:
+            </p>
+            <ul>
+                {% if not is_step1_ready %}
+                <li>
+                    <strong>Step 1 (Tool 1 &amp; 3):</strong> Canonical identity &amp; schedule proposal is not yet approved (Current status: <code>{{ file.status }}</code>). Click <em>Approve Canonical Metadata &amp; Schedule</em> in Step 1.
+                </li>
+                {% endif %}
+                {% if not is_tool2_ready %}
+                <li>
+                    <strong>Step 1 (Tool 2):</strong> Baserow Media row association is unconfirmed (Current decision: <code>{{ media_db_review.decision if media_db_review else 'UNRESOLVED' }}</code>{% if media_db_review and media_db_review.database_state in ['DATABASE_UNAVAILABLE', 'UNAVAILABLE'] %} &middot; Database was unreachable{% endif %}). Confirm matching row or click <em>Confirm New Media Item</em> in Tool 2 above.
+                </li>
+                {% endif %}
+            </ul>
+        </div>
+        {% else %}
+        <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--exact); font-weight: 600;">
+            ✓ Step 1 Prerequisites resolved. Master media metadata is ready for live Baserow synchronization.
+        </div>
+        {% endif %}
+
+        {% if media_db_sync %}
+        <div style="font-size: 14px; margin-bottom: 12px; color: var(--muted-color);">
+            <strong>Operation:</strong> <code>{{ media_db_sync.operation_type or '—' }}</code> &middot;
+            <strong>Target Media Row:</strong> <code>{{ media_db_sync.media_row_id or '—' }}</code> &middot;
+            <strong>Attempts:</strong> {{ media_db_sync.attempt_count }} &middot;
+            <strong>Last Attempt:</strong> {{ media_db_sync.last_attempt_at or '—' }}
+        </div>
+
+        {% if media_db_sync.error_message %}
+        <div class="alert-error">
+            <strong>Sync Error:</strong> {{ media_db_sync.error_message }}
+        </div>
+        {% endif %}
+
+        {% if media_db_sync.result and media_db_sync.result.conflicts %}
+        <div class="alert-conflict">
+            <strong>Conflicts Detected:</strong>
+            <ul style="margin: 4px 0 0 0; padding-left: 20px;">
+                {% for c in media_db_sync.result.conflicts %}
+                <li>{{ c }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if media_db_sync.result and media_db_sync.result.field_diffs %}
+        <h4>Field Diffs (Proposed / Executed)</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Field</th>
+                    <th>Action</th>
+                    <th>Old Value (DB)</th>
+                    <th>New Value (Archive)</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for diff in media_db_sync.result.field_diffs %}
+                <tr>
+                    <td style="font-weight: 600;">{{ diff.field_name }}</td>
+                    <td>
+                        <span class="badge" style="
+                            {% if diff.action == 'SET' %}background: var(--exact);
+                            {% elif diff.action == 'PRESERVED' %}background: var(--unresolved);
+                            {% elif diff.action == 'CONFLICT' %}background: var(--ambiguous);
+                            {% else %}background: var(--unresolved);
+                            {% endif %}
+                        ">{{ diff.action }}</span>
+                    </td>
+                    <td style="color: var(--muted-color);">{{ diff.old_value if diff.old_value is not none else '—' }}</td>
+                    <td style="font-weight: 500;">{{ diff.new_value if diff.new_value is not none else '—' }}</td>
+                    <td style="font-size: 12px; color: var(--muted-color);">{{ diff.details or '—' }}</td>
+                </tr>
+                {% if diff.action == 'CONFLICT' %}
+                <tr>
+                    <td colspan="5" class="diff-conflict-row" style="padding: 8px;">
+                        <form method="POST" action="/file/{{ file.tracking_id }}/media-db-field-approval" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="hidden" name="field_name" value="{{ diff.field_name }}">
+                            <input type="hidden" name="has_reviewed_precondition" value="true">
+                            <input type="hidden" name="reviewed_precondition_json" value="{{ diff.old_value|tojson if diff.old_value is not none else 'null' }}">
+                            <input type="hidden" name="reviewed_precondition_value" value="{{ diff.old_value or '' }}">
+                            <span style="font-weight: 500; font-size: 12px;">Resolve Conflict for {{ diff.field_name }}:</span>
+                            <button type="submit" name="action" value="keep_database" class="btn" style="padding: 2px 8px; font-size: 11px;">Keep Database</button>
+                            <button type="submit" name="action" value="apply_correction" class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;">Apply Archive Value</button>
+                            <input type="hidden" name="approved_value" value="{{ diff.new_value or '' }}">
+                            <button type="submit" name="action" value="defer" class="btn" style="padding: 2px 8px; font-size: 11px;">Defer</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+
+        {% if media_db_sync.result and media_db_sync.result.fields_preserved %}
+        <div style="font-size: 12px; color: var(--muted-color); margin-bottom: 12px;">
+            <strong>Preserved Online / Collaborator Fields:</strong> {{ media_db_sync.result.fields_preserved|join(', ') }}
+        </div>
+        {% endif %}
+
+        {% endif %}
+
+        <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center;">
+            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
+                <input type="hidden" name="action" value="preview">
+                <button type="submit" class="btn">Preview Sync (Dry-run)</button>
+            </form>
+
+            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
+                <input type="hidden" name="action" value="commit">
+                {% if is_sync_unlocked %}
+                <button type="submit" class="btn btn-primary">Synchronize Now</button>
+                {% else %}
+                <button type="button" class="btn btn-primary" disabled title="Locked: Complete Step 1 prerequisites first">Synchronize Now (Locked)</button>
+                {% endif %}
+            </form>
+
+            {% if media_db_sync and media_db_sync.sync_status in ['PENDING_SYNC', 'FAILED_RETRYABLE', 'DATABASE_UNAVAILABLE'] %}
+            <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync" style="display: inline;">
+                <input type="hidden" name="action" value="retry">
+                {% if is_sync_unlocked %}
+                <button type="submit" class="btn btn-success">Retry Pending Sync</button>
+                {% else %}
+                <button type="button" class="btn btn-success" disabled title="Locked: Complete prerequisites first">Retry Pending Sync (Locked)</button>
+                {% endif %}
+            </form>
+            {% endif %}
         </div>
     </div>
 
@@ -1112,13 +1124,13 @@
     </div>
 
     <!-- ===================================================================== -->
-    <!-- STEP 4: TOOL 4 — POST-CUT BASEROW SYNCHRONIZATION (DERIVATIVE PARTS)   -->
+    <!-- STEP 4: TOOL 4 — POST-CUT BASEROW SYNCHRONIZATION                      -->
     <!-- ===================================================================== -->
     <div class="card step-card" id="post-cut-sync-card" style="border-left-color: #10b981;">
         <div class="step-header">
             <h2>
                 <span class="step-num" style="background: #10b981;">4</span>
-                Tool 4 — Post-Cut Baserow Synchronization (Derivative Parts)
+                Step 4: Tool 4 — Post-Cut Baserow Synchronization (Update Class &amp; Add Kirtan)
             </h2>
             {% if file_split %}
             <span class="badge" style="background: var(--exact);">DERIVATIVES_READY</span>
@@ -1131,28 +1143,57 @@
 
         {% if file_split %}
         <p style="font-size: 14px; margin-bottom: 16px;">
-            This master recording was split into separate Kirtan and Class files. Each split part has its own canonical identity and Baserow entry. Review and synchronize each part below:
+            This master recording was split into separate Kirtan and Class files. Click below to synchronize both parts to Baserow: the existing master row will be updated for the Class, and a new row will be added for the Kirtan.
         </p>
+
+        <form method="POST" action="/file/{{ file.tracking_id }}/media-db-sync-post-cut" style="margin-bottom: 20px;">
+            <button type="submit" class="btn btn-success" style="font-size: 15px; font-weight: 600; padding: 10px 24px;">
+                Synchronize Cut Files to Baserow (Update Class &amp; Add Kirtan)
+            </button>
+        </form>
+
         <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px;">
             <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; background: var(--header-bg);">
-                <div style="font-weight: 600; font-size: 15px; color: var(--primary); margin-bottom: 6px;">Part 1: Singing / Kirtan</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 600; font-size: 15px; color: var(--primary);">Part 1: Singing / Kirtan</span>
+                    {% if singing_sync %}
+                    <span class="badge" style="
+                        {% if singing_sync.sync_status == 'SYNCED' %}background: var(--exact);
+                        {% else %}background: var(--provisional);
+                        {% endif %}
+                    ">{{ singing_sync.sync_status }}</span>
+                    {% else %}
+                    <span class="badge" style="background: var(--unresolved);">NOT_SYNCED</span>
+                    {% endif %}
+                </div>
                 <div style="font-size: 13px; margin-bottom: 4px;">Tracking ID: <code>{{ file_split.singing_tracking_id }}</code></div>
                 <div style="font-size: 13px; margin-bottom: 4px;">Duration: <strong>{{ file_split.singing_duration_seconds }}s</strong></div>
                 <div style="font-size: 12px; color: var(--muted-color); word-break: break-all; margin-bottom: 12px;">Path: <code>{{ file_split.singing_path }}</code></div>
-                <a href="/file/{{ file_split.singing_tracking_id }}" class="btn btn-primary" style="font-size: 13px; text-decoration: none; display: inline-block;">Review &amp; Sync Kirtan Part &rarr;</a>
+                <a href="/file/{{ file_split.singing_tracking_id }}" class="btn btn-primary" style="font-size: 13px; text-decoration: none; display: inline-block;">Review &amp; Inspect Kirtan Part &rarr;</a>
             </div>
 
             <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; background: var(--header-bg);">
-                <div style="font-weight: 600; font-size: 15px; color: var(--exact); margin-bottom: 6px;">Part 2: Class / Lecture</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 600; font-size: 15px; color: var(--exact);">Part 2: Class / Lecture</span>
+                    {% if class_sync %}
+                    <span class="badge" style="
+                        {% if class_sync.sync_status == 'SYNCED' %}background: var(--exact);
+                        {% else %}background: var(--provisional);
+                        {% endif %}
+                    ">{{ class_sync.sync_status }}</span>
+                    {% else %}
+                    <span class="badge" style="background: var(--unresolved);">NOT_SYNCED</span>
+                    {% endif %}
+                </div>
                 <div style="font-size: 13px; margin-bottom: 4px;">Tracking ID: <code>{{ file_split.class_tracking_id }}</code></div>
                 <div style="font-size: 13px; margin-bottom: 4px;">Duration: <strong>{{ file_split.class_duration_seconds }}s</strong></div>
                 <div style="font-size: 12px; color: var(--muted-color); word-break: break-all; margin-bottom: 12px;">Path: <code>{{ file_split.class_path }}</code></div>
-                <a href="/file/{{ file_split.class_tracking_id }}" class="btn btn-primary" style="font-size: 13px; text-decoration: none; display: inline-block;">Review &amp; Sync Class Part &rarr;</a>
+                <a href="/file/{{ file_split.class_tracking_id }}" class="btn btn-primary" style="font-size: 13px; text-decoration: none; display: inline-block;">Review &amp; Inspect Class Part &rarr;</a>
             </div>
         </div>
         {% elif content_review and content_review.classification == 'KIRTAN_AND_CLASS' %}
         <div class="muted-text" style="font-size: 13px;">
-            Audio cut is pending in Step 3. Once the file is split into Kirtan and Class parts, each derivative part will appear here for separate Baserow review and synchronization.
+            Audio cut is pending in Step 3. Once the file is split into Kirtan and Class parts, click here to synchronize both parts to Baserow.
         </div>
         {% else %}
         <div class="muted-text" style="font-size: 13px;">

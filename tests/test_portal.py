@@ -550,22 +550,21 @@ def test_portal_detail_step_ordering_and_gating(tmp_path):
     res = client.get("/file/order001")
     assert res.status_code == 200
 
-    # 1. Verify cards appear in order: Step 1 (renamer + travel) -> Step 2 (media-db + sync) -> Step 3 (content + cutter) -> Step 4 (post-cut-sync)
+    # 1. Verify cards appear in order: Step 1 (renamer + media-db + travel) -> Step 2 (sync) -> Step 3 (content + cutter) -> Step 4 (post-cut-sync)
     pos_step1 = res.text.find('id="renamer-card"')
-    pos_travel = res.text.find('id="travel-schedule-card"')
     pos_step2 = res.text.find('id="media-db-card"')
+    pos_travel = res.text.find('id="travel-schedule-card"')
     pos_sync = res.text.find('id="media-db-sync-card"')
     pos_step3 = res.text.find('id="content-and-cutter-card"')
     pos_step4 = res.text.find('id="post-cut-sync-card"')
 
-    assert pos_step1 != -1 and pos_travel != -1 and pos_step2 != -1 and pos_sync != -1 and pos_step3 != -1 and pos_step4 != -1
-    assert pos_step1 < pos_travel < pos_step2 < pos_sync < pos_step3 < pos_step4
+    assert pos_step1 != -1 and pos_step2 != -1 and pos_travel != -1 and pos_sync != -1 and pos_step3 != -1 and pos_step4 != -1
+    assert pos_step1 < pos_step2 < pos_travel < pos_sync < pos_step3 < pos_step4
 
     # 2. Verify Tool 4 in Step 2 is gated/locked because Step 1 is pending and Step 2 is unconfirmed
     assert "Step 2 Synchronization Locked" in res.text
     assert "Synchronize Now (Locked)" in res.text
-    assert "Step 1 (Tool 1 &amp; 3):" in res.text
-    assert "Step 2 (Tool 2):" in res.text
+    assert "Step 1" in res.text
 
 
 def test_portal_recheck_live_clears_database_unavailable(tmp_path):
@@ -619,4 +618,181 @@ def test_portal_recheck_live_clears_database_unavailable(tmp_path):
     rec = reg.get_file("recheck01")
     assert "Tool 2 reported DATABASE_UNAVAILABLE" not in rec["review_reasons"]
     assert rec["review_reasons"] == ["Other review reason"]
+
+
+def test_portal_post_cut_sync(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_post_cut.db")
+    source = tmp_path / "parent_media.mp3"
+    source.write_bytes(b"parent media audio")
+    proposal = make_portal_proposal(source, "parent01", RenameMode.INITIAL, needs_review=False)
+    reg.save_proposal(proposal)
+
+    # Save file split
+    reg.record_file_split({
+        "source_tracking_id": "parent01",
+        "source_path": str(source),
+        "source_sha256": "parent_sha",
+        "source_duration_seconds": 300.0,
+        "cut_point_seconds": 100.0,
+        "singing_path": str(tmp_path / "singing.mp3"),
+        "singing_tracking_id": "sing001",
+        "singing_sha256": "sing_sha",
+        "singing_duration_seconds": 100.0,
+        "singing_leading_silence_seconds": 0.0,
+        "singing_pending_tool_11_move": False,
+        "class_path": str(tmp_path / "class.mp3"),
+        "class_tracking_id": "class001",
+        "class_sha256": "class_sha",
+        "class_duration_seconds": 200.0,
+        "class_leading_silence_seconds": 0.0,
+        "class_pending_tool_11_move": False,
+    })
+
+    mock_updater = MagicMock()
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncResult, SyncOperation, SyncStatus
+    mock_updater.synchronize.side_effect = [
+        MediaDbSyncResult(
+            tracking_id="class001",
+            status=SyncStatus.SYNCED,
+            operation=SyncOperation.UPDATE,
+            media_row_id=101,
+        ),
+        MediaDbSyncResult(
+            tracking_id="sing001",
+            status=SyncStatus.SYNCED,
+            operation=SyncOperation.CREATE,
+            media_row_id=202,
+        ),
+    ]
+
+    configure_review_context(
+        registry=reg,
+        media_db_updater_service=mock_updater,
+        review_root=tmp_path,
+    )
+
+    client = TestClient(app)
+    # Check page renders post-cut sync button and split parts
+    res_get = client.get("/file/parent01")
+    assert res_get.status_code == 200
+    assert "Synchronize Cut Files to Baserow" in res_get.text
+    assert "sing001" in res_get.text
+    assert "class001" in res_get.text
+
+    # Post post-cut sync
+    res_post = client.post("/file/parent01/media-db-sync-post-cut", follow_redirects=True)
+    assert res_post.status_code == 200
+    assert "Successfully synchronized cut files to Baserow" in res_post.text
+    assert "Class row #101" in res_post.text
+    assert "New Kirtan row #202" in res_post.text
+
+
+def test_portal_4step_user_flow_approval_retention_and_sync(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_flow.db")
+    source = tmp_path / "flow_media.mp3"
+    source.write_bytes(b"flow media audio content")
+    proposal = make_portal_proposal(source, "flow001", RenameMode.INITIAL, needs_review=True)
+    reg.save_proposal(proposal)
+
+    # Initial Tool 2 review with candidate
+    reg.save_media_db_review(
+        tracking_id="flow001",
+        decision="EXISTING_MEDIA_MATCH",
+        database_state="LIVE_CURRENT",
+        snapshot_timestamp="2026-09-26T12:00:00Z",
+        result_json=json.dumps({
+            "proposed_tool4_action": "enrich_existing",
+            "candidates": [
+                {
+                    "media_row_id": 555,
+                    "score": 10.0,
+                    "field_comparisons": {},
+                    "retrieval_reasons": ["Exact date and title match"],
+                    "normalized_row": {"date": "2012-01-02", "what": "CC-Talk", "place": "Simhachalam"},
+                }
+            ],
+            "renamer_enrichment": {
+                "confirmed": True,
+                "media_row_id": 555,
+                "when_val": "2012-01-02",
+                "what_val": "CC-Talk",
+                "title_full": "CC Talk Simhachalam",
+            },
+        }),
+        selected_media_row_id=None,
+        review_required=True,
+    )
+
+    mock_updater = MagicMock()
+    from media_archive_tooling.media_db_updater.models import MediaDbSyncResult, SyncOperation, SyncStatus
+    mock_updater.synchronize.return_value = MediaDbSyncResult(
+        tracking_id="flow001",
+        status=SyncStatus.SYNCED,
+        operation=SyncOperation.UPDATE,
+        media_row_id=555,
+    )
+
+    mock_media_svc = MagicMock()
+    from media_archive_tooling.media_db_reviewer.models import MediaDatabaseReviewResult, ReviewDecision
+    mock_review_res = MagicMock(spec=MediaDatabaseReviewResult)
+    mock_review_res.decision = ReviewDecision.EXISTING_MEDIA_MATCH
+    mock_review_res.database_state = "LIVE_CURRENT"
+    mock_review_res.selected_media_row_id = 555
+    mock_review_res.review_required = False
+    mock_review_res.renamer_enrichment = MagicMock(confirmed=True)
+    mock_review_res.baserow_check_complete = True
+    mock_media_svc.apply_human_decision.return_value = mock_review_res
+    mock_media_svc.registry = reg
+
+    configure_review_context(
+        registry=reg,
+        media_db_service=mock_media_svc,
+        media_db_updater_service=mock_updater,
+        review_root=tmp_path,
+    )
+
+    client = TestClient(app)
+
+    # 1. User clicks [Approve Canonical Metadata & Schedule] in Step 1
+    res1 = client.post(
+        "/file/flow001/update",
+        data={
+            "action": "approve",
+            "when_val": "2012-01-02",
+            "what_val": "CC-Talk",
+            "where_val": "Simhachalam-de",
+            "proposed_filename": "2012-01-02_KKS_CC-Talk_Simhachalam-de_ID-flow001.mp3",
+        },
+        follow_redirects=True,
+    )
+    assert res1.status_code == 200
+    file_rec = reg.get_file("flow001")
+    assert file_rec["status"] == "approved"
+    assert file_rec["needs_review"] == 0
+
+    # 2. Next user clicks [Confirm existing row] in Tool 2
+    res2 = client.post(
+        "/file/flow001/media-db-action",
+        data={"action": "confirm_existing", "media_row_id": "555"},
+        follow_redirects=True,
+    )
+    assert res2.status_code == 200
+    # CRITICAL: Verify file is STILL approved and was NOT unapproved!
+    file_rec2 = reg.get_file("flow001")
+    assert file_rec2["status"] == "approved"
+    assert file_rec2["needs_review"] == 0
+
+    # 3. Verify Step 2 is unlocked and [Synchronize Now] succeeds without NOOP error
+    res_detail = client.get("/file/flow001")
+    assert res_detail.status_code == 200
+    assert "Synchronize Now" in res_detail.text
+    assert "Synchronize Now (Locked)" not in res_detail.text
+
+    res_sync = client.post(
+        "/file/flow001/media-db-sync",
+        data={"action": "commit"},
+        follow_redirects=True,
+    )
+    assert res_sync.status_code == 200
+    assert "Baserow database sync committed successfully to row #555" in res_sync.text
 
