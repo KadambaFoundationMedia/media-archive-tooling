@@ -509,17 +509,20 @@ def media_db_sync(
     commit = (action in ("commit", "retry"))
     try:
         res = updater.synchronize(tracking_id, commit=commit)
-        from ..media_db_updater.models import SyncStatus
+        from ..media_db_updater.models import SyncStatus, SyncOperation
         if res.status == SyncStatus.DATABASE_UNAVAILABLE:
             notes = "; ".join(res.diagnostic_notes) if res.diagnostic_notes else "Database unavailable"
             return _detail_redirect(tracking_id, error=f"Database sync blocked: {notes}")
         elif res.status in (SyncStatus.FAILED_BLOCKED, SyncStatus.FAILED_RETRYABLE):
             err = res.error_message or ("; ".join(res.diagnostic_notes) if res.diagnostic_notes else f"Sync failed with status {res.status.value}")
             return _detail_redirect(tracking_id, error=f"Sync blocked: {err}")
-        elif res.status == SyncStatus.SYNCED:
+        elif res.status == SyncStatus.REVIEW_REQUIRED:
+            notes = "; ".join(res.diagnostic_notes) if res.diagnostic_notes else "Review required before synchronizing with Baserow"
+            return _detail_redirect(tracking_id, error=f"Sync requires review: {notes}")
+        elif res.status == SyncStatus.SYNCED or getattr(res, "operation", None) == SyncOperation.NOOP:
+            if getattr(res, "operation", None) == SyncOperation.NOOP:
+                return _detail_redirect(tracking_id, message="Baserow database already in sync (NOOP).")
             return _detail_redirect(tracking_id, message=f"Baserow database sync committed successfully to row #{res.media_row_id}.")
-        elif res.status == SyncStatus.NOOP:
-            return _detail_redirect(tracking_id, message="Baserow database already in sync (NOOP).")
         else:
             return _detail_redirect(tracking_id, message="Database sync preview generated.")
     except Exception as e:

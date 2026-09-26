@@ -550,22 +550,22 @@ def test_portal_detail_step_ordering_and_gating(tmp_path):
     res = client.get("/file/order001")
     assert res.status_code == 200
 
-    # 1. Verify cards appear in order: Step 1 -> Step 2 -> Step 3 -> Step 4 -> Step 5
+    # 1. Verify cards appear in order: Step 1 (renamer + travel) -> Step 2 (media-db + sync) -> Step 3 (content + cutter) -> Step 4 (post-cut-sync)
     pos_step1 = res.text.find('id="renamer-card"')
-    pos_step2 = res.text.find('id="content-and-cutter-card"')
-    pos_step3 = res.text.find('id="media-db-card"')
-    pos_step4 = res.text.find('id="travel-schedule-card"')
-    pos_step5 = res.text.find('id="media-db-sync-card"')
+    pos_travel = res.text.find('id="travel-schedule-card"')
+    pos_step2 = res.text.find('id="media-db-card"')
+    pos_sync = res.text.find('id="media-db-sync-card"')
+    pos_step3 = res.text.find('id="content-and-cutter-card"')
+    pos_step4 = res.text.find('id="post-cut-sync-card"')
 
-    assert pos_step1 != -1 and pos_step2 != -1 and pos_step3 != -1 and pos_step4 != -1 and pos_step5 != -1
-    assert pos_step1 < pos_step2 < pos_step3 < pos_step4 < pos_step5
+    assert pos_step1 != -1 and pos_travel != -1 and pos_step2 != -1 and pos_sync != -1 and pos_step3 != -1 and pos_step4 != -1
+    assert pos_step1 < pos_travel < pos_step2 < pos_sync < pos_step3 < pos_step4
 
-    # 2. Verify Tool 4 is gated/locked because Step 1 is pending, Step 2 is not split, Step 3 is unconfirmed
-    assert "Step 5 Locked: Prerequisite Decisions Required" in res.text
+    # 2. Verify Tool 4 in Step 2 is gated/locked because Step 1 is pending and Step 2 is unconfirmed
+    assert "Step 2 Synchronization Locked" in res.text
     assert "Synchronize Now (Locked)" in res.text
-    assert "Step 1 (Tool 1):" in res.text
-    assert "Step 2 (Tool 6):" in res.text
-    assert "Step 3 (Tool 2):" in res.text
+    assert "Step 1 (Tool 1 &amp; 3):" in res.text
+    assert "Step 2 (Tool 2):" in res.text
 
 
 def test_portal_recheck_live_clears_database_unavailable(tmp_path):

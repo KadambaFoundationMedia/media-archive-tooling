@@ -263,15 +263,25 @@ class RenamerApplicationService:
             remaining_reasons.append(r)
         parser_res.review_reasons = remaining_reasons
 
+        current_status = record.get("status")
+        if current_status in ("approved", "committed"):
+            new_status = current_status
+            new_needs_review = False
+            new_review_reasons = []
+        else:
+            new_status = "enriched"
+            new_needs_review = bool(remaining_reasons)
+            new_review_reasons = remaining_reasons
+
         self.registry.update_file_review(
             tracking_id=evidence.tracking_id,
             when_val=parser_res.when.selected_value,
             what_val=parser_res.what.selected_value or "",
             where_val=f"{parser_res.where.place_location or ''}-{parser_res.where.country_iso2 or ''}".strip("-"),
             proposed_filename=proposal.proposed_filename,
-            status="enriched",
-            needs_review=bool(remaining_reasons),
-            review_reasons=remaining_reasons,
+            status=new_status,
+            needs_review=new_needs_review,
+            review_reasons=new_review_reasons,
             parser_result_json=parser_res.model_dump_json(),
         )
 
