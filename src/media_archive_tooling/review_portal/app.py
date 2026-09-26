@@ -455,6 +455,19 @@ def media_db_action(
 ):
     service = get_media_db_service()
     try:
+        if action == "recheck_live":
+            res = service.review_file(tracking_id, force_refresh=True)
+            file_rec = service.registry.get_file(tracking_id)
+            if file_rec and file_rec.get("review_reasons"):
+                cleaned_reasons = [r for r in file_rec["review_reasons"] if "DATABASE_UNAVAILABLE" not in r]
+                service.registry.update_file_status(
+                    tracking_id=tracking_id,
+                    review_reasons=cleaned_reasons,
+                    needs_review=bool(cleaned_reasons),
+                )
+            msg = f"Live database check complete: {res.decision.value} ({res.database_state})"
+            return _detail_redirect(tracking_id, message=msg)
+
         service.apply_human_decision(
             tracking_id=tracking_id,
             action=action,
@@ -462,6 +475,16 @@ def media_db_action(
             notes=notes,
             reviewer="review_portal",
         )
+        file_rec = service.registry.get_file(tracking_id)
+        if file_rec and file_rec.get("review_reasons"):
+            cleaned_reasons = [r for r in file_rec["review_reasons"] if "DATABASE_UNAVAILABLE" not in r]
+            if len(cleaned_reasons) != len(file_rec["review_reasons"]):
+                service.registry.update_file_status(
+                    tracking_id=tracking_id,
+                    review_reasons=cleaned_reasons,
+                    needs_review=bool(cleaned_reasons),
+                )
+
         if action == "confirm_existing":
             msg = f"Confirmed match to Baserow row #{media_row_id}."
         elif action in ("confirm_new", "confirm_new_force"):

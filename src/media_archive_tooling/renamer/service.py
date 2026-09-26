@@ -258,6 +258,8 @@ class RenamerApplicationService:
                 continue
             if "combination" in r.lower() and evidence.possible_combination is False:
                 continue
+            if "DATABASE_UNAVAILABLE" in r and evidence.baserow_check_complete:
+                continue
             remaining_reasons.append(r)
         parser_res.review_reasons = remaining_reasons
 

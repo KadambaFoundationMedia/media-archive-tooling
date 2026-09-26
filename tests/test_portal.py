@@ -567,3 +567,56 @@ def test_portal_detail_step_ordering_and_gating(tmp_path):
     assert "Step 2 (Tool 6):" in res.text
     assert "Step 3 (Tool 2):" in res.text
 
+
+def test_portal_recheck_live_clears_database_unavailable(tmp_path):
+    reg = LocalRegistry(tmp_path / "portal_recheck.db")
+    source = tmp_path / "recheck_media.mp3"
+    source.write_bytes(b"recheck media audio")
+    proposal = make_portal_proposal(source, "recheck01", RenameMode.INITIAL, needs_review=True)
+    proposal.review_reasons = ["Tool 2 reported DATABASE_UNAVAILABLE", "Other review reason"]
+    reg.save_proposal(proposal)
+    reg.save_media_db_review(
+        tracking_id="recheck01",
+        decision="DATABASE_UNAVAILABLE",
+        database_state="DATABASE_UNAVAILABLE",
+        snapshot_timestamp="2026-09-25T12:00:00Z",
+        result_json=json.dumps({"proposed_tool4_action": "needs_review", "candidates": []}),
+        selected_media_row_id=None,
+        review_required=True,
+    )
+
+    mock_media_svc = MagicMock()
+    from media_archive_tooling.media_db_reviewer.models import MediaDatabaseReviewResult, ReviewDecision
+    mock_res = MagicMock(spec=MediaDatabaseReviewResult)
+    mock_res.decision = ReviewDecision.NEW_MEDIA_CANDIDATE
+    mock_res.database_state = "LIVE_CURRENT"
+    mock_media_svc.review_file.return_value = mock_res
+    mock_media_svc.registry = reg
+
+    configure_review_context(
+        registry=reg,
+        media_db_service=mock_media_svc,
+        media_db_updater_service=MagicMock(),
+        review_root=tmp_path,
+    )
+
+    client = TestClient(app)
+    # Check page has the Re-check Live Database button
+    get_res = client.get("/file/recheck01")
+    assert get_res.status_code == 200
+    assert "Re-check Live Database" in get_res.text
+
+    # Post recheck_live
+    post_res = client.post(
+        "/file/recheck01/media-db-action",
+        data={"action": "recheck_live"},
+        follow_redirects=True,
+    )
+    assert post_res.status_code == 200
+    assert "Live database check complete: NEW_MEDIA_CANDIDATE (LIVE_CURRENT)" in post_res.text
+
+    # Verify DATABASE_UNAVAILABLE is stripped from files.review_reasons
+    rec = reg.get_file("recheck01")
+    assert "Tool 2 reported DATABASE_UNAVAILABLE" not in rec["review_reasons"]
+    assert rec["review_reasons"] == ["Other review reason"]
+

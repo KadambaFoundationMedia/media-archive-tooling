@@ -446,6 +446,8 @@ class LocalRegistry:
         proposed_filename: Optional[str] = None,
         what_val: Optional[str] = None,
         parser_result_json: Optional[str] = None,
+        needs_review: Optional[bool] = None,
+        review_reasons: Optional[List[str]] = None,
     ):
         """Update file status, current_path, proposed_filename, what_val, and/or parser_result_json in files table."""
         now = datetime.now(timezone.utc).isoformat()
@@ -454,6 +456,12 @@ class LocalRegistry:
         if status is not None:
             updates.append("status = ?")
             params.append(status)
+        if needs_review is not None:
+            updates.append("needs_review = ?")
+            params.append(1 if needs_review else 0)
+        if review_reasons is not None:
+            updates.append("review_reasons = ?")
+            params.append(json.dumps(review_reasons))
         if current_path is not None:
             cp = Path(current_path)
             updates.append("current_path = ?")
